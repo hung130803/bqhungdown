@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { UrlInput } from "@/components/UrlInput";
 import { ClipboardBanner } from "@/components/ClipboardBanner";
 import { MetadataCard } from "@/components/MetadataCard";
@@ -16,6 +16,7 @@ import * as cmd from "@/ipc/commands";
 export function PasteUrlPage() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const url = useUrlStore(s => s.url);
   const setUrl = useUrlStore(s => s.setUrl);
   const valid = useUrlStore(s => s.valid);
@@ -43,12 +44,14 @@ export function PasteUrlPage() {
   }, [params, url, setUrl, fetchMetadata, setParams]);
 
   const folder = saveFolder || settings?.defaultFolder || "";
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const startSingle = async () => {
     if (submitting || !url || !valid || !folder) return;
     setSubmitting(true);
+    setErrorMsg(null);
     try {
-      await cmd.enqueueDownload({
+      const item = await cmd.enqueueDownload({
         url,
         options: { mode, formatId, saveFolder: folder, subLangs, autoTranslateTo, onConflict, playlistAll: null },
         title: metadata?.title,
@@ -57,6 +60,15 @@ export function PasteUrlPage() {
         channel: metadata?.channel ?? null,
       });
       reset();
+      // Jump to the queue page so the user sees the new download immediately,
+      // matching the batch-add flow.
+      navigate(`/queue?focus=${encodeURIComponent(item.shortId)}`);
+    } catch (e) {
+      // Surface the backend error so the user knows why nothing happened.
+      // Common causes: folder not writable, format conflict, duplicate URL.
+      const msg = (e as { message?: string })?.message ?? String(e);
+      console.error("[enqueueDownload] failed:", e);
+      setErrorMsg(msg || "Không thêm được vào hàng đợi. Kiểm tra thư mục lưu hoặc URL.");
     } finally {
       setSubmitting(false);
     }
@@ -115,6 +127,11 @@ export function PasteUrlPage() {
           >
             {submitting ? "Đang thêm…" : t("home.downloadButton")}
           </button>
+          {errorMsg && (
+            <div className="px-3 py-2 rounded-md bg-danger/10 border border-danger text-danger text-sm">
+              {errorMsg}
+            </div>
+          )}
         </>
       )}
 

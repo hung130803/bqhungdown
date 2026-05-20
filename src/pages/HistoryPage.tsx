@@ -686,9 +686,6 @@ export function HistoryPage() {
               </button>
             </>
           )}
-          <span className="text-muted text-xs ml-auto">
-            Mẹo: Bấm + kéo để khoanh chọn (cả khi đè lên video). Tích xong → kéo từ video đã tích để thả vào CapCut.
-          </span>
         </div>
       )}
 

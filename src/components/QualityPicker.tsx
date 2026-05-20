@@ -12,7 +12,17 @@ export function QualityPicker() {
   const setFormatId = useUrlStore(s => s.setFormatId);
   if (!md || mode !== "video") return null;
 
-  const videoFormats = md.formats.filter(f => !f.isAudioOnly);
+  // Loại các format không phải video thật:
+  //   - mhtml: storyboard (chuỗi ảnh preview, không phải video)
+  //   - vcodec="none": audio-only (đã lọc qua isAudioOnly nhưng giữ phòng hờ)
+  //   - các format không có resolution / height (metadata lỗi)
+  const videoFormats = md.formats.filter((f) => {
+    if (f.isAudioOnly) return false;
+    if (f.ext === "mhtml") return false;
+    if (!f.height && !f.resolution) return false;
+    if (f.vcodec === "none") return false;
+    return true;
+  });
   if (videoFormats.length === 0) {
     return <p className="text-sm text-muted">Không có định dạng video khả dụng.</p>;
   }

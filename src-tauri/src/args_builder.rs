@@ -204,12 +204,15 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             match req.mode {
                 DownloadMode::Video => {
                     if let Some(fmt) = &req.format_id {
-                        // 3-cấp fallback đảm bảo MUỐN GÌ CŨNG CÓ AUDIO:
-                        //   - {fmt}+bestaudio : format đã chọn + best audio (DASH video-only)
-                        //   - {fmt}            : nếu format đã chứa audio sẵn
-                        //   - best             : last resort — bất cứ format nào có audio
+                        // FORMAT FALLBACK đảm bảo CÓ AUDIO 100%:
+                        //   1. {fmt}+bestaudio  → DASH video-only + best audio
+                        //   2. best             → progressive format có audio (last resort)
+                        // Cố ý KHÔNG fallback xuống `{fmt}` đơn lẻ vì format
+                        // chất lượng thấp (144p, 240p, 360p...) trên YouTube
+                        // thường là video-only — fallback đó sẽ ra file mất tiếng.
+                        // `best` ở cuối luôn cho format có audio.
                         args.push("-f".into());
-                        args.push(format!("{fmt}+bestaudio/{fmt}/best"));
+                        args.push(format!("{fmt}+bestaudio/best"));
                     } else {
                         // Best quality available với audio đảm bảo. yt-dlp tự pick.
                         args.push("-f".into());
