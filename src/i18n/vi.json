@@ -1,0 +1,118 @@
+{
+  "app": {
+    "title": "BQHungDown — Tải video đa nền tảng",
+    "tagline": "Tải video nhanh, đa nền tảng, giữ nguyên tên gốc."
+  },
+  "nav": {
+    "home": "Tải mới",
+    "queue": "Đang tải",
+    "history": "Lịch sử",
+    "settings": "Cài đặt"
+  },
+  "home": {
+    "pasteLabel": "Dán liên kết video",
+    "placeholder": "https://...",
+    "fetchMetadata": "Lấy thông tin",
+    "fetching": "Đang lấy thông tin…",
+    "modeVideo": "Video",
+    "modeAudio": "Chỉ âm thanh (MP3)",
+    "qualityBest": "Tự động chọn chất lượng tốt nhất",
+    "saveFolderLabel": "Thư mục lưu",
+    "chooseFolder": "Chọn thư mục",
+    "subtitlesLabel": "Phụ đề",
+    "autoTranslateLabel": "Dịch tự động sang",
+    "downloadButton": "Tải xuống",
+    "batchHint": "Có thể dán nhiều liên kết, mỗi dòng một liên kết.",
+    "platformDetected": "Nền tảng:",
+    "validating": "Đang kiểm tra liên kết…",
+    "invalidUrl": "Liên kết không hợp lệ",
+    "unsupportedSite": "Site này chưa được hỗ trợ"
+  },
+  "queue": {
+    "empty": "Chưa có lượt tải nào.",
+    "pause": "Tạm dừng",
+    "resume": "Tiếp tục",
+    "cancel": "Huỷ",
+    "retry": "Thử lại",
+    "open": "Mở thư mục",
+    "states": {
+      "queued": "Trong hàng đợi",
+      "downloading": "Đang tải",
+      "paused": "Đã tạm dừng",
+      "completed": "Hoàn tất",
+      "failed": "Thất bại",
+      "cancelled": "Đã huỷ",
+      "skipped": "Bỏ qua"
+    }
+  },
+  "history": {
+    "searchPlaceholder": "Tìm theo tiêu đề hoặc URL…",
+    "redownload": "Tải lại",
+    "delete": "Xoá",
+    "openFolder": "Mở thư mục",
+    "empty": "Lịch sử trống.",
+    "status": {
+      "completed": "Hoàn tất",
+      "failed": "Thất bại",
+      "cancelled": "Đã huỷ"
+    }
+  },
+  "settings": {
+    "title": "Cài đặt",
+    "maxConcurrency": "Số lượt tải đồng thời tối đa",
+    "defaultFolder": "Thư mục lưu mặc định",
+    "theme": "Giao diện",
+    "language": "Ngôn ngữ",
+    "clipboardWatcher": "Tự động phát hiện liên kết từ clipboard",
+    "notifications": "Hiện thông báo hệ thống",
+    "aria2cEnabled": "Tăng tốc aria2c (nhanh hơn 3-5x, nhưng không hiện tiến độ chi tiết)",
+    "cookiesBrowser": "Lấy cookies từ trình duyệt",
+    "cookiesNone": "Không dùng (mặc định)",
+    "cookiesHint": "Bật khi cần tải Douyin / Bilibili / Instagram riêng tư / YouTube giới hạn tuổi. Trình duyệt được chọn phải đã đăng nhập / đã từng vào site đó.",
+    "cookiesFile": "Hoặc nạp file cookies.txt",
+    "cookiesFilePlaceholder": "Chưa chọn file",
+    "cookiesFileHint": "Dùng khi Edge/Chrome lỗi DPAPI. Cài extension \"Get cookies.txt LOCALLY\" → vào trang cần cookies → Export → chọn file ở đây. File này được ưu tiên hơn lựa chọn trình duyệt.",
+    "cookiesFileClear": "Bỏ chọn file",
+    "chooseFile": "Chọn file",
+    "themeOptions": {
+      "light": "Sáng",
+      "dark": "Tối",
+      "system": "Theo hệ thống"
+    },
+    "languageOptions": {
+      "vi": "Tiếng Việt",
+      "en": "English"
+    }
+  },
+  "conflict": {
+    "title": "Trùng tên file",
+    "message": "File \"{{name}}\" đã tồn tại trong thư mục.",
+    "overwrite": "Ghi đè",
+    "skip": "Bỏ qua",
+    "autoRename": "Tự động đổi tên ({{suggested}})"
+  },
+  "clipboard": {
+    "bannerTitle": "Phát hiện liên kết video",
+    "bannerAction": "Tải nhanh",
+    "dismiss": "Đóng"
+  },
+  "errors": {
+    "InvalidUrl": "Liên kết không hợp lệ",
+    "UnsupportedSite": "Site này chưa được hỗ trợ",
+    "YtDlpFailed": "yt-dlp gặp lỗi",
+    "FfmpegMissing": "Không tìm thấy ffmpeg",
+    "SaveFolderUnavailable": "Thư mục lưu không khả dụng",
+    "Timeout": "Hết thời gian chờ",
+    "Io": "Lỗi I/O",
+    "ConfigCorrupt": "Cấu hình bị hỏng — đã khôi phục mặc định",
+    "InvalidSetting": "Giá trị cài đặt không hợp lệ",
+    "Generic": "Đã xảy ra lỗi"
+  },
+  "common": {
+    "ok": "Đồng ý",
+    "cancel": "Huỷ",
+    "save": "Lưu",
+    "close": "Đóng",
+    "loading": "Đang tải…"
+  }
+}

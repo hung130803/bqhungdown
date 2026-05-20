@@ -1,0 +1,118 @@
+{
+  "app": {
+    "title": "BQHungDown — Multi-platform video downloader",
+    "tagline": "Fast, multi-platform video downloads that keep original titles."
+  },
+  "nav": {
+    "home": "New download",
+    "queue": "Downloading",
+    "history": "History",
+    "settings": "Settings"
+  },
+  "home": {
+    "pasteLabel": "Paste video link",
+    "placeholder": "https://...",
+    "fetchMetadata": "Fetch info",
+    "fetching": "Fetching info…",
+    "modeVideo": "Video",
+    "modeAudio": "Audio only (MP3)",
+    "qualityBest": "Auto-pick the best quality",
+    "saveFolderLabel": "Save folder",
+    "chooseFolder": "Choose folder",
+    "subtitlesLabel": "Subtitles",
+    "autoTranslateLabel": "Auto-translate to",
+    "downloadButton": "Download",
+    "batchHint": "You can paste multiple links, one per line.",
+    "platformDetected": "Platform:",
+    "validating": "Checking link…",
+    "invalidUrl": "Invalid link",
+    "unsupportedSite": "This site is not supported yet"
+  },
+  "queue": {
+    "empty": "No downloads yet.",
+    "pause": "Pause",
+    "resume": "Resume",
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "open": "Open folder",
+    "states": {
+      "queued": "Queued",
+      "downloading": "Downloading",
+      "paused": "Paused",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "skipped": "Skipped"
+    }
+  },
+  "history": {
+    "searchPlaceholder": "Search by title or URL…",
+    "redownload": "Re-download",
+    "delete": "Delete",
+    "openFolder": "Open folder",
+    "empty": "History is empty.",
+    "status": {
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "maxConcurrency": "Max concurrent downloads",
+    "defaultFolder": "Default save folder",
+    "theme": "Theme",
+    "language": "Language",
+    "clipboardWatcher": "Auto-detect links from clipboard",
+    "notifications": "Show system notifications",
+    "aria2cEnabled": "aria2c boost (3-5x faster, but no detailed progress)",
+    "cookiesBrowser": "Use cookies from browser",
+    "cookiesNone": "Off (default)",
+    "cookiesHint": "Enable for Douyin / Bilibili / private Instagram / age-restricted YouTube. The chosen browser must be logged in or have visited the site.",
+    "cookiesFile": "Or load cookies.txt file",
+    "cookiesFilePlaceholder": "No file selected",
+    "cookiesFileHint": "Use when Edge/Chrome fails with DPAPI error. Install the \"Get cookies.txt LOCALLY\" extension → visit the site → Export → pick the file here. The file takes priority over the browser choice.",
+    "cookiesFileClear": "Clear file",
+    "chooseFile": "Choose file",
+    "themeOptions": {
+      "light": "Light",
+      "dark": "Dark",
+      "system": "Follow system"
+    },
+    "languageOptions": {
+      "vi": "Tiếng Việt",
+      "en": "English"
+    }
+  },
+  "conflict": {
+    "title": "Filename conflict",
+    "message": "File \"{{name}}\" already exists in the folder.",
+    "overwrite": "Overwrite",
+    "skip": "Skip",
+    "autoRename": "Auto-rename ({{suggested}})"
+  },
+  "clipboard": {
+    "bannerTitle": "Video link detected",
+    "bannerAction": "Quick download",
+    "dismiss": "Dismiss"
+  },
+  "errors": {
+    "InvalidUrl": "Invalid link",
+    "UnsupportedSite": "This site is not supported yet",
+    "YtDlpFailed": "yt-dlp encountered an error",
+    "FfmpegMissing": "ffmpeg not found",
+    "SaveFolderUnavailable": "Save folder is not available",
+    "Timeout": "Request timed out",
+    "Io": "I/O error",
+    "ConfigCorrupt": "Config was corrupt — defaults restored",
+    "InvalidSetting": "Invalid setting value",
+    "Generic": "An error occurred"
+  },
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "save": "Save",
+    "close": "Close",
+    "loading": "Loading…"
+  }
+}

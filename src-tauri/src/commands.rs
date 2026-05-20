@@ -1,0 +1,735 @@
+//! Tauri command handlers. All commands return `Result<T, AppError>`.
+
+use crate::error::{AppError, AppResult};
+use crate::events::{ConflictEventPayload, EV_DOWNLOAD_CONFLICT, EV_SETTINGS_CHANGED};
+use crate::extractors;
+use crate::filename_resolver::{self, ResolveOutcome};
+use crate::history_store::HistoryStore;
+use crate::models::{
+    BootstrapPayload, ConflictChoice, ConflictPolicy, DownloadItem, DownloadOptions,
+    DownloadRequest, DownloadState, ExtractorInfo, HistoryEntry, Settings, SettingsPatch,
+    SubtitleTrack, UrlValidation, VideoMetadata,
+};
+use crate::queue::QueueManager;
+use crate::settings_store::SettingsStore;
+use crate::short_id;
+use crate::sidecar_detect;
+use crate::url_validator;
+use crate::ytdlp_runner::YtDlpRunner;
+use chrono::Utc;
+use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, State};
+
+/// Pending conflict resolutions, keyed by short_id. Frontend sends choice via
+/// `resolve_conflict`; queue/runner reads from this map (future use).
+pub struct PendingConflicts(pub Mutex<HashMap<String, ConflictChoice>>);
+
+impl Default for PendingConflicts {
+    fn default() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+}
+
+// ---------- URL / metadata ----------
+
+#[tauri::command]
+pub fn validate_url(url: String) -> AppResult<UrlValidation> {
+    Ok(url_validator::validate_url(&url))
+}
+
+#[tauri::command]
+pub async fn fetch_metadata(
+    url: String,
+    runner: State<'_, Arc<YtDlpRunner>>,
+    settings: State<'_, Arc<SettingsStore>>,
+) -> AppResult<VideoMetadata> {
+    let s = settings.get();
+    // Pre-resolve site-specific quirks (e.g., Douyin → CDN URL via tikwm /
+    // share scraping). Returns the original string + extracted metadata when
+    // applicable. We use that metadata to short-circuit yt-dlp when possible
+    // (Douyin's yt-dlp extractor often errors with "Fresh cookies needed").
+    let (resolved, meta) = crate::url_resolver::resolve_with_meta(&url).await;
+
+    // If url_resolver scraped a real title (Douyin share-page path), build the
+    // VideoMetadata directly without invoking yt-dlp at all — yt-dlp doesn't
+    // know the resolved CDN URL is video and would just error out.
+    if let Some(meta) = meta {
+        if meta.title.is_some() {
+            let extractor = crate::url_validator::resolve_extractor(&url)
+                .unwrap_or("generic")
+                .to_string();
+            return Ok(VideoMetadata {
+                url: resolved,
+                extractor,
+                title: meta.title.unwrap_or_default(),
+                channel: meta.channel,
+                thumbnail: meta.thumbnail,
+                duration_sec: None,
+                formats: vec![],
+                subtitles: vec![],
+                playlist_entries: None,
+                playlist_total: None,
+            });
+        }
+    }
+
+    // Fall through: ask yt-dlp like before for non-Douyin URLs.
+    runner.fetch_metadata(&resolved, &s).await
+}
+
+// ---------- Enqueue ----------
+
+fn build_request(url: String, options: DownloadOptions, settings: &Settings) -> DownloadRequest {
+    DownloadRequest {
+        url,
+        mode: options.mode,
+        format_id: options.format_id,
+        save_folder: options.save_folder,
+        sub_langs: options.sub_langs,
+        auto_translate_to: options.auto_translate_to,
+        on_conflict: options.on_conflict,
+        use_aria2c: settings.aria2c_enabled,
+        playlist_all: options.playlist_all.unwrap_or(false),
+    }
+}
+
+fn make_item(
+    req: DownloadRequest,
+    title: Option<String>,
+    thumbnail: Option<String>,
+    extractor: Option<String>,
+    channel: Option<String>,
+    taken: &std::collections::HashSet<String>,
+) -> DownloadItem {
+    let now = Utc::now();
+    let ts_ms = now.timestamp_millis();
+    let short_id = short_id::generate(&req.url, ts_ms, taken);
+    let extractor = extractor.unwrap_or_else(|| {
+        url_validator::resolve_extractor(&req.url)
+            .unwrap_or("generic")
+            .to_string()
+    });
+    DownloadItem {
+        short_id,
+        request: req.clone(),
+        title: title.unwrap_or_else(|| req.url.clone()),
+        thumbnail,
+        channel,
+        extractor,
+        state: DownloadState::Queued,
+        bytes_downloaded: 0,
+        bytes_total: None,
+        speed_bps: None,
+        eta_sec: None,
+        attempt: 0,
+        error_message: None,
+        output_path: None,
+        created_at: now,
+        finished_at: None,
+    }
+}
+
+#[tauri::command]
+pub async fn enqueue_download(
+    url: String,
+    options: DownloadOptions,
+    title: Option<String>,
+    thumbnail: Option<String>,
+    extractor: Option<String>,
+    channel: Option<String>,
+    queue: State<'_, Arc<QueueManager>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    history: State<'_, Arc<HistoryStore>>,
+) -> AppResult<DownloadItem> {
+    // Pre-resolve site-specific quirks (e.g., viralhog watch → embed URL).
+    // For Douyin we also get back title/thumbnail/channel scraped from the
+    // share page so the queue item shows nice metadata even though we're
+    // feeding yt-dlp a raw CDN URL.
+    let (url, meta) = crate::url_resolver::resolve_with_meta(&url).await;
+    let title = title.or_else(|| meta.as_ref().and_then(|m| m.title.clone()));
+    let thumbnail = thumbnail.or_else(|| meta.as_ref().and_then(|m| m.thumbnail.clone()));
+    let channel = channel.or_else(|| meta.as_ref().and_then(|m| m.channel.clone()));
+
+    let s = settings.get();
+    if !options.save_folder.exists() {
+        return Err(AppError::SaveFolderUnavailable(options.save_folder.clone()));
+    }
+    // Dedup #1: if the same URL is already in queue in a non-terminal state, return it.
+    if let Some(existing) = queue.list().into_iter().find(|it| it.request.url == url && !is_terminal(it.state)) {
+        return Ok(existing);
+    }
+    // Dedup #2: if the same URL was completed in this session and the output file
+    // still exists on disk, return that item instead of starting a duplicate.
+    if let Some(existing) = queue.list().into_iter().find(|it| {
+        it.request.url == url
+            && it.state == DownloadState::Completed
+            && it.output_path.as_ref().map(|p| p.exists()).unwrap_or(false)
+    }) {
+        return Ok(existing);
+    }
+    let mut taken = history.known_short_ids().unwrap_or_default();
+    for it in queue.list() {
+        taken.insert(it.short_id);
+    }
+    let req = build_request(url, options, &s);
+    let item = make_item(req, title, thumbnail, extractor, channel, &taken);
+    queue.enqueue(item.clone())?;
+    Ok(item)
+}
+
+fn is_terminal(s: DownloadState) -> bool {
+    matches!(s, DownloadState::Completed | DownloadState::Failed | DownloadState::Cancelled | DownloadState::Skipped)
+}
+
+#[tauri::command]
+pub async fn enqueue_batch(
+    urls: Vec<String>,
+    options: DownloadOptions,
+    queue: State<'_, Arc<QueueManager>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    history: State<'_, Arc<HistoryStore>>,
+) -> AppResult<Vec<DownloadItem>> {
+    let s = settings.get();
+    let mut taken = history.known_short_ids().unwrap_or_default();
+    let mut existing_active: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for it in queue.list() {
+        taken.insert(it.short_id.clone());
+        if !is_terminal(it.state) {
+            existing_active.insert(it.request.url.clone());
+        }
+    }
+    let mut out = Vec::new();
+    let mut seen_in_batch: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Resolve every URL with metadata. Sequential is OK — share-page scrape
+    // per URL is ~300-800ms, doing 10-20 URLs in a batch takes a few seconds
+    // which feels fine since the user already pasted them all at once.
+    for orig_url in urls {
+        let (url, meta) = crate::url_resolver::resolve_with_meta(&orig_url).await;
+        if seen_in_batch.contains(&url) || existing_active.contains(&url) {
+            continue;
+        }
+        seen_in_batch.insert(url.clone());
+        let v = url_validator::validate_url(&url);
+        if !v.valid && !url_validator::validate_url(&orig_url).valid {
+            continue;
+        }
+        // Use original URL's extractor (e.g. "douyin") so the platform badge /
+        // colour stay correct, even when the resolver swapped url to a raw CDN.
+        let extractor = url_validator::resolve_extractor(&orig_url)
+            .map(|s| s.to_string())
+            .or(v.extractor);
+        let title = meta.as_ref().and_then(|m| m.title.clone());
+        let thumbnail = meta.as_ref().and_then(|m| m.thumbnail.clone());
+        let channel = meta.as_ref().and_then(|m| m.channel.clone());
+
+        let req = build_request(url, options.clone(), &s);
+        let item = make_item(req, title, thumbnail, extractor, channel, &taken);
+        taken.insert(item.short_id.clone());
+        queue.enqueue(item.clone())?;
+        out.push(item);
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn enqueue_playlist(
+    playlist_url: String,
+    selected: Vec<String>,
+    options: DownloadOptions,
+    all_with_yes_playlist: Option<bool>,
+    queue: State<'_, Arc<QueueManager>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    history: State<'_, Arc<HistoryStore>>,
+) -> AppResult<Vec<DownloadItem>> {
+    let s = settings.get();
+    let mut taken = history.known_short_ids().unwrap_or_default();
+    for it in queue.list() {
+        taken.insert(it.short_id);
+    }
+    let mut out = Vec::new();
+    if all_with_yes_playlist.unwrap_or(false) {
+        // Single item with playlist_all = true; runner expands.
+        let playlist_url = crate::url_resolver::resolve(&playlist_url).await;
+        let mut opts = options.clone();
+        opts.playlist_all = Some(true);
+        let req = build_request(playlist_url.clone(), opts, &s);
+        let item = make_item(req, None, None, None, None, &taken);
+        taken.insert(item.short_id.clone());
+        queue.enqueue(item.clone())?;
+        out.push(item);
+    } else {
+        for url in selected {
+            let url = crate::url_resolver::resolve(&url).await;
+            let req = build_request(url.clone(), options.clone(), &s);
+            let item = make_item(
+                req,
+                None,
+                None,
+                url_validator::resolve_extractor(&url).map(|s| s.to_string()),
+                None,
+                &taken,
+            );
+            taken.insert(item.short_id.clone());
+            queue.enqueue(item.clone())?;
+            out.push(item);
+        }
+    }
+    Ok(out)
+}
+
+// ---------- Queue control ----------
+
+#[tauri::command]
+pub fn pause_download(short_id: String, queue: State<Arc<QueueManager>>) -> AppResult<()> {
+    queue.pause(&short_id)
+}
+
+#[tauri::command]
+pub fn resume_download(short_id: String, queue: State<Arc<QueueManager>>) -> AppResult<()> {
+    queue.resume(&short_id)
+}
+
+#[tauri::command]
+pub fn cancel_download(short_id: String, queue: State<Arc<QueueManager>>) -> AppResult<()> {
+    queue.cancel(&short_id)
+}
+
+#[tauri::command]
+pub fn retry_download(
+    short_id: String,
+    queue: State<Arc<QueueManager>>,
+) -> AppResult<DownloadItem> {
+    queue.retry(&short_id)
+}
+
+#[tauri::command]
+pub fn list_queue(queue: State<Arc<QueueManager>>) -> AppResult<Vec<DownloadItem>> {
+    Ok(queue.list())
+}
+
+#[tauri::command]
+pub fn resolve_conflict(
+    short_id: String,
+    choice: ConflictChoice,
+    pending: State<PendingConflicts>,
+) -> AppResult<()> {
+    pending.0.lock().insert(short_id, choice);
+    Ok(())
+}
+
+// ---------- Settings ----------
+
+#[tauri::command]
+pub fn get_settings(settings: State<Arc<SettingsStore>>) -> AppResult<Settings> {
+    Ok(settings.get())
+}
+
+#[tauri::command]
+pub async fn update_settings(
+    patch: SettingsPatch,
+    settings: State<'_, Arc<SettingsStore>>,
+    queue: State<'_, Arc<QueueManager>>,
+    app: AppHandle,
+) -> AppResult<Settings> {
+    let new_concurrency = patch.max_concurrency;
+    let next = settings.apply_patch(patch)?;
+    if let Some(n) = new_concurrency {
+        queue.set_concurrency(n).await;
+    }
+    let _ = app.emit(EV_SETTINGS_CHANGED, next.clone());
+    Ok(next)
+}
+
+// ---------- Filesystem helpers ----------
+
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle) -> AppResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |path| {
+        let _ = tx.send(path);
+    });
+    let path = rx.await.map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(path
+        .and_then(|fp| fp.into_path().ok())
+        .map(|p| p.to_string_lossy().to_string()))
+}
+
+/// Pick a single file. Used for the cookies.txt picker in Settings.
+#[tauri::command]
+pub async fn pick_file(app: AppHandle) -> AppResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter("Cookies / Text", &["txt"])
+        .pick_file(move |path| {
+            let _ = tx.send(path);
+        });
+    let path = rx.await.map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(path
+        .and_then(|fp| fp.into_path().ok())
+        .map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub fn check_folder_writable(path: String) -> AppResult<bool> {
+    let p = PathBuf::from(&path);
+    if !p.exists() || !p.is_dir() {
+        return Ok(false);
+    }
+    let probe = p.join(".prodown_write_probe");
+    let ok = std::fs::write(&probe, b"x").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    Ok(ok)
+}
+
+#[tauri::command]
+pub fn open_in_folder(path: String) -> AppResult<()> {
+    // Normalize forward slashes to backslashes on Windows so explorer.exe accepts them.
+    #[cfg(target_os = "windows")]
+    let path = path.replace('/', "\\");
+    let p = PathBuf::from(&path);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // Highlight the file in its folder via `explorer /select,"<path>"`.
+        // CRITICAL: rust's Command::arg() wraps args containing spaces in quotes,
+        // turning the whole `/select,C:\path\with space\file.mp4` into a single
+        // quoted token. Explorer cannot parse that and silently falls back to
+        // the user's home/Documents folder. We use `raw_arg` to pass the exact
+        // command-line tail Explorer expects, with the path quoted internally.
+        if p.is_file() {
+            let raw = format!("/select,\"{}\"", p.display());
+            std::process::Command::new("explorer")
+                .raw_arg(raw)
+                .spawn()
+                .map_err(AppError::from)?;
+            return Ok(());
+        }
+    }
+    let target = if p.is_file() {
+        p.parent().map(|x| x.to_path_buf()).unwrap_or(p)
+    } else {
+        p
+    };
+    open_path_with_os(&target)
+}
+
+/// Open a file with the OS default app (e.g. play a video in the system player).
+#[tauri::command]
+pub fn open_file(path: String) -> AppResult<()> {
+    #[cfg(target_os = "windows")]
+    let path = path.replace('/', "\\");
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(AppError::NotFound(path));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // `explorer <file>` opens an Explorer window, not the default media player.
+        // Use `cmd /c start "" "<path>"` so Windows resolves the file association
+        // (Movies & TV, VLC, etc.). The empty `""` is the window title argument
+        // that `start` requires when the path is quoted.
+        let raw = format!("/c start \"\" \"{}\"", p.display());
+        std::process::Command::new("cmd")
+            .raw_arg(raw)
+            // Hide the brief cmd console window. 0x08000000 = CREATE_NO_WINDOW.
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(AppError::from)?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        open_path_with_os(&p)
+    }
+}
+
+/// Best-effort: find the actual file on disk for a download whose `output_path`
+/// was lost. Searches RECURSIVELY (depth ≤ 3) inside `save_folder` ONLY — we
+/// intentionally do not fall back to the parent or `dirs::download_dir()`
+/// because that produced false matches against unrelated files in sibling
+/// folders (e.g., random files in `Documents` or other Downloads subfolders).
+#[tauri::command]
+pub fn find_output_file(save_folder: String, title: String) -> AppResult<Option<String>> {
+    let folder = PathBuf::from(&save_folder);
+    if !folder.is_dir() { return Ok(None); }
+
+    let sanitized = crate::filename_resolver::sanitize(&title).to_lowercase();
+    if sanitized.is_empty() { return Ok(None); }
+
+    let exts = ["mp4", "mkv", "webm", "mov", "m4a", "mp3", "opus", "flac", "wav"];
+    let mut best: Option<(PathBuf, u64)> = None;
+
+    scan_dir(&folder, &sanitized, &exts, &mut best, 0);
+
+    Ok(best.map(|(p, _)| p.to_string_lossy().to_string()))
+}
+
+fn scan_dir(
+    dir: &std::path::Path,
+    needle: &str,
+    exts: &[&str],
+    best: &mut Option<(PathBuf, u64)>,
+    depth: u32,
+) {
+    if depth > 3 { return; }
+    let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let ft = match entry.file_type() { Ok(t) => t, Err(_) => continue };
+        if ft.is_dir() {
+            scan_dir(&p, needle, exts, best, depth + 1);
+            continue;
+        }
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        if !exts.contains(&ext.as_str()) { continue; }
+        // Match if stem contains the sanitized title (or first 30 chars of it).
+        let needle_short = if needle.len() > 30 { &needle[..30] } else { needle };
+        if !stem.contains(needle_short) && !stem.starts_with(needle) { continue; }
+        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        if size < 100_000 { continue; } // skip tiny fragments
+        if best.as_ref().map(|(_, s)| size > *s).unwrap_or(true) {
+            *best = Some((p, size));
+        }
+    }
+}
+
+/// Update a history entry's `output_path` (used to backfill paths for items
+/// downloaded before the FINALPATH parser was added).
+#[tauri::command]
+pub fn update_history_output_path(
+    short_id: String,
+    output_path: String,
+    history: State<Arc<HistoryStore>>,
+) -> AppResult<()> {
+    let mut entry = match history.get(&short_id)? {
+        Some(e) => e,
+        None => return Err(AppError::NotFound(short_id)),
+    };
+    entry.output_path = Some(PathBuf::from(output_path));
+    history.insert(&entry)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_url(url: String) -> AppResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // Open URL in default browser via `cmd /c start "" "<url>"`.
+        let raw = format!("/c start \"\" \"{}\"", url);
+        std::process::Command::new("cmd")
+            .raw_arg(raw)
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(AppError::from)?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        open_path_with_os(&PathBuf::from(url))
+    }
+}
+
+fn open_path_with_os(path: &std::path::Path) -> AppResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // Use `cmd /c start "" "<path>"` so Windows respects file/folder associations.
+        // For directories this opens a new Explorer window rooted at the folder
+        // (matching what users expect when clicking "Open folder").
+        let raw = format!("/c start \"\" \"{}\"", path.display());
+        std::process::Command::new("cmd")
+            .raw_arg(raw)
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(AppError::from)?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(AppError::from)?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(AppError::from)?;
+    }
+    Ok(())
+}
+
+// ---------- History ----------
+
+#[tauri::command]
+pub fn list_history(
+    query: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+    history: State<Arc<HistoryStore>>,
+) -> AppResult<Vec<HistoryEntry>> {
+    history.list(query.as_deref(), limit.unwrap_or(200), offset.unwrap_or(0))
+}
+
+#[tauri::command]
+pub fn delete_history_entry(
+    short_id: String,
+    delete_file: Option<bool>,
+    history: State<Arc<HistoryStore>>,
+) -> AppResult<()> {
+    let entry = history.get(&short_id)?;
+    history.delete(&short_id)?;
+    if delete_file.unwrap_or(false) {
+        if let Some(e) = entry {
+            if let Some(path) = e.output_path {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_history(
+    delete_files: Option<bool>,
+    history: State<Arc<HistoryStore>>,
+) -> AppResult<u64> {
+    if delete_files.unwrap_or(false) {
+        // Snapshot output paths before wiping the table.
+        let entries = history.list(None, u32::MAX, 0)?;
+        for e in entries {
+            if let Some(path) = e.output_path {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    history.clear_all()
+}
+
+#[tauri::command]
+pub fn redownload_from_history(
+    short_id: String,
+    queue: State<Arc<QueueManager>>,
+    settings: State<Arc<SettingsStore>>,
+    history: State<Arc<HistoryStore>>,
+) -> AppResult<DownloadItem> {
+    let entry = history
+        .get(&short_id)?
+        .ok_or_else(|| AppError::NotFound(short_id))?;
+    let s = settings.get();
+    let mut taken = history.known_short_ids().unwrap_or_default();
+    for it in queue.list() {
+        taken.insert(it.short_id);
+    }
+    let options = DownloadOptions {
+        mode: entry.mode,
+        format_id: entry.format_id,
+        save_folder: entry.save_folder.clone(),
+        sub_langs: vec![],
+        auto_translate_to: None,
+        on_conflict: ConflictPolicy::Ask,
+        playlist_all: None,
+    };
+    let req = build_request(entry.url.clone(), options, &s);
+    let item = make_item(req, Some(entry.title), entry.thumbnail.clone(), Some(entry.extractor), entry.channel.clone(), &taken);
+    queue.enqueue(item.clone())?;
+    Ok(item)
+}
+
+// ---------- Extractors / subs ----------
+
+#[tauri::command]
+pub fn list_extractors() -> AppResult<Vec<ExtractorInfo>> {
+    Ok(extractors::list_all()
+        .iter()
+        .map(|e| ExtractorInfo {
+            name: e.name.to_string(),
+            host_pattern: e.host_regex.to_string(),
+            featured: e.featured,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn get_subtitle_langs(
+    url: String,
+    runner: State<'_, Arc<YtDlpRunner>>,
+    settings: State<'_, Arc<SettingsStore>>,
+) -> AppResult<Vec<SubtitleTrack>> {
+    let s = settings.get();
+    let md = runner.fetch_metadata(&url, &s).await?;
+    Ok(md.subtitles)
+}
+
+// ---------- Clipboard watcher toggle ----------
+
+#[tauri::command]
+pub fn set_clipboard_watcher(
+    enabled: bool,
+    settings: State<Arc<SettingsStore>>,
+) -> AppResult<()> {
+    settings.apply_patch(SettingsPatch {
+        clipboard_watcher: Some(enabled),
+        ..Default::default()
+    })?;
+    Ok(())
+}
+
+// ---------- Bootstrap ----------
+
+#[tauri::command]
+pub fn app_bootstrap(
+    settings: State<Arc<SettingsStore>>,
+    queue: State<Arc<QueueManager>>,
+) -> AppResult<BootstrapPayload> {
+    Ok(BootstrapPayload {
+        settings: settings.get(),
+        queue: queue.list(),
+        ffmpeg_available: true, // sidecar-bundled; runtime check could be wired later
+        aria2c_available: sidecar_detect::aria2c_available(),
+    })
+}
+
+// Conflict event helper used by queue/runner (not a #[tauri::command]).
+pub fn emit_conflict(app: &AppHandle, short_id: &str, suggested: &PathBuf, conflicting: &PathBuf) {
+    let _ = app.emit(
+        EV_DOWNLOAD_CONFLICT,
+        ConflictEventPayload {
+            short_id: short_id.to_string(),
+            suggested_path: suggested.clone(),
+            conflicting_path: conflicting.clone(),
+        },
+    );
+}
+
+// Pre-flight conflict resolution helper combining filename_resolver + emit_conflict.
+pub fn preflight_conflict(
+    app: &AppHandle,
+    short_id: &str,
+    save_folder: &std::path::Path,
+    title: &str,
+    ext: &str,
+    policy: ConflictPolicy,
+) -> ResolveOutcome {
+    let exists = |p: &std::path::Path| p.exists();
+    let outcome = filename_resolver::resolve(save_folder, title, ext, policy, exists);
+    if let ResolveOutcome::AskUser {
+        suggested,
+        conflicting,
+    } = &outcome
+    {
+        emit_conflict(app, short_id, suggested, conflicting);
+    }
+    outcome
+}

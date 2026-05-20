@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Fetch sidecars (yt-dlp + aria2c)
+        run: node scripts/fetch-sidecars.mjs --only=ytdlp
+
+      # ffmpeg-essentials: archive download (must extract ourselves)
+      - name: Download ffmpeg essentials
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile 'src-tauri/binaries/ffmpeg-essentials.zip'
+          Expand-Archive -Path 'src-tauri/binaries/ffmpeg-essentials.zip' -DestinationPath 'src-tauri/binaries/_extract' -Force
+          $exe = Get-ChildItem -Path 'src-tauri/binaries/_extract' -Recurse -Filter 'ffmpeg.exe' | Select-Object -First 1
+          Move-Item -Path $exe.FullName -Destination 'src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe' -Force
+          Remove-Item -Recurse -Force 'src-tauri/binaries/_extract'
+          Remove-Item -Force 'src-tauri/binaries/ffmpeg-essentials.zip'
+
+      # aria2c: download release zip and extract aria2c.exe
+      - name: Download aria2c
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip'
+          Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile 'aria2.zip'
+          Expand-Archive -Path 'aria2.zip' -DestinationPath '_aria_extract' -Force
+          $exe = Get-ChildItem -Path '_aria_extract' -Recurse -Filter 'aria2c.exe' | Select-Object -First 1
+          Move-Item -Path $exe.FullName -Destination 'src-tauri/binaries/aria2c-x86_64-pc-windows-msvc.exe' -Force
+          Remove-Item -Recurse -Force '_aria_extract'
+          Remove-Item -Force 'aria2.zip'
+
+      - name: Build + Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "BQHungDown ${{ github.ref_name }}"
+          releaseBody: "Bản cập nhật ${{ github.ref_name }}. App sẽ tự thông báo cho user — họ chỉ cần bấm Cập nhật."
+          releaseDraft: false
+          prerelease: false
+          # Generate latest.json for the updater plugin to consume.
+          updaterJsonPreferNsis: true
