@@ -170,7 +170,6 @@ export interface Settings {
    */
   cookiesFile?: string | null;
 }
-}
 
 export type SettingsPatch = Partial<Settings>;
 
