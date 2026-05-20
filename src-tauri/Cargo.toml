@@ -1,6 +1,6 @@
 [package]
 name = "bqhungdown"
-version = "0.1.0"
+version = "0.1.2"
 description = "BQHungDown — Tải video đa nền tảng"
 authors = ["BQHung"]
 edition = "2021"
@@ -53,6 +53,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 # Clipboard reader (cross-platform, pure Rust). Used by clipboard.rs.
 arboard = { version = "3", optional = true }
+tauri-plugin-drag = "2.1.1"
 
 [dev-dependencies]
 proptest = "1"
