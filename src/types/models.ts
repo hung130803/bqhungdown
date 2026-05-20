@@ -144,6 +144,10 @@ export interface HistoryEntry {
   channel?: string | null;
   /** URL thumbnail (https://...). UI dùng `<img src>` trực tiếp. */
   thumbnail?: string | null;
+  /** User flag: đã edit xong file này chưa. */
+  edited?: boolean;
+  /** ISO-8601 timestamp khi user đánh dấu edit. */
+  editedAt?: string | null;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

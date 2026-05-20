@@ -29,8 +29,8 @@ jobs:
       - name: Install npm deps
         run: npm ci
 
-      - name: Fetch sidecars (yt-dlp + aria2c)
-        run: node scripts/fetch-sidecars.mjs --only=ytdlp
+      - name: Fetch latest yt-dlp (always fresh — bundled into installer)
+        run: node scripts/fetch-sidecars.mjs --only=ytdlp --force
 
       # ffmpeg-essentials: archive download (must extract ourselves)
       - name: Download ffmpeg essentials

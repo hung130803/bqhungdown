@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { useQueueStore } from "@/stores/useQueueStore";
 import { QueueRow } from "@/components/QueueRow";
 import { ConflictDialog } from "@/components/ConflictDialog";
+import * as cmd from "@/ipc/commands";
 
 const TERMINAL = ["completed", "failed", "cancelled", "skipped"];
 
@@ -12,12 +13,45 @@ export function QueuePage() {
   const items = useQueueStore((s) => s.items);
   const refresh = useQueueStore((s) => s.refresh);
   const clearTerminal = useQueueStore((s) => s.clearTerminal);
+  const removeLocal = useQueueStore((s) => s.remove);
   const [params] = useSearchParams();
   const focus = params.get("focus");
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Auto-prune on mount: drop completed rows whose recorded file is gone.
+  // Runs once per visit so the user doesn't see stale entries pointing at
+  // files they already deleted from disk / history.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const completed = items.filter((i) => i.state === "completed" && i.outputPath);
+      for (const it of completed) {
+        if (cancelled) return;
+        try {
+          const exists = await cmd.pathExists(it.outputPath as string);
+          if (!exists) {
+            removeLocal(it.shortId);
+            try {
+              await cmd.removeQueueItem(it.shortId);
+            } catch {
+              // ignore — local removal is enough
+            }
+          }
+        } catch {
+          // ignore individual failures
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally only run when item count changes; we don't want to
+    // re-check on every progress tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.length]);
 
   useEffect(() => {
     if (!focus) return;

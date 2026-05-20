@@ -157,19 +157,14 @@ pub async fn enqueue_download(
     if !options.save_folder.exists() {
         return Err(AppError::SaveFolderUnavailable(options.save_folder.clone()));
     }
-    // Dedup #1: if the same URL is already in queue in a non-terminal state, return it.
+    // Dedup #1: if the same URL is already in queue in a non-terminal state,
+    // return it (cùng URL đang tải dở → không tạo bản trùng).
     if let Some(existing) = queue.list().into_iter().find(|it| it.request.url == url && !is_terminal(it.state)) {
         return Ok(existing);
     }
-    // Dedup #2: if the same URL was completed in this session and the output file
-    // still exists on disk, return that item instead of starting a duplicate.
-    if let Some(existing) = queue.list().into_iter().find(|it| {
-        it.request.url == url
-            && it.state == DownloadState::Completed
-            && it.output_path.as_ref().map(|p| p.exists()).unwrap_or(false)
-    }) {
-        return Ok(existing);
-    }
+    // NOTE: Dedup #2 (skip when same URL already completed) đã bị bỏ —
+    // user muốn tải lại sẽ tự động tạo file mới với tên `(1)`, `(2)`...
+    // tránh ghi đè file cũ. Logic auto-rename ở filename_resolver.rs.
     let mut taken = history.known_short_ids().unwrap_or_default();
     for it in queue.list() {
         taken.insert(it.short_id);
@@ -309,6 +304,21 @@ pub fn retry_download(
 #[tauri::command]
 pub fn list_queue(queue: State<Arc<QueueManager>>) -> AppResult<Vec<DownloadItem>> {
     Ok(queue.list())
+}
+
+/// Remove a single queue item (no file deletion). Used when the user dismisses
+/// a row whose file is missing on disk, or simply wants to clean up. If the
+/// item is still active, this also cancels its download.
+#[tauri::command]
+pub fn remove_queue_item(short_id: String, queue: State<Arc<QueueManager>>) -> AppResult<()> {
+    queue.remove_item(&short_id)
+}
+
+/// Cheap existence check used by the UI before opening a file. Returns false
+/// for missing/inaccessible paths instead of erroring.
+#[tauri::command]
+pub fn path_exists(path: String) -> AppResult<bool> {
+    Ok(std::path::Path::new(&path).exists())
 }
 
 #[tauri::command]
@@ -582,6 +592,16 @@ pub fn list_history(
     history.list(query.as_deref(), limit.unwrap_or(200), offset.unwrap_or(0))
 }
 
+/// Mark several history entries as edited (or unedited). Returns rows changed.
+#[tauri::command]
+pub fn set_history_edited(
+    short_ids: Vec<String>,
+    edited: bool,
+    history: State<Arc<HistoryStore>>,
+) -> AppResult<u64> {
+    history.set_edited(&short_ids, edited)
+}
+
 #[tauri::command]
 pub fn delete_history_entry(
     short_id: String,
@@ -598,6 +618,36 @@ pub fn delete_history_entry(
         }
     }
     Ok(())
+}
+
+/// Batch-delete several history entries in one IPC round-trip. Returns the
+/// number of rows actually removed (entries already missing are silently
+/// ignored). When `delete_files` is true, each row's `output_path` is also
+/// unlinked best-effort.
+#[tauri::command]
+pub fn delete_history_entries(
+    short_ids: Vec<String>,
+    delete_files: Option<bool>,
+    history: State<Arc<HistoryStore>>,
+) -> AppResult<u64> {
+    let also_delete = delete_files.unwrap_or(false);
+    let mut removed: u64 = 0;
+    for id in &short_ids {
+        let entry = history.get(id).ok().flatten();
+        match history.delete(id) {
+            Ok(()) => removed += 1,
+            Err(crate::error::AppError::NotFound(_)) => continue,
+            Err(e) => return Err(e),
+        }
+        if also_delete {
+            if let Some(e) = entry {
+                if let Some(path) = e.output_path {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+    Ok(removed)
 }
 
 #[tauri::command]

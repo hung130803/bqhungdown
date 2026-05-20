@@ -107,6 +107,16 @@ export async function listQueue(): Promise<DownloadItem[]> {
   return invoke<DownloadItem[]>("list_queue");
 }
 
+/** Remove one item from the queue (no file deletion on disk). */
+export async function removeQueueItem(shortId: string): Promise<void> {
+  await invoke<void>("remove_queue_item", { shortId });
+}
+
+/** Cheap existence check before opening a file. */
+export async function pathExists(path: string): Promise<boolean> {
+  return invoke<boolean>("path_exists", { path });
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Settings
 // ──────────────────────────────────────────────────────────────────────────────
@@ -156,6 +166,22 @@ export async function deleteHistoryEntry(
   deleteFile: boolean = false,
 ): Promise<void> {
   await invoke<void>("delete_history_entry", { shortId, deleteFile });
+}
+
+/** Delete multiple history entries in one IPC call. Returns count removed. */
+export async function deleteHistoryEntries(
+  shortIds: string[],
+  deleteFiles: boolean = false,
+): Promise<number> {
+  return invoke<number>("delete_history_entries", { shortIds, deleteFiles });
+}
+
+/** Mark history entries as edited (or unedited). Returns rows changed. */
+export async function setHistoryEdited(
+  shortIds: string[],
+  edited: boolean,
+): Promise<number> {
+  return invoke<number>("set_history_edited", { shortIds, edited });
 }
 
 export async function clearHistory(deleteFiles: boolean = false): Promise<number> {

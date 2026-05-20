@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { DownloadItem } from "@/types/models";
 import { useQueueStore } from "@/stores/useQueueStore";
@@ -7,6 +8,7 @@ import { Thumbnail } from "./Thumbnail";
 import { TitleWithCopy } from "./TitleWithCopy";
 import { formatRelative } from "@/lib/time";
 import { platformInfo } from "@/lib/platforms";
+import { startFileDrag } from "@/lib/drag-out";
 
 const STATE_DOT: Record<string, string> = {
   queued: "bg-muted",
@@ -49,6 +51,7 @@ export function QueueRow({ item }: { item: DownloadItem }) {
   const resume = useQueueStore((s) => s.resume);
   const cancel = useQueueStore((s) => s.cancel);
   const retry = useQueueStore((s) => s.retry);
+  const removeLocal = useQueueStore((s) => s.remove);
 
   const stateLabel = t(`queue.states.${item.state}`);
   const isActive = item.state === "downloading";
@@ -56,13 +59,41 @@ export function QueueRow({ item }: { item: DownloadItem }) {
   const isQueued = item.state === "queued";
   const isTerminal = ["completed", "failed", "cancelled", "skipped"].includes(item.state);
 
+  /** Resolve to a path that ACTUALLY exists on disk, or null if user deleted it. */
   const resolvePath = async (): Promise<string | null> => {
-    if (item.outputPath) return item.outputPath;
+    if (item.outputPath) {
+      // outputPath was recorded by the runner → trust it as the canonical
+      // file for this row. If it's gone, the user deleted it and we should
+      // NOT silently fall back to a same-title file (which would be a
+      // different, older download).
+      try {
+        if (await cmd.pathExists(item.outputPath)) return item.outputPath;
+      } catch {
+        // ignore
+      }
+      return null;
+    }
+    // No outputPath recorded (legacy items): best-effort scan by title.
     if (!item.request.saveFolder) return null;
     try {
-      return await cmd.findOutputFile(item.request.saveFolder, item.title);
+      const found = await cmd.findOutputFile(item.request.saveFolder, item.title);
+      if (found && (await cmd.pathExists(found))) return found;
     } catch {
-      return null;
+      // ignore
+    }
+    return null;
+  };
+
+  /** Drop this row from the queue both server- and client-side. */
+  const dismissRow = async () => {
+    // Update UI immediately so the row disappears without waiting for the
+    // backend round-trip or the queue://updated event.
+    removeLocal(item.shortId);
+    try {
+      await cmd.removeQueueItem(item.shortId);
+    } catch {
+      // ignore — backend may not have the command yet (older build) or the
+      // item was already gone. Either way, the local row is already removed.
     }
   };
 
@@ -72,7 +103,8 @@ export function QueueRow({ item }: { item: DownloadItem }) {
       await cmd.openInFolder(p);
       return;
     }
-    if (item.request.saveFolder) await cmd.openInFolder(item.request.saveFolder);
+    // File no longer exists — auto-dismiss the row.
+    void dismissRow();
   };
 
   const openVideo = async () => {
@@ -82,10 +114,78 @@ export function QueueRow({ item }: { item: DownloadItem }) {
         await cmd.openFile(p);
         return;
       } catch {
-        // fall through
+        // fall through to dismiss
       }
     }
-    if (item.request.saveFolder) await cmd.openInFolder(item.request.saveFolder);
+    // File missing — drop the row so the user doesn't see the broken entry.
+    void dismissRow();
+  };
+
+  /** Native OS-level drag for completed downloads — drop the file into
+   *  CapCut / Premiere / Explorer just like dragging from File Explorer.
+   *  This is unused (drag is handled globally by HistoryPage / QueuePage
+   *  via the data-file-path attribute below) but kept for reference. */
+  const _handleDragStart = async (e: React.MouseEvent) => {
+    if (item.state !== "completed") return;
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const p = await resolvePath();
+    if (p) {
+      e.preventDefault();
+      e.stopPropagation();
+      void p; // path resolved, but actual drag now started by global handler
+    }
+  };
+  void _handleDragStart;
+
+  // Pre-resolve file path so the global mousedown handler can read it
+  // synchronously via the `data-file-path` DOM attribute below.
+  const [filePath, setFilePath] = useState<string | null>(item.outputPath ?? null);
+  useEffect(() => {
+    let cancelled = false;
+    if (item.outputPath) {
+      setFilePath(item.outputPath);
+      return;
+    }
+    if (item.state !== "completed" || !item.request.saveFolder) return;
+    (async () => {
+      try {
+        const found = await cmd.findOutputFile(item.request.saveFolder, item.title);
+        if (!cancelled && found) setFilePath(found);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [item.shortId, item.outputPath, item.request.saveFolder, item.title, item.state]);
+
+  // Drag-out gesture: track mousedown anywhere on the row, fire startDrag
+  // once user moves > 4px. Buttons / inputs inside the row stop propagation
+  // automatically because of how React event bubbling works with
+  // form-control elements.
+  const dragRef = useState({ pressed: false, x: 0, y: 0 })[0];
+  const dragCanStart = item.state === "completed" && !!filePath;
+  const onRowDown = (e: React.MouseEvent) => {
+    if (!dragCanStart) return;
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const tg = e.target as HTMLElement;
+    if (tg.closest("button, a, input, label, select, textarea")) return;
+    // Suppress native text-selection drag — see HistoryRow comment.
+    e.preventDefault();
+    dragRef.pressed = true;
+    dragRef.x = e.clientX;
+    dragRef.y = e.clientY;
+  };
+  const onRowMove = (e: React.MouseEvent) => {
+    if (!dragRef.pressed || !filePath) return;
+    if (Math.abs(e.clientX - dragRef.x) > 4 || Math.abs(e.clientY - dragRef.y) > 4) {
+      dragRef.pressed = false;
+      void startFileDrag(filePath);
+    }
+  };
+  const onRowUp = () => {
+    dragRef.pressed = false;
   };
 
   const openSource = (e: React.MouseEvent) => {
@@ -99,10 +199,19 @@ export function QueueRow({ item }: { item: DownloadItem }) {
   const title = displayTitle(item);
 
   return (
-    <div className="p-3 rounded-xl bg-surface border border-border hover:border-accent/40 transition-colors space-y-3">
+    <div
+      className={`p-3 rounded-xl bg-surface border border-border hover:border-accent/40 transition-colors space-y-3 ${
+        dragCanStart ? "cursor-grab active:cursor-grabbing" : ""
+      }`}
+      onMouseDown={onRowDown}
+      onMouseMove={onRowMove}
+      onMouseUp={onRowUp}
+      onMouseLeave={onRowUp}
+      title={dragCanStart ? "Kéo để thả vào CapCut / Premiere / thư mục khác" : undefined}
+    >
       <div className="flex gap-3">
         {/* Thumbnail */}
-        <div className="aspect-video w-40 sm:w-44 shrink-0">
+        <div className="aspect-video w-40 sm:w-44 shrink-0 rounded-lg overflow-hidden">
           <Thumbnail src={item.thumbnail} extractor={item.extractor} alt={title} />
         </div>
 
@@ -128,6 +237,15 @@ export function QueueRow({ item }: { item: DownloadItem }) {
             <span className="text-[10px] text-muted bg-surface-2 px-1.5 py-0.5 rounded font-mono ml-auto">
               #{item.shortId}
             </span>
+            {isTerminal && (
+              <button
+                onClick={() => void dismissRow()}
+                title="Xoá khỏi danh sách"
+                className="text-muted hover:text-danger text-sm leading-none px-1"
+              >
+                ✕
+              </button>
+            )}
           </div>
 
           {/* Title — plain selectable text + small copy button */}

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_channel_thumb.sql"),
+    include_str!("../migrations/0003_edited_flag.sql"),
 ];
 
 pub struct HistoryStore {
@@ -38,14 +39,32 @@ impl HistoryStore {
     }
 
     /// Insert (or replace) a history entry keyed by `short_id`.
+    ///
+    /// NOTE: We use `INSERT ... ON CONFLICT DO UPDATE` instead of
+    /// `INSERT OR REPLACE` so the `edited` / `edited_at` columns (set
+    /// independently by `set_edited`) are preserved when the runner emits a
+    /// fresh entry for the same `short_id`.
     pub fn insert(&self, e: &HistoryEntry) -> AppResult<()> {
         let conn = self.conn.lock();
         conn.execute(
-            "INSERT OR REPLACE INTO history (
+            "INSERT INTO history (
                 short_id, url, title, extractor, format_id, mode,
                 save_folder, output_path, status, error, finished_at,
                 channel, thumbnail
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT(short_id) DO UPDATE SET
+                url=excluded.url,
+                title=excluded.title,
+                extractor=excluded.extractor,
+                format_id=excluded.format_id,
+                mode=excluded.mode,
+                save_folder=excluded.save_folder,
+                output_path=excluded.output_path,
+                status=excluded.status,
+                error=excluded.error,
+                finished_at=excluded.finished_at,
+                channel=excluded.channel,
+                thumbnail=excluded.thumbnail",
             params![
                 e.short_id,
                 e.url,
@@ -65,6 +84,31 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// Mark several entries as edited (or unedited). Returns count of rows
+    /// actually changed.
+    pub fn set_edited(&self, short_ids: &[String], edited: bool) -> AppResult<u64> {
+        if short_ids.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.conn.lock();
+        let placeholders = std::iter::repeat("?").take(short_ids.len()).collect::<Vec<_>>().join(",");
+        let now = chrono::Utc::now().timestamp_millis();
+        let edited_at: Option<i64> = if edited { Some(now) } else { None };
+        let sql = format!(
+            "UPDATE history SET edited = ?1, edited_at = ?2 WHERE short_id IN ({})",
+            placeholders
+        );
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(short_ids.len() + 2);
+        params.push(Box::new(if edited { 1i64 } else { 0i64 }));
+        params.push(Box::new(edited_at));
+        for id in short_ids {
+            params.push(Box::new(id.clone()));
+        }
+        let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+        let affected = conn.execute(&sql, refs.as_slice())?;
+        Ok(affected as u64)
+    }
+
     /// List entries sorted by `finished_at DESC`. When `query` is `Some`, performs a
     /// case-insensitive substring match against both `title` and `url`.
     pub fn list(
@@ -81,7 +125,7 @@ impl HistoryStore {
                 let mut stmt = conn.prepare(
                     "SELECT short_id, url, title, extractor, format_id, mode,
                             save_folder, output_path, status, error, finished_at,
-                            channel, thumbnail
+                            channel, thumbnail, edited, edited_at
                      FROM history
                      WHERE title LIKE '%' || ?1 || '%' COLLATE NOCASE
                         OR url   LIKE '%' || ?1 || '%' COLLATE NOCASE
@@ -97,7 +141,7 @@ impl HistoryStore {
                 let mut stmt = conn.prepare(
                     "SELECT short_id, url, title, extractor, format_id, mode,
                             save_folder, output_path, status, error, finished_at,
-                            channel, thumbnail
+                            channel, thumbnail, edited, edited_at
                      FROM history
                      ORDER BY finished_at DESC
                      LIMIT ?1 OFFSET ?2",
@@ -150,7 +194,7 @@ impl HistoryStore {
         let mut stmt = conn.prepare(
             "SELECT short_id, url, title, extractor, format_id, mode,
                     save_folder, output_path, status, error, finished_at,
-                    channel, thumbnail
+                    channel, thumbnail, edited, edited_at
              FROM history
              WHERE short_id = ?1",
         )?;
@@ -181,6 +225,8 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
     // somehow miss the column don't panic — they'll just return None.
     let channel: Option<String> = row.get(11).ok();
     let thumbnail: Option<String> = row.get(12).ok();
+    let edited_int: i64 = row.get::<_, i64>(13).unwrap_or(0);
+    let edited_at_ms: Option<i64> = row.get::<_, Option<i64>>(14).ok().flatten();
 
     Ok(HistoryEntry {
         short_id,
@@ -196,6 +242,8 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
         finished_at: ts_to_dt(finished_at_ms),
         channel,
         thumbnail,
+        edited: edited_int != 0,
+        edited_at: edited_at_ms.map(ts_to_dt),
     })
 }
 

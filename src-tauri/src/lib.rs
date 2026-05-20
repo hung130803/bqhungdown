@@ -38,6 +38,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_drag::init())
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -91,6 +92,11 @@ pub fn run() {
             let watcher = crate::clipboard::ClipboardWatcher::new(handle.clone(), settings.clone());
             watcher.start();
 
+            // NOTE: yt-dlp auto-update on startup intentionally disabled.
+            // Updates ship with each app release (GitHub Actions re-fetches the
+            // latest yt-dlp at build time and bundles it into the installer).
+            // Users get yt-dlp updates by accepting the in-app "Cập nhật" banner.
+
             // Manage state.
             app.manage(settings);
             app.manage(history);
@@ -118,6 +124,8 @@ pub fn run() {
             commands::cancel_download,
             commands::retry_download,
             commands::list_queue,
+            commands::remove_queue_item,
+            commands::path_exists,
             commands::resolve_conflict,
             commands::get_settings,
             commands::update_settings,
@@ -131,6 +139,8 @@ pub fn run() {
             commands::open_url,
             commands::list_history,
             commands::delete_history_entry,
+            commands::delete_history_entries,
+            commands::set_history_edited,
             commands::clear_history,
             commands::redownload_from_history,
             commands::list_extractors,

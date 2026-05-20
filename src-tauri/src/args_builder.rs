@@ -25,7 +25,7 @@ fn should_force_generic(url: &str) -> bool {
 }
 
 /// Mode hint cho fetch_metadata vs run_download.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildMode {
     /// `yt-dlp --dump-single-json <url>` cho fetch metadata.
     FetchMetadata,
@@ -35,6 +35,10 @@ pub enum BuildMode {
         /// Force `--force-generic-extractor` (used as automatic retry when the
         /// native extractor returned "Unsupported URL").
         force_generic: bool,
+        /// Optional pre-resolved output filename (sanitized, with optional
+        /// `(N)` suffix when collision detected). When `None`, args_builder
+        /// uses the default `%(title)s.%(ext)s` template.
+        output_stem: Option<String>,
     },
 }
 
@@ -60,6 +64,21 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
     // Force IPv4 — YouTube CDN paths over IPv6 are sometimes much slower.
     args.push("-4".into());
 
+    // Site-specific request headers. Critical for Douyin CDN URLs: when we
+    // resolve `https://www.douyin.com/...` to `https://...aweme.snssdk.com/...`
+    // (via TikWM / share-page scrape), the CDN throttles requests that arrive
+    // without a `Referer: https://www.douyin.com/` header. Send it explicitly
+    // so download speed isn't capped at a few hundred KB/s.
+    let url_lower = req.url.to_lowercase();
+    if url_lower.contains("aweme.snssdk.com")
+        || url_lower.contains("douyin.com")
+        || url_lower.contains("/playwm/")
+        || url_lower.contains("/play/?")
+    {
+        args.push("--add-header".into());
+        args.push("Referer:https://www.douyin.com/".into());
+    }
+
     // Cookies từ browser (Settings → "Lấy cookies từ trình duyệt") — bắt buộc
     // cho Douyin / Bilibili / video YouTube giới hạn tuổi v.v.
     // Ưu tiên file cookies.txt > browser khi cả 2 cùng set, vì AppBound
@@ -80,7 +99,7 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
     // (viralhog, 9gag, imgur, redgifs…) → force the generic extractor so it
     // scans the HTML for `<video>` / `og:video` / etc. Caller can also force
     // it on retry via `BuildMode::Download { force_generic: true, .. }`.
-    let force_generic_caller = matches!(mode, BuildMode::Download { force_generic: true, .. });
+    let force_generic_caller = matches!(&mode, BuildMode::Download { force_generic: true, .. });
     if force_generic_caller || should_force_generic(&req.url) {
         args.push("--force-generic-extractor".into());
     }
@@ -104,13 +123,18 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             args.push(req.url.clone());
             return args;
         }
-        BuildMode::Download { resume, force_generic: _ } => {
-            // Output template & path
+        BuildMode::Download { resume, force_generic: _, output_stem } => {
+            // Output template & path. When the caller pre-resolved a stem
+            // (collision-safe `<title> (N)`), we use that literal stem so
+            // yt-dlp writes to the unique filename. Otherwise fall back to
+            // the standard `%(title)s` template that yt-dlp expands itself.
             args.push("-o".into());
-            args.push(format!(
-                "{}/%(title)s.%(ext)s",
-                req.save_folder.to_string_lossy()
-            ));
+            let folder = req.save_folder.to_string_lossy();
+            if let Some(stem) = output_stem {
+                args.push(format!("{folder}/{stem}.%(ext)s"));
+            } else {
+                args.push(format!("{folder}/%(title)s.%(ext)s"));
+            }
 
             // Progress: rely on yt-dlp's default `[download] x.x% of ...` lines
             // (parsed by progress_parser::parse_fallback). Custom --progress-template
@@ -143,23 +167,19 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             args.push("--print".into());
             args.push("after_move:FINALPATH|%(filepath,_filename)s".into());
 
-            // Multi-connection (concurrent fragment downloads)
+            // Multi-connection (concurrent fragment downloads).
+            // -N 32 + http-chunk-size lớn = nhiều stream + ít overhead per chunk.
+            // YouTube CDN cho phép tới ~32 connection per IP, vượt qua sẽ bị
+            // throttle. 32 là sweet spot.
             args.push("-N".into());
-            args.push("16".into());
+            args.push("32".into());
+            // Bigger HTTP chunk → giảm số request, mỗi request lấy được nhiều
+            // hơn → tốc độ ổn định hơn (thay vì lúc nhanh lúc chậm do TCP slow-start).
+            args.push("--http-chunk-size".into());
+            args.push("10485760".into()); // 10 MiB / chunk
 
-            // NOTE: We intentionally DO NOT enable aria2c by default because aria2c
-            // bypasses yt-dlp's progress hook entirely, leaving the UI bar frozen
-            // until the download finishes. Built-in -N 16 is plenty fast and emits
-            // smooth progress every ~250 ms. User can opt-in to aria2c via Settings.
-
-            // Aria2c — accelerator. Tuned set ổn định nhất:
-            //   -x 16 / -s 16 / --split=16 → 16 streams song song
-            //   -k 1M --min-split-size=1M  → mỗi stream tối thiểu 1MB
-            //   --console-log-level=notice + --summary-interval=1
-            //                              → in dòng `[#abc 12MiB/100MiB(12%) ...]` mỗi giây
-            //                                để progress_parser bắt được
-            // Bật/tắt do user tự quyết định ở Cài đặt; không có site-specific
-            // override ở đây.
+            // Aria2c — true multi-stream accelerator. Khi user bật ở Settings,
+            // dùng -x 32 -s 32 split=32 cho tốc độ max.
             if req.use_aria2c {
                 args.push("--downloader".into());
                 let aria_bin = crate::sidecar_detect::aria2c_path()
@@ -168,27 +188,30 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
                 args.push(aria_bin);
                 args.push("--downloader-args".into());
                 args.push(
-                    "aria2c:-x 16 -s 16 -k 1M --max-connection-per-server=16 \
---split=16 --min-split-size=1M \
+                    "aria2c:-x 32 -s 32 -k 1M --max-connection-per-server=32 \
+--split=32 --min-split-size=1M --piece-length=1M --lowest-speed-limit=1K \
 --console-log-level=notice --summary-interval=1 --enable-color=false"
                         .into(),
                 );
             }
 
-            // Format selection
+            // Format selection — luôn ưu tiên format CÓ audio. Cấu trúc fallback:
+            // 1. {fmt}+bestaudio  → format video-only + audio tốt nhất (YouTube DASH).
+            // 2. {fmt}            → format đã có audio (progressive như itag 18).
+            // 3. best/bestvideo+bestaudio → fallback tổng — chống nắm chắc 99%.
+            //
+            // Đặt --merge-output-format mp4 + ffmpeg sẵn → luôn ra file mp4 phát mọi player.
             match req.mode {
                 DownloadMode::Video => {
                     if let Some(fmt) = &req.format_id {
-                        // ALWAYS append best audio stream — most YouTube formats are
-                        // video-only DASH (e.g., 137=1080p video only). Without `+ba`
-                        // the resulting file would have no sound.
-                        // The `/<fmt>` fallback handles formats that already include audio
-                        // (e.g., legacy progressive 18=360p+audio), keeping them as-is.
+                        // 3-cấp fallback đảm bảo MUỐN GÌ CŨNG CÓ AUDIO:
+                        //   - {fmt}+bestaudio : format đã chọn + best audio (DASH video-only)
+                        //   - {fmt}            : nếu format đã chứa audio sẵn
+                        //   - best             : last resort — bất cứ format nào có audio
                         args.push("-f".into());
-                        args.push(format!("{fmt}+ba/{fmt}"));
+                        args.push(format!("{fmt}+bestaudio/{fmt}/best"));
                     } else {
-                        // Best quality available: prefer mp4/m4a, fallback to anything,
-                        // sorted by resolution > fps > codec > tbr (descending).
+                        // Best quality available với audio đảm bảo. yt-dlp tự pick.
                         args.push("-f".into());
                         args.push("bv*+ba/b".into());
                         args.push("-S".into());
@@ -289,10 +312,10 @@ mod tests {
     #[test]
     fn video_best_default() {
         let s = Settings::default();
-        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false });
+        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None });
         let joined = args.join(" ");
         assert!(joined.contains("-f bv*+ba/b"));
-        assert!(joined.contains("-N 16"));
+        assert!(joined.contains("-N 32"));
         assert!(joined.contains("%(title)s.%(ext)s"));
         assert!(!joined.contains("--continue"));
     }
@@ -301,7 +324,7 @@ mod tests {
     fn audio_mode_emits_extract_audio() {
         let mut r = req();
         r.mode = DownloadMode::Audio;
-        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false });
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None });
         let joined = args.join(" ");
         assert!(joined.contains("-x --audio-format mp3 --audio-quality 0"));
     }
@@ -310,16 +333,16 @@ mod tests {
     fn aria2c_when_enabled() {
         let mut r = req();
         r.use_aria2c = true;
-        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false });
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None });
         let joined = args.join(" ");
         assert!(joined.contains("--downloader aria2c"));
-        assert!(joined.contains("aria2c:-x 16 -s 16 -k 1M"));
+        assert!(joined.contains("aria2c:-x 32 -s 32 -k 1M"));
     }
 
     #[test]
     fn resume_appends_continue() {
         let r = req();
-        let args = build(&r, &Settings::default(), BuildMode::Download { resume: true, force_generic: false });
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: true, force_generic: false, output_stem: None });
         assert!(args.contains(&"--continue".to_string()));
     }
 }

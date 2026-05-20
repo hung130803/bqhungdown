@@ -46,15 +46,18 @@ pub async fn resolve(url: &str) -> String {
 pub async fn resolve_with_meta(url: &str) -> (String, Option<DouyinMeta>) {
     let lower = url.to_lowercase();
 
-    // ── Douyin: tries 3 strategies in order:
-    //   1. tikwm.com proxy → direct MP4 URL (works for trending content)
-    //   2. iesdouyin share page → scrape play_addr.url_list + title (no cookies)
-    //   3. iesdouyin.com share URL → yt-dlp IesDouyin extractor (last resort)
+    // ── Douyin: tries strategies in order, falling through on any failure:
+    //   1. tikwm.com primary endpoint
+    //   2. tikwm.com mirror domains (tikwm-cdn / api.tikwm)
+    //   3. iesdouyin share-page scrape (no third-party API)
+    //   4. iesdouyin.com share URL → yt-dlp IesDouyin extractor (last resort)
     if lower.contains("douyin.com") || lower.contains("iesdouyin.com") {
         if let Some(id) = extract_douyin_id(url) {
             let canonical = format!("https://www.douyin.com/video/{id}");
-            if let Some((direct, meta)) = resolve_via_tikwm(&canonical).await {
-                return (direct, Some(meta));
+            for endpoint in TIKWM_ENDPOINTS {
+                if let Some((direct, meta)) = resolve_via_tikwm(endpoint, &canonical).await {
+                    return (direct, Some(meta));
+                }
             }
             if let Some((direct, meta)) = resolve_via_share_page(&id).await {
                 return (direct, Some(meta));
@@ -72,6 +75,16 @@ pub async fn resolve_with_meta(url: &str) -> (String, Option<DouyinMeta>) {
 
     (url.to_string(), None)
 }
+
+/// TikWM scraping API endpoints, tried in order. Same response schema across
+/// all of them. The primary `www.tikwm.com` is the most reliable; mirrors are
+/// listed so a Cloudflare hiccup or a single rate limit doesn't take down the
+/// entire Douyin path.
+const TIKWM_ENDPOINTS: &[&str] = &[
+    "https://www.tikwm.com/api/",
+    "https://tikwm.com/api/",
+    "https://api.tikwm.com/api/",
+];
 
 /// Metadata scraped along with the resolved URL.
 #[derive(Debug, Clone, Default)]
@@ -103,16 +116,16 @@ fn extract_douyin_id(url: &str) -> Option<String> {
     None
 }
 
-/// Query TikWM scraping API for the direct MP4 URL. Returns `None` on any
-/// failure (timeout, network, non-zero `code`, missing data) so the caller
-/// can fall back to a different strategy.
+/// Query a TikWM-compatible scraping endpoint for the direct MP4 URL.
+/// Returns `None` on any failure (timeout, network, non-zero `code`, missing
+/// data) so the caller can fall back to a mirror or a different strategy.
 ///
-/// API contract:
+/// API contract is identical across mirror endpoints:
 /// ```
-/// GET https://www.tikwm.com/api/?url=<douyin_url>&hd=1
+/// GET <endpoint>?url=<douyin_url>&hd=1
 /// → { "code": 0, "data": { "hdplay": "...mp4", "play": "...", "wmplay": "..." } }
 /// ```
-async fn resolve_via_tikwm(douyin_url: &str) -> Option<(String, DouyinMeta)> {
+async fn resolve_via_tikwm(endpoint: &str, douyin_url: &str) -> Option<(String, DouyinMeta)> {
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .user_agent(UA)
@@ -120,7 +133,7 @@ async fn resolve_via_tikwm(douyin_url: &str) -> Option<(String, DouyinMeta)> {
         .ok()?;
 
     let resp = client
-        .get("https://www.tikwm.com/api/")
+        .get(endpoint)
         .query(&[("url", douyin_url), ("hd", "1")])
         .send()
         .await

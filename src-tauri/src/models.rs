@@ -214,6 +214,13 @@ pub struct HistoryEntry {
     /// `img-src https: http: data:`.
     #[serde(default)]
     pub thumbnail: Option<String>,
+    /// User flag: đã edit xong file này chưa? Mặc định `false`. Cập nhật qua
+    /// command `mark_history_edited`. UI hiện badge ✓ trên row + filter.
+    #[serde(default)]
+    pub edited: bool,
+    /// Khi nào user đánh dấu edit (epoch ms). Hữu ích cho sort / hiển thị.
+    #[serde(default)]
+    pub edited_at: Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------------------

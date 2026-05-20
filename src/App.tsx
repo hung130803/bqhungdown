@@ -89,19 +89,46 @@ function Bootstrap({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function PageContainer({ children }: { children: React.ReactNode }) {
+  // Wraps non-history pages so they keep a comfortable reading width while
+  // the history page itself goes full-bleed for grid/compact view.
+  return <div className="max-w-5xl w-full mx-auto">{children}</div>;
+}
+
 function Shell() {
   const settings = useSettingsStore((s) => s.settings);
+
+  // Ctrl+Tab / Ctrl+Shift+Tab — cycle through Tải mới ↔ Đang tải ↔ Lịch sử ↔ Cài đặt.
+  // Keeps focus inside the app's nav even when an input is focused (matches
+  // browser tab-cycle muscle memory).
+  const navigate = useNavigate();
+  useEffect(() => {
+    const ROUTES = ["/", "/queue", "/history", "/settings"];
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.key !== "Tab") return;
+      e.preventDefault();
+      const cur = window.location.pathname;
+      const idx = ROUTES.indexOf(cur);
+      const base = idx === -1 ? 0 : idx;
+      const delta = e.shiftKey ? -1 : 1;
+      const next = (base + delta + ROUTES.length) % ROUTES.length;
+      navigate(ROUTES[next]);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navigate]);
+
   return (
     <ThemeProvider theme={settings?.theme ?? "system"}>
       <div className="min-h-full flex flex-col">
         <UpdateBanner />
         <Header />
-        <main className="flex-1 px-6 py-6 max-w-5xl w-full mx-auto">
+        <main className="flex-1 px-6 py-6 w-full mx-auto">
           <Routes>
-            <Route path="/" element={<PasteUrlPage />} />
-            <Route path="/queue" element={<QueuePage />} />
+            <Route path="/" element={<PageContainer><PasteUrlPage /></PageContainer>} />
+            <Route path="/queue" element={<PageContainer><QueuePage /></PageContainer>} />
             <Route path="/history" element={<HistoryPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings" element={<PageContainer><SettingsPage /></PageContainer>} />
           </Routes>
         </main>
       </div>

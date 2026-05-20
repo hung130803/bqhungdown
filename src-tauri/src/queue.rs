@@ -53,9 +53,38 @@ pub fn next_retry_delay(attempt: u8) -> Option<Duration> {
 /// Xoá các file tạm còn sót lại của một Download_Item: `.part`, `.ytdl`,
 /// `.frag`, `.f<id>.*` và file `.temp.*` được yt-dlp/ffmpeg sinh ra trong khi
 /// tải/mux. Best-effort; mọi lỗi I/O đều bỏ qua để không làm hỏng flow huỷ.
+///
+/// Khi `aggressive=true` (gọi từ flow Cancel), xoá luôn cả file đích đã có
+/// (output_path) — vì lúc người dùng huỷ giữa chừng, ta không muốn để lại file
+/// dở dang/hoàn tất một phần trên đĩa.
 pub fn cleanup_partials(item: &DownloadItem) {
+    cleanup_partials_inner(item, false);
+}
+
+pub fn cleanup_partials_aggressive(item: &DownloadItem) {
+    cleanup_partials_inner(item, true);
+}
+
+fn cleanup_partials_inner(item: &DownloadItem, aggressive: bool) {
     let folder = &item.request.save_folder;
     let title_prefix = crate::filename_resolver::sanitize(&item.title);
+    // Stem from any pre-resolved output_path so we catch files yt-dlp wrote
+    // under a slightly different sanitization than ours (Douyin CDN ids,
+    // alternate punctuation, etc.).
+    let path_stem = item
+        .output_path
+        .as_ref()
+        .and_then(|p| p.file_stem())
+        .and_then(|s| s.to_str())
+        .map(String::from);
+
+    // Aggressive: remove the canonical output file too if we know it.
+    if aggressive {
+        if let Some(ref p) = item.output_path {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
     let entries = match std::fs::read_dir(folder) {
         Ok(e) => e,
         Err(_) => return,
@@ -66,15 +95,24 @@ pub fn cleanup_partials(item: &DownloadItem) {
             Ok(s) => s,
             Err(_) => continue,
         };
-        // Match files that belong to this download.
-        let belongs = name.starts_with(&title_prefix)
-            && (name.ends_with(".part")
-                || name.ends_with(".ytdl")
-                || name.contains(".part-")
-                || name.contains(".f")
-                || name.contains(".temp.")
-                || name.ends_with(".frag"));
-        if belongs {
+        let matches_prefix = (!title_prefix.is_empty() && name.starts_with(&title_prefix))
+            || path_stem
+                .as_deref()
+                .map(|s| !s.is_empty() && name.starts_with(s))
+                .unwrap_or(false);
+        if !matches_prefix {
+            continue;
+        }
+        // Partial markers always cleaned. In aggressive mode we additionally
+        // wipe any same-stem file (could be the .mp4 yt-dlp finalized between
+        // cancel signal and process exit).
+        let is_partial = name.ends_with(".part")
+            || name.ends_with(".ytdl")
+            || name.contains(".part-")
+            || name.contains(".f")
+            || name.contains(".temp.")
+            || name.ends_with(".frag");
+        if is_partial || aggressive {
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -143,6 +181,22 @@ impl QueueManager {
 
     pub fn get(&self, id: &str) -> Option<DownloadItem> {
         self.items.read().unwrap().get(id).cloned()
+    }
+
+    /// Remove an item entirely from the queue (no FSM, no cleanup of files on disk).
+    /// Used by UI when user wants to dismiss a row whose file is gone or that
+    /// they no longer care about. If the item is still active, also cancel it.
+    pub fn remove_item(&self, id: &str) -> AppResult<()> {
+        // Cancel any in-flight download first.
+        if let Some(tok) = self.cancel_tokens.lock().unwrap().remove(id) {
+            tok.cancel();
+        }
+        let removed = self.items.write().unwrap().shift_remove(id);
+        if removed.is_none() {
+            return Err(AppError::NotFound(id.to_string()));
+        }
+        self.emit_queue_updated();
+        Ok(())
     }
 
     pub fn enqueue(self: &Arc<Self>, item: DownloadItem) -> AppResult<()> {
@@ -282,6 +336,44 @@ impl QueueManager {
         // Resume flag: yt-dlp `--continue` if attempt > 0 OR state was previously Paused.
         let resume = item.attempt > 0;
 
+        // Detect CDN-rewritten URLs (Douyin) — title from yt-dlp would be the
+        // CDN file ID (gibberish), and we already scraped a real title from
+        // the share page. Used by both pre-resolve and meta channel below.
+        let url_is_cdn = item.request.url.contains("aweme.snssdk.com")
+            || item.request.url.contains("/playwm/")
+            || item.request.url.contains("/play/?");
+
+        // Pre-resolve filename: nếu file đích đã tồn tại (do user tải lại
+        // cùng video), tự thêm ` (1)`, ` (2)`... để KHÔNG ghi đè file cũ.
+        // Chuyển vào yt-dlp qua `output_stem` ⇒ template `-o "<stem>.<ext>"`.
+        //
+        // Bỏ qua khi:
+        //   - title rỗng / "video" mặc định → để yt-dlp tự pick title đẹp.
+        //   - URL là CDN (Douyin) → đã có post-rename ở phase Completed.
+        let output_stem: Option<String> = if !url_is_cdn
+            && !item.title.trim().is_empty()
+            && item.title != item.request.url
+        {
+            let folder = &item.request.save_folder;
+            let sanitized = crate::filename_resolver::sanitize(&item.title);
+            // Dùng "mp4" (video) hoặc "mp3" (audio) chỉ để check collision —
+            // ext thật sẽ được yt-dlp tự đặt từ %(ext)s.
+            let ext_for_check = match item.request.mode {
+                crate::models::DownloadMode::Audio => "mp3",
+                crate::models::DownloadMode::Video => "mp4",
+            };
+            let candidate = crate::filename_resolver::auto_rename(
+                folder, &sanitized, ext_for_check, |p| p.exists(),
+            );
+            // Lấy file_stem (không có ext) để truyền vào args_builder.
+            candidate
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(String::from)
+        } else {
+            None
+        };
+
         let (tx, mut rx) = mpsc::channel::<crate::models::ProgressSnapshot>(64);
         let app = self.app.clone();
         let id_for_progress = id.clone();
@@ -303,12 +395,8 @@ impl QueueManager {
         // direct URL), yt-dlp's TITLE is the file name on the CDN (gibberish
         // like `oEPACEIyM8B7...`). In that case the queue item already carries
         // a *better* title scraped from the share page, so we skip TITLE
-        // updates from yt-dlp to avoid clobbering it. We detect this by
-        // checking whether item.request.url looks like a yt-dlp-resolved CDN
-        // URL rather than the original site URL.
-        let url_is_cdn = item.request.url.contains("aweme.snssdk.com")
-            || item.request.url.contains("/playwm/")
-            || item.request.url.contains("/play/?");
+        // updates from yt-dlp to avoid clobbering it. `url_is_cdn` was
+        // computed earlier (above output_stem block) and is reused here.
         let (meta_tx, mut meta_rx) = mpsc::channel::<MetaEvent>(8);
         let me_meta = self.clone();
         let id_for_meta = id.clone();
@@ -350,7 +438,15 @@ impl QueueManager {
         });
 
         let settings_snapshot: Settings = self.settings.get();
-        let outcome = self.runner.run_download(&item, &settings_snapshot, resume, cancel.clone(), tx, meta_tx).await;
+        let outcome = self.runner.run_download(
+            &item,
+            &settings_snapshot,
+            resume,
+            cancel.clone(),
+            tx,
+            meta_tx,
+            output_stem.clone(),
+        ).await;
 
         self.cancel_tokens.lock().unwrap().remove(&id);
         drop(permit);
@@ -383,11 +479,11 @@ impl QueueManager {
                             it.thumbnail = Some(th);
                         }
                     }
-                    // When url is CDN-resolved, yt-dlp saved the file with the
-                    // CDN file-ID as its name. Rename the file on disk to use
-                    // the pre-filled (real) title so the user gets a clean
-                    // MP4 name. Best-effort: any I/O failure leaves the file
-                    // alone (still functional).
+                    // Post-rename CDN-specific (Douyin): khi yt-dlp lưu file
+                    // với tên CDN ID xấu → đổi sang title đẹp đã scrape được.
+                    // Khi trùng, dùng auto_rename để thêm ` (1)`, ` (2)` thay vì
+                    // bỏ qua (cũ: chỉ rename khi !target.exists() ⇒ user thấy
+                    // tên CDN ID gibberish khi tải lại video Douyin).
                     if url_is_cdn {
                         if let Some(ref cur_path) = it.output_path {
                             let title = it.title.clone();
@@ -398,11 +494,18 @@ impl QueueManager {
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("mp4")
                                 .to_string();
-                            if !sanitized.is_empty() && parent.is_some() {
-                                let target = parent.unwrap().join(format!("{sanitized}.{ext}"));
-                                if !target.exists() && cur_path != &target {
-                                    if std::fs::rename(cur_path, &target).is_ok() {
-                                        it.output_path = Some(target);
+                            if !sanitized.is_empty() {
+                                if let Some(parent) = parent {
+                                    let target = crate::filename_resolver::auto_rename(
+                                        &parent,
+                                        &sanitized,
+                                        &ext,
+                                        |p| p.exists() && p != cur_path.as_path(),
+                                    );
+                                    if cur_path != &target {
+                                        if std::fs::rename(cur_path, &target).is_ok() {
+                                            it.output_path = Some(target);
+                                        }
                                     }
                                 }
                             }
@@ -436,13 +539,13 @@ impl QueueManager {
                 if let Some(it) = snap {
                     // Dọn cache rác khi cancel (đảm bảo state == Cancelled, không phải Paused).
                     if matches!(it.state, DownloadState::Cancelled) {
-                        cleanup_partials(&it);
+                        cleanup_partials_aggressive(&it);
                     }
                     self.emit_state(&it);
                     self.emit_queue_updated();
-                    if matches!(it.state, DownloadState::Cancelled) {
-                        let _ = self.history.insert(&to_history(&it, HistoryStatus::Cancelled, None));
-                    }
+                    // Không lưu Cancelled vào History — user chủ động huỷ thì
+                    // đó là hành động tạm thời, không phải kết quả tải. History
+                    // chỉ chứa các mục Completed.
                 }
             }
             Ok(RunOutcome::Failed { reason }) => {
@@ -498,7 +601,9 @@ impl QueueManager {
                     short_id: it.short_id.clone(),
                     reason: reason.clone(),
                 });
-                let _ = self.history.insert(&to_history(&it, HistoryStatus::Failed, Some(reason.clone())));
+                // Không lưu Failed vào History — chỉ lưu các mục đã tải xong
+                // thực sự. Mục Failed vẫn hiện trong "Đang tải" để user thấy
+                // lý do và Retry; chỉ khi cancel/refresh queue mới biến mất.
                 notification::notify_failed(&self.app, &settings_snapshot, &it, &reason);
             }
         }
@@ -520,6 +625,8 @@ fn to_history(item: &DownloadItem, status: HistoryStatus, error: Option<String>)
         finished_at: item.finished_at.unwrap_or_else(Utc::now),
         channel: item.channel.clone(),
         thumbnail: item.thumbnail.clone(),
+        edited: false,
+        edited_at: None,
     }
 }
 

@@ -113,8 +113,7 @@ impl YtDlpRunner {
         args.push(url.to_string());
         let _ = args_builder::BuildMode::FetchMetadata; // keep reference
 
-        let sidecar = self.app.shell().sidecar("yt-dlp").map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
-        let cmd = sidecar.args(args);
+        let cmd = self.app.shell().sidecar("yt-dlp").map_err(|e| AppError::YtDlpFailed(e.to_string()))?.args(args);
 
         let fut = async {
             let (mut rx, _child) = cmd.spawn().map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
@@ -151,10 +150,11 @@ impl YtDlpRunner {
         cancel: CancellationToken,
         progress_tx: mpsc::Sender<ProgressSnapshot>,
         meta_tx: mpsc::Sender<MetaEvent>,
+        output_stem: Option<String>,
     ) -> AppResult<RunOutcome> {
         // First attempt: native extractor (or generic if URL is in our hint list).
         let outcome = self
-            .run_once(item, settings, resume, false, cancel.clone(), progress_tx.clone(), meta_tx.clone())
+            .run_once(item, settings, resume, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
             .await?;
 
         // Auto-retry with `--force-generic-extractor` when yt-dlp says it can't
@@ -163,7 +163,7 @@ impl YtDlpRunner {
         if let RunOutcome::Failed { reason } = &outcome {
             if is_unsupported_url(reason) && !cancel.is_cancelled() {
                 return self
-                    .run_once(item, settings, resume, true, cancel, progress_tx, meta_tx)
+                    .run_once(item, settings, resume, true, cancel, progress_tx, meta_tx, output_stem)
                     .await;
             }
         }
@@ -179,14 +179,14 @@ impl YtDlpRunner {
         cancel: CancellationToken,
         progress_tx: mpsc::Sender<ProgressSnapshot>,
         meta_tx: mpsc::Sender<MetaEvent>,
+        output_stem: Option<String>,
     ) -> AppResult<RunOutcome> {
         let args = args_builder::build(
             &item.request,
             settings,
-            BuildMode::Download { resume, force_generic },
+            BuildMode::Download { resume, force_generic, output_stem },
         );
-        let sidecar = self.app.shell().sidecar("yt-dlp").map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
-        let cmd = sidecar.args(args);
+        let cmd = self.app.shell().sidecar("yt-dlp").map_err(|e| AppError::YtDlpFailed(e.to_string()))?.args(args);
 
         let (mut rx, mut child) = cmd.spawn().map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
         // SAFETY: rustc tưởng `child` không cần `mut` vì .kill() lấy &self,
