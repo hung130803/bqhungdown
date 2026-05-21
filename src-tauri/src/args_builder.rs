@@ -178,6 +178,18 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             args.push("--http-chunk-size".into());
             args.push("10485760".into()); // 10 MiB / chunk
 
+            // Polite mode — random sleep between requests so we don't trip
+            // YouTube/TikTok rate limiting when batch-downloading a channel.
+            // Caller turns this on for "Tải kênh" flows.
+            if req.polite {
+                args.push("--sleep-interval".into());
+                args.push("2".into());
+                args.push("--max-sleep-interval".into());
+                args.push("5".into());
+                args.push("--sleep-requests".into());
+                args.push("1".into());
+            }
+
             // Aria2c — true multi-stream accelerator. Khi user bật ở Settings,
             // dùng -x 32 -s 32 split=32 cho tốc độ max.
             if req.use_aria2c {
@@ -297,6 +309,7 @@ mod tests {
             on_conflict: ConflictPolicy::Ask,
             use_aria2c: false,
             playlist_all: false,
+            polite: false,
         }
     }
 

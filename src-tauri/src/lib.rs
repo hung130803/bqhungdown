@@ -15,6 +15,7 @@ pub mod notification;
 pub mod url_validator;
 pub mod url_resolver;
 pub mod clipboard;
+pub mod channel_fetcher;
 pub mod ytdlp_runner;
 pub mod queue;
 pub mod commands;
@@ -116,6 +117,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::validate_url,
             commands::fetch_metadata,
+            commands::fetch_channel_videos,
             commands::enqueue_download,
             commands::enqueue_batch,
             commands::enqueue_playlist,

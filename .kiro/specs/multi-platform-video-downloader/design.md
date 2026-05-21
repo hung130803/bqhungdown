@@ -1,5 +1,5 @@
 # Design Document
-
+# npm run tauri:dev
 ## Overview
 
 Ứng dụng `multi-platform-video-downloader` là một desktop app dạng Tauri 2 shell, với React 18 + TypeScript chạy trong webview làm Frontend và một Rust backend xử lý IPC, sidecar processes (yt-dlp, ffmpeg, aria2c) và filesystem. Backend đóng vai trò orchestrator: nhận lệnh từ Frontend qua IPC, build argument vector cho YtDlp_Sidecar, parse stdout để phát progress events, và quản lý Queue_Manager với concurrency. Frontend chịu trách nhiệm UI tiếng Việt (react-i18next), dark/light theme qua CSS variables, và quy trình Paste → Metadata → Quality → Folder → Download.

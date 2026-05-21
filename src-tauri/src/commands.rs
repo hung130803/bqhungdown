@@ -6,7 +6,7 @@ use crate::extractors;
 use crate::filename_resolver::{self, ResolveOutcome};
 use crate::history_store::HistoryStore;
 use crate::models::{
-    BootstrapPayload, ConflictChoice, ConflictPolicy, DownloadItem, DownloadOptions,
+    BootstrapPayload, ChannelInfo, ChannelVideo, ConflictChoice, ConflictPolicy, DownloadItem, DownloadOptions,
     DownloadRequest, DownloadState, ExtractorInfo, HistoryEntry, Settings, SettingsPatch,
     SubtitleTrack, UrlValidation, VideoMetadata,
 };
@@ -80,6 +80,29 @@ pub async fn fetch_metadata(
     runner.fetch_metadata(&resolved, &s).await
 }
 
+/// Fetch a flat listing of videos from a channel/user URL. Returns up to
+/// `limit` videos (default 50). The UI then lets the user filter / pick and
+/// enqueue them via `enqueue_batch`.
+#[tauri::command]
+pub async fn fetch_channel_videos(
+    url: String,
+    limit: Option<u32>,
+    app: AppHandle,
+    settings: State<'_, Arc<SettingsStore>>,
+) -> AppResult<ChannelFetchResult> {
+    let s = settings.get();
+    let cap = limit.unwrap_or(50).clamp(1, 1000);
+    let (info, videos) = crate::channel_fetcher::fetch_channel(&app, &url, cap, &s).await?;
+    Ok(ChannelFetchResult { info, videos })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelFetchResult {
+    pub info: ChannelInfo,
+    pub videos: Vec<ChannelVideo>,
+}
+
 // ---------- Enqueue ----------
 
 fn build_request(url: String, options: DownloadOptions, settings: &Settings) -> DownloadRequest {
@@ -93,6 +116,7 @@ fn build_request(url: String, options: DownloadOptions, settings: &Settings) -> 
         on_conflict: options.on_conflict,
         use_aria2c: settings.aria2c_enabled,
         playlist_all: options.playlist_all.unwrap_or(false),
+        polite: options.polite.unwrap_or(false),
     }
 }
 
@@ -690,6 +714,7 @@ pub fn redownload_from_history(
         auto_translate_to: None,
         on_conflict: ConflictPolicy::Ask,
         playlist_all: None,
+        polite: None,
     };
     let req = build_request(entry.url.clone(), options, &s);
     let item = make_item(req, Some(entry.title), entry.thumbnail.clone(), Some(entry.extractor), entry.channel.clone(), &taken);

@@ -23,6 +23,7 @@ import type {
   BootstrapPayload,
   SubtitleTrack,
   ExtractorInfo,
+  ChannelFetchResult,
 } from "@/types/models";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -43,6 +44,14 @@ export async function validateUrl(url: string): Promise<UrlValidation> {
 
 export async function fetchMetadata(url: string): Promise<VideoMetadata> {
   return invoke<VideoMetadata>("fetch_metadata", { url });
+}
+
+/** Fetch a flat list of videos from a channel/user URL. */
+export async function fetchChannelVideos(
+  url: string,
+  limit: number = 50,
+): Promise<ChannelFetchResult> {
+  return invoke<ChannelFetchResult>("fetch_channel_videos", { url, limit });
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

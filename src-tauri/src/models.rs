@@ -122,9 +122,37 @@ pub struct SubtitleTrack {
     pub is_auto: bool,
 }
 
+/// Channel/user listing — returned by `fetch_channel_videos` to show a
+/// preview before the user enqueues a batch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelInfo {
+    pub url: String,
+    pub title: String,
+    pub thumbnail: Option<String>,
+    /// `playlist_count` from yt-dlp; not always provided by the extractor.
+    pub video_count: Option<u32>,
+    pub extractor: String,
+}
+
+/// Single entry inside a channel listing — what the user picks via checkbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelVideo {
+    pub url: String,
+    pub title: String,
+    pub duration_sec: Option<u64>,
+    pub view_count: Option<u64>,
+    /// Upload date in `YYYYMMDD` form when available — left as opaque string
+    /// because not every extractor sets it.
+    pub upload_date: Option<String>,
+    pub thumbnail: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistEntry {
+
     pub url: String,
     pub title: String,
     pub duration_sec: Option<u64>,
@@ -163,6 +191,12 @@ pub struct DownloadRequest {
     pub use_aria2c: bool,
     /// When true, instructs yt-dlp to expand the playlist (`--yes-playlist`).
     pub playlist_all: bool,
+    /// "Polite mode" — adds random sleep between requests (yt-dlp
+    /// `--sleep-interval` + `--max-sleep-interval`) so big channel batches
+    /// don't trip rate limiting. Default false; UI flips on for channel
+    /// downloads.
+    #[serde(default)]
+    pub polite: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -347,6 +381,10 @@ pub struct DownloadOptions {
     pub auto_translate_to: Option<String>,
     pub on_conflict: ConflictPolicy,
     pub playlist_all: Option<bool>,
+    /// "Polite mode" — slow random delays between requests to avoid IP bans
+    /// when downloading many videos from the same channel.
+    #[serde(default)]
+    pub polite: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -151,6 +151,34 @@ export interface HistoryEntry {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Channel listing
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface ChannelInfo {
+  url: string;
+  title: string;
+  thumbnail?: string | null;
+  /** Total videos on the channel — not always available. */
+  videoCount?: number | null;
+  extractor: string;
+}
+
+export interface ChannelVideo {
+  url: string;
+  title: string;
+  durationSec?: number | null;
+  viewCount?: number | null;
+  /** `YYYYMMDD` when extractor exposes it. */
+  uploadDate?: string | null;
+  thumbnail?: string | null;
+}
+
+export interface ChannelFetchResult {
+  info: ChannelInfo;
+  videos: ChannelVideo[];
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Settings
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -213,6 +241,9 @@ export interface DownloadOptions {
   autoTranslateTo: string | null;
   onConflict: ConflictPolicy;
   playlistAll: boolean | null;
+  /** Polite mode — adds 2-5s sleep between yt-dlp requests so big channel
+   *  batches don't trigger YouTube/TikTok rate limits. */
+  polite?: boolean;
 }
 
 export interface BootstrapPayload {

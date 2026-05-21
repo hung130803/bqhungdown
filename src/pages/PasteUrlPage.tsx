@@ -8,6 +8,7 @@ import { ModeToggle } from "@/components/ModeToggle";
 import { QualityPicker } from "@/components/QualityPicker";
 import { FolderPicker } from "@/components/FolderPicker";
 import { BatchInput } from "@/components/BatchInput";
+import { ChannelInput } from "@/components/ChannelInput";
 import { PlaylistEntryList } from "@/components/PlaylistEntryList";
 import { useUrlStore } from "@/stores/useUrlStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
@@ -82,6 +83,28 @@ export function PasteUrlPage() {
     });
   };
 
+  /** Channel batch — same as `startBatch` but turns on "polite mode" so
+   *  yt-dlp adds 2-5s random sleep between requests. Critical for big
+   *  channel scrapes to avoid IP bans on YouTube/TikTok. */
+  const startChannelBatch = async (urls: string[]) => {
+    if (!folder) return;
+    await cmd.enqueueBatch({
+      urls,
+      options: {
+        mode,
+        formatId: null,
+        saveFolder: folder,
+        subLangs: [],
+        autoTranslateTo: null,
+        onConflict,
+        playlistAll: null,
+        polite: true,
+      },
+    });
+    // Jump to the queue page so the user can watch the batch start working.
+    navigate("/queue");
+  };
+
   const startPlaylist = async (urls: string[], all: boolean) => {
     if (submitting || !metadata || !folder) return;
     setSubmitting(true);
@@ -135,7 +158,48 @@ export function PasteUrlPage() {
         </>
       )}
 
-      {!metadata && <BatchInput onSubmit={startBatch} />}
+      {!metadata && (
+        <BatchOrChannel
+          onBatch={startBatch}
+          onChannel={startChannelBatch}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Two-tab block shown when there's no single-URL metadata to display:
+ *   - "Hàng loạt": paste many URLs
+ *   - "Kênh": paste a channel URL, fetch videos, filter, queue */
+function BatchOrChannel({
+  onBatch,
+  onChannel,
+}: {
+  onBatch: (urls: string[]) => Promise<void> | void;
+  onChannel: (urls: string[]) => Promise<void> | void;
+}) {
+  const [tab, setTab] = useState<"batch" | "channel">("batch");
+  return (
+    <div className="space-y-3 pt-2 border-t border-border">
+      <div className="inline-flex rounded-md border border-border overflow-hidden">
+        <button
+          onClick={() => setTab("batch")}
+          className={`px-3 py-1.5 text-sm ${tab === "batch" ? "bg-accent text-accent-fg" : "hover:bg-surface-2"}`}
+        >
+          Hàng loạt
+        </button>
+        <button
+          onClick={() => setTab("channel")}
+          className={`px-3 py-1.5 text-sm ${tab === "channel" ? "bg-accent text-accent-fg" : "hover:bg-surface-2"}`}
+        >
+          Kênh
+        </button>
+      </div>
+      {tab === "batch" ? (
+        <BatchInput onSubmit={onBatch} />
+      ) : (
+        <ChannelInput onSubmit={onChannel} />
+      )}
     </div>
   );
 }
