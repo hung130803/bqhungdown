@@ -152,6 +152,35 @@ impl YtDlpRunner {
         meta_tx: mpsc::Sender<MetaEvent>,
         output_stem: Option<String>,
     ) -> AppResult<RunOutcome> {
+        // ── TikTok photo posts: yt-dlp only extracts mp3 audio, so we route
+        //    these through tikwm + parallel image fetcher and produce a folder
+        //    of jpgs named after the post title.
+        let url_lower = item.request.url.to_lowercase();
+        let looks_like_tiktok = url_lower.contains("tiktok.com");
+        if looks_like_tiktok {
+            // Fetch tikwm metadata; if it has `images` we treat as photo post.
+            if let Some(post) = crate::tiktok_photo::fetch_photo_meta(&item.request.url).await {
+                // Optimistically emit the title so UI shows nice name immediately.
+                let _ = meta_tx.send(MetaEvent::Title(post.title.clone())).await;
+                let _ = progress_tx
+                    .send(ProgressSnapshot {
+                        bytes_downloaded: 0,
+                        bytes_total: None,
+                        speed_bps: None,
+                        eta_sec: None,
+                        percent: None,
+                    })
+                    .await;
+                let folder = crate::tiktok_photo::download_photo_post(&post, &item.request.save_folder).await?;
+                return Ok(RunOutcome::Completed {
+                    output_path: Some(folder),
+                    title: Some(post.title.clone()),
+                    thumbnail: post.images.first().cloned(),
+                    channel: None,
+                });
+            }
+        }
+
         // First attempt: native extractor (or generic if URL is in our hint list).
         let outcome = self
             .run_once(item, settings, resume, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())

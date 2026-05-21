@@ -12,6 +12,7 @@ import { ChannelInput } from "@/components/ChannelInput";
 import { PlaylistEntryList } from "@/components/PlaylistEntryList";
 import { useUrlStore } from "@/stores/useUrlStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
+import { useChannelStore } from "@/stores/useChannelStore";
 import * as cmd from "@/ipc/commands";
 
 export function PasteUrlPage() {
@@ -178,7 +179,10 @@ function BatchOrChannel({
   onBatch: (urls: string[]) => Promise<void> | void;
   onChannel: (urls: string[]) => Promise<void> | void;
 }) {
-  const [tab, setTab] = useState<"batch" | "channel">("batch");
+  // Sub-tab được lưu trong store nên user chuyển sang trang khác xong quay
+  // lại sẽ vẫn ở đúng tab "Kênh" nếu họ đang dở việc lấy danh sách.
+  const tab = useChannelStore((s) => s.subTab);
+  const setTab = useChannelStore((s) => s.setSubTab);
   return (
     <div className="space-y-3 pt-2 border-t border-border">
       <div className="inline-flex rounded-md border border-border overflow-hidden">

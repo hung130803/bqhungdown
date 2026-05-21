@@ -171,6 +171,11 @@ export interface ChannelVideo {
   /** `YYYYMMDD` when extractor exposes it. */
   uploadDate?: string | null;
   thumbnail?: string | null;
+  /** True if this entry came from the channel's Shorts tab (or is < 60s).
+   *  UI uses this to render a 2-column "Video dài | Shorts" split. */
+  isShort?: boolean;
+  /** True khi entry là TikTok photo post (slideshow ảnh). UI hiện badge. */
+  isPhoto?: boolean;
 }
 
 export interface ChannelFetchResult {

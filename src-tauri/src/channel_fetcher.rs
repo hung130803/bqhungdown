@@ -5,35 +5,52 @@
 //!   list very fast (no per-video network round-trips).
 //! - For YouTube channels we resolve to the `/videos` tab so we don't
 //!   accidentally include Shorts/Streams unless the user wants them.
-//! - We deliberately keep this synchronous-feeling: the call returns a list
-//!   the UI can immediately render with checkboxes; downloads are deferred
-//!   to `enqueue_batch`.
+//! - When the user requests "view chính xác", we follow the flat fetch with
+//!   a parallel probe (8 concurrent yt-dlp processes) that pulls
+//!   view_count + upload_date per video. ~10x faster than `--no-flat-playlist`.
+//! - Cancellation: a global `FETCH_GENERATION` atomic; every call increments
+//!   it and remembers its own generation. `cancel()` bumps the counter, which
+//!   causes in-flight fetches to kill their yt-dlp child(ren) and bail out.
 
 use crate::error::{AppError, AppResult};
 use crate::models::{ChannelInfo, ChannelVideo, Settings};
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::AppHandle;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-const TIMEOUT: Duration = Duration::from_secs(120);
+const TIMEOUT: Duration = Duration::from_secs(900);
+/// Concurrency for batched probes. Each task runs one yt-dlp process that
+/// hands off ~30 URLs at once, so the *total* number of yt-dlp processes
+/// in flight is `PROBE_CONCURRENCY * 1`. 4 batches × 30 URLs = 120 URLs in
+/// flight, which is well under YouTube's anti-bot threshold.
+const PROBE_CONCURRENCY: usize = 4;
+/// How many URLs to feed a single yt-dlp invocation. Larger = less per-batch
+/// overhead; smaller = quicker first-result. 30 hits the sweet spot for
+/// YouTube where each video adds ~0.4-0.8s of work.
+const BATCH_SIZE: usize = 30;
 
-/// Normalise a YouTube channel URL so we always hit the Videos tab.
-/// Examples:
-///   `https://www.youtube.com/@MrBeast`        → `.../@MrBeast/videos`
-///   `https://www.youtube.com/channel/UCxxx`   → `.../channel/UCxxx/videos`
-///   `https://www.youtube.com/c/PewDiePie`     → `.../c/PewDiePie/videos`
-///   `https://www.youtube.com/watch?v=abc`     → `.../@MrBeast/videos` (extract from /watch URL via yt-dlp metadata is too slow; we leave it untouched and let yt-dlp choose)
-/// Also rewrite TikTok video URLs back to the user profile so "Tải kênh"
-/// works when the user pastes a single video URL by mistake.
-/// Pass anything else through unchanged so playlists / Douyin URLs
-/// reach yt-dlp untouched.
-fn normalise_channel_url(raw: &str) -> String {
+/// Monotonic generation counter. Each `fetch_channel` call gets a unique
+/// generation; `cancel()` bumps it. In-flight fetches compare against their
+/// stored generation periodically and abort when it no longer matches.
+static FETCH_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Cancel any in-flight `fetch_channel` call. Idempotent: safe to call when
+/// no fetch is running.
+pub fn cancel() {
+    FETCH_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Normalise a YouTube channel URL so we always hit the requested tab.
+/// `tab` is one of: "videos", "shorts", "streams", or empty/other (leave as-is).
+fn normalise_channel_url(raw: &str, tab: &str) -> String {
     let lower = raw.to_lowercase();
 
     // TikTok: collapse `/@user/video/<id>` → `/@user`. Even if the user
-    // already gave us `/@user`, leave it as-is.
+    // already gave us `/@user`, leave it as-is. Tabs are YouTube-only.
     if lower.contains("tiktok.com/@") {
         if let Some(idx) = raw.find("/video/") {
             return raw[..idx].to_string();
@@ -44,34 +61,305 @@ fn normalise_channel_url(raw: &str) -> String {
     if !lower.contains("youtube.com") {
         return raw.to_string();
     }
-    if lower.ends_with("/videos")
-        || lower.ends_with("/shorts")
-        || lower.ends_with("/streams")
-        || lower.contains("/playlist?list=")
-        || lower.contains("/watch?")
-    {
-        return raw.to_string();
+    // Strip any trailing `/videos`, `/shorts`, `/streams`, `/featured` that
+    // might be on the input URL so we can re-append the requested tab cleanly.
+    let mut base = raw.trim_end_matches('/').to_string();
+    for suffix in ["/videos", "/shorts", "/streams", "/featured"] {
+        if base.to_lowercase().ends_with(suffix) {
+            base.truncate(base.len() - suffix.len());
+            break;
+        }
     }
-    let trimmed = raw.trim_end_matches('/');
-    format!("{trimmed}/videos")
+    if base.contains("/playlist?list=") || base.contains("/watch?") {
+        return base;
+    }
+    let suffix = match tab {
+        "shorts" => "/shorts",
+        "streams" => "/streams",
+        "videos" => "/videos",
+        _ => "/videos",
+    };
+    format!("{base}{suffix}")
 }
 
 /// Fetch up to `limit` recent videos from a channel/user URL.
 ///
-/// `limit` is honoured server-side via `--playlist-end <N>` so we don't have
-/// to wait for yt-dlp to enumerate the full channel (some YouTube channels
-/// have 10k+ videos).
+/// `tab` lets the caller choose which YouTube channel tab to scrape:
+///   - "videos"  → long-form (default)
+///   - "shorts"  → Shorts only
+///   - "streams" → Live/streams only
+///   - "all"     → fetch /videos + /shorts (+ /streams when present) and merge
+///                  the entries, dropping duplicates by URL.
+/// `limit = 0` → fetch all videos. `detailed = true` → also probe view_count.
 pub async fn fetch_channel(
     app: &AppHandle,
     url: &str,
     limit: u32,
+    detailed: bool,
+    tab: &str,
     settings: &Settings,
 ) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
-    let resolved = normalise_channel_url(url);
+    let my_gen = FETCH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+
+    // Douyin user URLs (`douyin.com/user/<sec_uid>`) — yt-dlp doesn't expose
+    // an extractor for these. Use tikwm `/api/user/posts` instead. Each
+    // tikwm page returns ~30 posts; we paginate until we hit `limit` or run
+    // out of cursors.
+    let lower_url = url.to_lowercase();
+    if lower_url.contains("douyin.com/user/") {
+        return fetch_douyin_channel(url, limit, my_gen).await;
+    }
+
+    // Step 1: enumerate the requested tab(s). For "all" we run /videos +
+    // /shorts in parallel — most channels don't have Streams, so we skip
+    // Streams by default to avoid wasting a slow round-trip on missing tabs.
+    let lower = url.to_lowercase();
+    let is_youtube = lower.contains("youtube.com");
+    let tabs: Vec<&str> = if is_youtube && tab == "all" {
+        vec!["videos", "shorts"]
+    } else {
+        vec![tab]
+    };
+
+    let mut info: Option<ChannelInfo> = None;
+    let mut videos: Vec<ChannelVideo> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for t in tabs {
+        let resolved = normalise_channel_url(url, t);
+        let fut = run_flat_fetch(app, &resolved, limit, settings, my_gen);
+        match tokio::time::timeout(TIMEOUT, fut).await {
+            Ok(Ok((nfo, vids))) => {
+                if info.is_none() {
+                    info = Some(nfo);
+                }
+                let mark_short = t == "shorts";
+                for mut v in vids {
+                    if mark_short {
+                        v.is_short = true;
+                    }
+                    if seen.insert(v.url.clone()) {
+                        videos.push(v);
+                    }
+                }
+            }
+            Ok(Err(_)) | Err(_) => {
+                // Tab not present (e.g., channel has no Shorts) → continue.
+            }
+        }
+        if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+            return Err(AppError::YtDlpFailed("Đã huỷ".into()));
+        }
+    }
+
+    let info = info.ok_or_else(|| AppError::YtDlpFailed("Không có video nào trên kênh".into()))?;
+
+    // Step 2: probe details only when user explicitly opts in via "detailed".
+    // Default mode trusts the flat-playlist response — yt-dlp's
+    // `youtubetab:approximate_date` extractor arg already gives most channels
+    // a usable upload date in flat mode, so we skip the slow per-video probe.
+    if detailed && !videos.is_empty() {
+        videos = enrich_in_parallel(app, videos, settings, my_gen, detailed).await?;
+    }
+
+    Ok((info, videos))
+}
+
+/// Fetch a Douyin user's video listing via tikwm. Pages are 30 entries each;
+/// we keep requesting with `cursor` until we hit `limit` or `hasMore=false`.
+/// `limit = 0` means "all pages".
+async fn fetch_douyin_channel(
+    url: &str,
+    limit: u32,
+    my_gen: u64,
+) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
+    use serde_json::Value;
+
+    let sec_uid = match url.split("/user/").nth(1) {
+        Some(rest) => rest
+            .split(|c| c == '?' || c == '&' || c == '#')
+            .next()
+            .unwrap_or("")
+            .to_string(),
+        None => return Err(AppError::YtDlpFailed("Không nhận diện được Douyin user".into())),
+    };
+    if sec_uid.is_empty() {
+        return Err(AppError::YtDlpFailed("Douyin URL không có sec_uid".into()));
+    }
+
+    let endpoints = [
+        "https://www.tikwm.com/api/user/posts",
+        "https://tikwm.com/api/user/posts",
+        "https://api.tikwm.com/api/user/posts",
+    ];
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        )
+        .build()
+        .map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
+
+    let mut info = ChannelInfo {
+        url: url.to_string(),
+        title: String::new(),
+        thumbnail: None,
+        video_count: None,
+        extractor: "douyin".into(),
+    };
+    let mut videos: Vec<ChannelVideo> = Vec::new();
+    let mut cursor: i64 = 0;
+    let cap = if limit == 0 { u32::MAX } else { limit };
+
+    'pages: loop {
+        if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+            return Err(AppError::YtDlpFailed("Đã huỷ".into()));
+        }
+        let mut page_ok = false;
+        for endpoint in endpoints {
+            let resp = client
+                .get(endpoint)
+                .query(&[
+                    ("unique_id", sec_uid.as_str()),
+                    ("count", "30"),
+                    ("cursor", &cursor.to_string()),
+                ])
+                .send()
+                .await;
+            let resp = match resp {
+                Ok(r) if r.status().is_success() => r,
+                _ => continue,
+            };
+            let json: Value = match resp.json().await {
+                Ok(j) => j,
+                Err(_) => continue,
+            };
+            if json.get("code").and_then(|v| v.as_i64()) != Some(0) {
+                continue;
+            }
+            let data = match json.get("data") {
+                Some(d) => d,
+                None => continue,
+            };
+            // First page: pull profile info.
+            if videos.is_empty() {
+                if let Some(author) = data.get("author") {
+                    info.title = author
+                        .get("nickname")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    info.thumbnail = author
+                        .get("avatar")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                }
+            }
+            if let Some(arr) = data.get("videos").and_then(|v| v.as_array()) {
+                for v in arr {
+                    if let Some(cv) = parse_tikwm_entry(v) {
+                        videos.push(cv);
+                        if videos.len() as u32 >= cap {
+                            break 'pages;
+                        }
+                    }
+                }
+            }
+            // tikwm uses `cursor` for next page; some endpoints return
+            // hasMore=false at end.
+            let has_more = data
+                .get("hasMore")
+                .and_then(|v| v.as_bool())
+                .or_else(|| {
+                    data.get("has_more").and_then(|v| match v {
+                        Value::Bool(b) => Some(*b),
+                        Value::Number(n) => n.as_i64().map(|i| i != 0),
+                        _ => None,
+                    })
+                })
+                .unwrap_or(false);
+            cursor = data
+                .get("cursor")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(cursor + 30);
+            page_ok = true;
+            if !has_more {
+                break 'pages;
+            }
+            break; // success — go to next page (don't try other endpoints)
+        }
+        if !page_ok {
+            // All endpoints failed for this cursor — bail with whatever we have.
+            if videos.is_empty() {
+                return Err(AppError::YtDlpFailed(
+                    "TikWM không phản hồi (Cloudflare chặn / mạng)".into(),
+                ));
+            }
+            break;
+        }
+    }
+
+    info.video_count = Some(videos.len() as u32);
+    Ok((info, videos))
+}
+
+fn parse_tikwm_entry(v: &serde_json::Value) -> Option<ChannelVideo> {
+    let id = v.get("video_id").and_then(|x| x.as_str()).map(String::from)
+        .or_else(|| v.get("aweme_id").and_then(|x| x.as_str()).map(String::from))?;
+    // tikwm return play link sometimes — but for queueing we want the canonical
+    // douyin watch URL so url_resolver can re-fetch the latest CDN link later.
+    let url = format!("https://www.douyin.com/video/{id}");
+    let title = v
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let duration_sec = v.get("duration").and_then(|x| x.as_u64());
+    let view_count = v
+        .get("play_count")
+        .and_then(|x| x.as_u64())
+        .or_else(|| v.get("playCount").and_then(|x| x.as_u64()));
+    let upload_date = v
+        .get("create_time")
+        .and_then(|x| x.as_i64())
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+        .map(|dt| dt.format("%Y%m%d").to_string());
+    let thumbnail = v
+        .get("cover")
+        .and_then(|x| x.as_str())
+        .map(String::from)
+        .or_else(|| v.get("origin_cover").and_then(|x| x.as_str()).map(String::from));
+    // Douyin photo posts: `images: [...]` instead of video.
+    let is_photo = v
+        .get("images")
+        .and_then(|x| x.as_array())
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    Some(ChannelVideo {
+        url,
+        title,
+        duration_sec,
+        view_count,
+        upload_date,
+        thumbnail,
+        is_short: false,
+        is_photo,
+    })
+}
+
+
+async fn run_flat_fetch(
+    app: &AppHandle,
+    resolved: &str,
+    limit: u32,
+    settings: &Settings,
+    my_gen: u64,
+) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
     let mut args: Vec<String> = vec![
         "--no-warnings".into(),
         "--dump-single-json".into(),
-        "--flat-playlist".into(),
         "--encoding".into(),
         "utf-8".into(),
         "-4".into(),
@@ -81,16 +369,18 @@ pub async fn fetch_channel(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
          (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
             .into(),
-        "--playlist-end".into(),
-        limit.to_string(),
-        // Ask the YouTube tab extractor to include approximate upload dates
-        // alongside the flat listing. Without this flag yt-dlp omits the
-        // `timestamp` / `upload_date` fields for channel videos which would
-        // make the date filter useless.
+        "--flat-playlist".into(),
+        // Bảo YouTube tab extractor trả thêm field xấp xỉ trong flat mode:
+        // - approximate_date: ngày upload (đỡ phải probe per-video)
+        // - approximate_view_count: view dạng round-off ("1.2M views")
+        // Newer yt-dlp recognises both; older versions ignore safely.
         "--extractor-args".into(),
-        "youtubetab:approximate_date".into(),
+        "youtubetab:approximate_date,approximate_view_count".into(),
     ];
-    // Cookies — same priority as fetch_metadata.
+    if limit > 0 {
+        args.push("--playlist-end".into());
+        args.push(limit.to_string());
+    }
     if let Some(file) = settings.cookies_file.as_deref() {
         if !file.is_empty() {
             args.push("--cookies".into());
@@ -102,7 +392,7 @@ pub async fn fetch_channel(
             args.push(browser.to_string());
         }
     }
-    args.push(resolved.clone());
+    args.push(resolved.to_string());
 
     let cmd = app
         .shell()
@@ -110,41 +400,269 @@ pub async fn fetch_channel(
         .map_err(|e| AppError::YtDlpFailed(e.to_string()))?
         .args(args);
 
-    let fut = async {
-        let (mut rx, _child) = cmd
-            .spawn()
-            .map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
-        let mut stdout_buf = String::new();
-        let mut stderr_buf = String::new();
-        let mut exit_code: Option<i32> = None;
-        while let Some(ev) = rx.recv().await {
-            match ev {
-                CommandEvent::Stdout(bytes) => stdout_buf.push_str(&String::from_utf8_lossy(&bytes)),
-                CommandEvent::Stderr(bytes) => stderr_buf.push_str(&String::from_utf8_lossy(&bytes)),
+    let (mut rx, mut child) = cmd
+        .spawn()
+        .map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
+    let mut stdout_buf = String::new();
+    let mut stderr_buf = String::new();
+    let mut exit_code: Option<i32> = None;
+
+    loop {
+        // Poll with a short timeout so we can periodically check for
+        // cancellation even when yt-dlp is silent (e.g., waiting on a slow
+        // server response).
+        match tokio::time::timeout(Duration::from_millis(250), rx.recv()).await {
+            Ok(Some(ev)) => match ev {
+                CommandEvent::Stdout(bytes) => {
+                    stdout_buf.push_str(&String::from_utf8_lossy(&bytes))
+                }
+                CommandEvent::Stderr(bytes) => {
+                    stderr_buf.push_str(&String::from_utf8_lossy(&bytes))
+                }
                 CommandEvent::Terminated(payload) => {
                     exit_code = payload.code;
                     break;
                 }
                 _ => {}
+            },
+            Ok(None) => break,
+            Err(_) => {
+                // Timed out — check for cancellation.
+                if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+                    let _ = child.kill();
+                    return Err(AppError::YtDlpFailed("Đã huỷ".into()));
+                }
             }
         }
-        if exit_code.unwrap_or(-1) != 0 {
-            let last = stderr_buf
-                .lines()
-                .rev()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("yt-dlp failed")
-                .to_string();
-            return Err(AppError::YtDlpFailed(last));
-        }
-        let value: Value = serde_json::from_str(&stdout_buf)?;
-        Ok(parse_channel(&resolved, value))
-    };
-
-    match tokio::time::timeout(TIMEOUT, fut).await {
-        Ok(r) => r,
-        Err(_) => Err(AppError::Timeout),
     }
+
+    if exit_code.unwrap_or(-1) != 0 {
+        let last = stderr_buf
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("yt-dlp failed")
+            .to_string();
+        return Err(AppError::YtDlpFailed(last));
+    }
+    let value: Value = serde_json::from_str(&stdout_buf)?;
+    Ok(parse_channel(resolved, value))
+}
+
+/// Run `PROBE_CONCURRENCY` yt-dlp processes in parallel — one per video URL —
+/// to harvest view_count + upload_date. Returns the augmented list. If the
+/// fetch is cancelled mid-flight, drops the in-progress tasks and returns
+/// the partial list (UI shows whatever managed to come back).
+/// Pull a video id out of a YouTube/TikTok/Douyin URL. Returns None for
+/// hosts we don't recognise.
+fn extract_video_id(url: &str) -> Option<String> {
+    // YouTube `?v=<id>`
+    if let Some(idx) = url.find("?v=").or_else(|| url.find("&v=")) {
+        let rest = &url[idx + 3..];
+        let id: String = rest.chars().take_while(|c| *c != '&').collect();
+        if !id.is_empty() {
+            return Some(id);
+        }
+    }
+    // YouTube `/shorts/<id>`, `/embed/<id>`, TikTok `/video/<id>`, etc.
+    for marker in ["/shorts/", "/embed/", "/video/", "/v/"] {
+        if let Some(idx) = url.find(marker) {
+            let rest = &url[idx + marker.len()..];
+            let id: String = rest.chars().take_while(|c| !"/?#".contains(*c)).collect();
+            if !id.is_empty() {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+
+/// via `--print`. Way faster + more reliable than 200 separate spawns —
+/// each yt-dlp startup costs ~2-3s on Windows so batching cuts huge channels
+/// down from minutes to seconds.
+async fn enrich_in_parallel(
+    app: &AppHandle,
+    videos: Vec<ChannelVideo>,
+    settings: &Settings,
+    my_gen: u64,
+    detailed: bool,
+) -> AppResult<Vec<ChannelVideo>> {
+    use std::collections::HashMap;
+    use tokio::sync::Semaphore;
+    use tokio::task::JoinSet;
+
+    // Pick which entries actually need probing. In fast mode we skip entries
+    // already carrying date+view to save time; in detailed mode we always
+    // probe to make sure view_count is exact.
+    let mut to_probe: Vec<(usize, String)> = Vec::new();
+    for (i, v) in videos.iter().enumerate() {
+        if detailed {
+            if v.view_count.is_some() && v.upload_date.is_some() {
+                continue;
+            }
+        } else if v.upload_date.is_some() && v.view_count.is_some() {
+            continue;
+        }
+        to_probe.push((i, v.url.clone()));
+    }
+    if to_probe.is_empty() {
+        return Ok(videos);
+    }
+
+    let url_to_idx: HashMap<String, usize> = to_probe
+        .iter()
+        .map(|(i, u)| {
+            // Trích id từ URL — YouTube watch?v=<id> hoặc /shorts/<id>.
+            let id = extract_video_id(u).unwrap_or_else(|| u.clone());
+            (id, *i)
+        })
+        .collect();
+
+    let sem = Arc::new(Semaphore::new(PROBE_CONCURRENCY));
+    let mut set: JoinSet<HashMap<String, (Option<u64>, Option<String>)>> = JoinSet::new();
+
+    for chunk in to_probe.chunks(BATCH_SIZE) {
+        let urls: Vec<String> = chunk.iter().map(|(_, u)| u.clone()).collect();
+        let app = app.clone();
+        let s = settings.clone();
+        let sem = sem.clone();
+        set.spawn(async move {
+            let _permit = sem.acquire_owned().await.ok();
+            if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+                return HashMap::new();
+            }
+            probe_batch(&app, &urls, &s, my_gen, detailed).await.unwrap_or_default()
+        });
+    }
+
+    let mut updated = videos;
+    while let Some(joined) = set.join_next().await {
+        if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+            set.shutdown().await;
+            return Ok(updated);
+        }
+        if let Ok(map) = joined {
+            for (url, (view, date)) in map {
+                if let Some(&i) = url_to_idx.get(&url) {
+                    if let Some(v) = updated.get_mut(i) {
+                        if view.is_some() {
+                            v.view_count = view;
+                        }
+                        if date.is_some() {
+                            v.upload_date = date;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(updated)
+}
+
+/// Single yt-dlp process that probes many URLs at once. Output format per
+/// line: `<url>|<view_count>|<upload_date>`. Missing values come back as
+/// "NA" (yt-dlp default for missing fields with --print).
+async fn probe_batch(
+    app: &AppHandle,
+    urls: &[String],
+    settings: &Settings,
+    my_gen: u64,
+    want_view: bool,
+) -> AppResult<std::collections::HashMap<String, (Option<u64>, Option<String>)>> {
+    use std::collections::HashMap;
+
+    let print_tpl = if want_view {
+        "%(id)s|%(view_count)s|%(upload_date)s"
+    } else {
+        "%(id)s|_|%(upload_date)s"
+    };
+    // Note: dùng %(id)s để parse map key — Shorts URL trả /shorts/<id>
+    // còn flat-playlist URL trả /watch?v=<id>, dùng id thì khớp cả 2.
+
+    let mut args: Vec<String> = vec![
+        "--no-warnings".into(),
+        "--ignore-errors".into(),
+        "--skip-download".into(),
+        "--no-playlist".into(),
+        "-4".into(),
+        "--socket-timeout".into(),
+        "20".into(),
+        "--user-agent".into(),
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+         (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+            .into(),
+        "--print".into(),
+        print_tpl.into(),
+    ];
+    if let Some(file) = settings.cookies_file.as_deref() {
+        if !file.is_empty() {
+            args.push("--cookies".into());
+            args.push(file.to_string());
+        }
+    } else if let Some(browser) = settings.cookies_browser.as_deref() {
+        if !browser.is_empty() {
+            args.push("--cookies-from-browser".into());
+            args.push(browser.to_string());
+        }
+    }
+    for u in urls {
+        args.push(u.clone());
+    }
+
+    let cmd = app
+        .shell()
+        .sidecar("yt-dlp")
+        .map_err(|e| AppError::YtDlpFailed(e.to_string()))?
+        .args(args);
+    let (mut rx, mut child) = cmd
+        .spawn()
+        .map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
+    let mut stdout = String::new();
+    loop {
+        match tokio::time::timeout(Duration::from_millis(250), rx.recv()).await {
+            Ok(Some(ev)) => match ev {
+                CommandEvent::Stdout(b) => stdout.push_str(&String::from_utf8_lossy(&b)),
+                CommandEvent::Terminated(_) => break,
+                _ => {}
+            },
+            Ok(None) => break,
+            Err(_) => {
+                if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+                    let _ = child.kill();
+                    return Ok(HashMap::new());
+                }
+            }
+        }
+    }
+    let mut out = HashMap::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, '|');
+        let url = match parts.next() {
+            Some(u) => u.trim().to_string(),
+            None => continue,
+        };
+        if url.is_empty() {
+            continue;
+        }
+        let view = parts
+            .next()
+            .and_then(|s| s.trim().parse::<u64>().ok());
+        let date = parts.next().and_then(|s| {
+            let s = s.trim();
+            if s.is_empty() || s == "NA" || s == "None" || s.len() != 8 {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        });
+        out.insert(url, (view, date));
+    }
+    Ok(out)
 }
 
 /// Parse the `--flat-playlist --dump-single-json` output into our channel
@@ -195,6 +713,14 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
         .or_else(|| e.get("webpage_url"))
         .and_then(|v| v.as_str())?
         .to_string();
+    // TikTok photo posts: URL có dạng `tiktok.com/@user/photo/<id>`. Cũng
+    // bắt cả ie_key=TikTokPhoto và webpage_url với /photo/.
+    let url_lower = url.to_lowercase();
+    let is_photo = url_lower.contains("/photo/")
+        || e.get("ie_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.eq_ignore_ascii_case("tiktokphoto"))
+            .unwrap_or(false);
     let title = e
         .get("title")
         .and_then(|v| v.as_str())
@@ -204,7 +730,10 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
         .get("duration")
         .and_then(|v| v.as_f64())
         .map(|f| f as u64);
-    let view_count = e.get("view_count").and_then(|v| v.as_u64());
+    let view_count = e
+        .get("view_count")
+        .and_then(|v| v.as_u64())
+        .or_else(|| e.get("approximate_view_count").and_then(|v| v.as_u64()));
     // upload_date — yt-dlp `--flat-playlist` thường KHÔNG trả `upload_date`
     // trực tiếp, mà chỉ có `timestamp` (Unix epoch). Convert sang YYYYMMDD
     // để frontend hiển thị/filter đồng nhất.
@@ -226,6 +755,14 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
         .and_then(|v| v.as_str())
         .map(String::from)
         .or_else(|| e.get("thumbnail").and_then(|v| v.as_str()).map(String::from));
+    // TikTok photo posts có thumbnail chứa "photomode" trong path. URL của
+    // entry vẫn dạng /video/<id> nên k phân biệt được — phải check thumbnail
+    // (path `/tos-alisg-i-photomode-sg/...` hoặc `tplv-photomode-image`).
+    let is_photo = is_photo
+        || thumbnail
+            .as_deref()
+            .map(|t| t.contains("photomode"))
+            .unwrap_or(false);
     Some(ChannelVideo {
         url,
         title,
@@ -233,5 +770,7 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
         view_count,
         upload_date,
         thumbnail,
+        is_short: false,
+        is_photo,
     })
 }

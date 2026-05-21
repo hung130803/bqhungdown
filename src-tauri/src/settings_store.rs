@@ -19,7 +19,7 @@ use crate::error::{AppError, AppResult};
 use crate::models::{Settings, SettingsPatch};
 
 const MAX_CONCURRENCY_MIN: u8 = 1;
-const MAX_CONCURRENCY_MAX: u8 = 10;
+const MAX_CONCURRENCY_MAX: u8 = 100;
 
 /// Lưu trữ `Settings` trong bộ nhớ kèm path để persist.
 pub struct SettingsStore {
@@ -287,7 +287,7 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
 
         let mut bad = Settings::default();
-        bad.max_concurrency = 99;
+        bad.max_concurrency = 200;
         fs::write(&path, serde_json::to_string(&bad).unwrap()).unwrap();
 
         let (store, err) = SettingsStore::load(path.clone());
@@ -344,7 +344,7 @@ mod tests {
 
         let err = store
             .apply_patch(SettingsPatch {
-                max_concurrency: Some(11),
+                max_concurrency: Some(101),
                 ..Default::default()
             })
             .unwrap_err();

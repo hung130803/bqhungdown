@@ -27,9 +27,17 @@ export function SettingsPage() {
       <Field label={t("settings.maxConcurrency")}>
         <input
           type="number"
-          min={1} max={10}
+          min={1}
           value={settings.maxConcurrency}
-          onChange={e => set("maxConcurrency", Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
+          onChange={e => {
+            // Cho phép xoá rỗng trong khi đang gõ. Chỉ commit khi giá trị
+            // thực sự là số ≥ 1; rỗng → giữ nguyên giá trị cũ tới khi user
+            // gõ tiếp.
+            const raw = e.target.value;
+            if (raw === "") return;
+            const n = parseInt(raw, 10);
+            if (Number.isFinite(n) && n >= 1) set("maxConcurrency", n);
+          }}
           className="w-24 px-3 py-2 rounded-md bg-surface border border-border text-fg"
         />
       </Field>

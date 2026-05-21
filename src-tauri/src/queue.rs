@@ -262,7 +262,7 @@ impl QueueManager {
     }
 
     pub async fn set_concurrency(self: &Arc<Self>, n: u8) {
-        let n = n.clamp(1, 10);
+        let n = n.clamp(1, 100);
         let mut cap = self.current_cap.lock().unwrap();
         if n > *cap {
             self.semaphore.add_permits((n - *cap) as usize);

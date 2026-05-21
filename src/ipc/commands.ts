@@ -46,12 +46,21 @@ export async function fetchMetadata(url: string): Promise<VideoMetadata> {
   return invoke<VideoMetadata>("fetch_metadata", { url });
 }
 
-/** Fetch a flat list of videos from a channel/user URL. */
+/** Fetch a flat list of videos from a channel/user URL.
+ *  `limit = 0` means no limit (fetch every video on the channel). */
+/** Cancel any in-flight channel-fetch (`fetchChannelVideos`). The original
+ *  promise will reject with an "Đã huỷ" error which the UI can swallow. */
+export async function cancelChannelFetch(): Promise<void> {
+  return invoke<void>("cancel_channel_fetch");
+}
+
 export async function fetchChannelVideos(
   url: string,
-  limit: number = 50,
+  limit: number = 0,
+  detailed: boolean = false,
+  tab: "all" | "videos" | "shorts" | "streams" = "videos",
 ): Promise<ChannelFetchResult> {
-  return invoke<ChannelFetchResult>("fetch_channel_videos", { url, limit });
+  return invoke<ChannelFetchResult>("fetch_channel_videos", { url, limit, detailed, tab });
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

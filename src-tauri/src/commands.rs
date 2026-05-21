@@ -81,18 +81,24 @@ pub async fn fetch_metadata(
 }
 
 /// Fetch a flat listing of videos from a channel/user URL. Returns up to
-/// `limit` videos (default 50). The UI then lets the user filter / pick and
-/// enqueue them via `enqueue_batch`.
+/// `limit` videos (default 0 = no limit). The UI then lets the user filter /
+/// pick and enqueue them via `enqueue_batch`.
 #[tauri::command]
 pub async fn fetch_channel_videos(
     url: String,
     limit: Option<u32>,
+    detailed: Option<bool>,
+    tab: Option<String>,
     app: AppHandle,
     settings: State<'_, Arc<SettingsStore>>,
 ) -> AppResult<ChannelFetchResult> {
     let s = settings.get();
-    let cap = limit.unwrap_or(50).clamp(1, 1000);
-    let (info, videos) = crate::channel_fetcher::fetch_channel(&app, &url, cap, &s).await?;
+    // 0 = unlimited; cap at 5000 to avoid 10k-video YouTube channels
+    // hammering the UI thread when parsed.
+    let cap = limit.unwrap_or(0).min(5000);
+    let det = detailed.unwrap_or(false);
+    let tab_s = tab.unwrap_or_else(|| "videos".into());
+    let (info, videos) = crate::channel_fetcher::fetch_channel(&app, &url, cap, det, &tab_s, &s).await?;
     Ok(ChannelFetchResult { info, videos })
 }
 
@@ -101,6 +107,15 @@ pub async fn fetch_channel_videos(
 pub struct ChannelFetchResult {
     pub info: ChannelInfo,
     pub videos: Vec<ChannelVideo>,
+}
+
+/// Cancel any in-flight `fetch_channel_videos` call. The yt-dlp child(ren)
+/// are killed and the awaiting future returns an error so the UI can clear
+/// its loading state.
+#[tauri::command]
+pub fn cancel_channel_fetch() -> AppResult<()> {
+    crate::channel_fetcher::cancel();
+    Ok(())
 }
 
 // ---------- Enqueue ----------

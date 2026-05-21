@@ -147,6 +147,15 @@ pub struct ChannelVideo {
     /// because not every extractor sets it.
     pub upload_date: Option<String>,
     pub thumbnail: Option<String>,
+  /// True khi entry là post ảnh/slideshow (TikTok photo posts), không phải video.
+    /// UI hiện badge "📷 Ảnh" trên row. Backend dùng duration_sec=None +
+    /// extractor=tiktok làm proxy, hoặc field _type/url-based heuristic.
+    #[serde(default)]
+    pub is_photo: bool,
+    /// True khi video lấy từ tab Shorts của YouTube (hoặc duration < 60s).
+    /// Frontend dùng để render 2 nhóm "Video dài" / "Shorts" riêng biệt.
+    #[serde(default)]
+    pub is_short: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
