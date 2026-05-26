@@ -1,14 +1,9 @@
 /**
  * Typed `listen` helpers cho Tauri events emit từ backend.
- *
- * Mỗi helper trả `Promise<UnlistenFn>` để caller có thể cleanup khi
- * unmount/teardown. Tên event là `string const` lưu trong `EVENTS` để cả TS
- * lẫn Rust (qua `src-tauri/src/events.rs`) cùng tham chiếu.
- *
- * Tham chiếu: design.md — Tauri Events, ipc/events.ts.
+ * Trên web (không có Tauri), các listener trả về no-op.
  */
 
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   DownloadItem,
   DownloadState,
@@ -29,6 +24,8 @@ export const EVENTS = {
   NotificationClicked: "notification://clicked",
   SettingsChanged: "settings://changed",
   QueueUpdated: "queue://updated",
+  DouyinScraperProgress: "bqd-douyin-scraper-progress",
+  DouyinScraperStarted: "bqd-douyin-scraper-started",
 } as const;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -77,70 +74,144 @@ export interface QueueUpdatedPayload {
   items: DownloadItem[];
 }
 
+export interface DouyinScraperProgressPayload {
+  count: number;
+}
+
+export interface DouyinScraperStartedPayload {
+  label: string;
+  secUid: string;
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
-// Listen helpers
+// Listen helpers — web-safe: falls back to no-op on non-Tauri browsers
 // ──────────────────────────────────────────────────────────────────────────────
+
+const noopUnlisten = () => {};
+
+async function tauriListen<T>(
+  _event: string,
+  _handler: (payload: T) => void,
+): Promise<UnlistenFn> {
+  const { listen } = await import("@tauri-apps/api/event");
+  try {
+    return await listen<T>(_event, (e) => _handler(e.payload));
+  } catch {
+    return noopUnlisten;
+  }
+}
 
 export function onDownloadProgress(
   handler: (p: ProgressEventPayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<ProgressEventPayload>(EVENTS.DownloadProgress, (e) =>
-    handler(e.payload),
-  );
+  return tauriListen(EVENTS.DownloadProgress, handler);
 }
 
 export function onDownloadState(
   handler: (p: StateEventPayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<StateEventPayload>(EVENTS.DownloadState, (e) =>
-    handler(e.payload),
-  );
+  return tauriListen(EVENTS.DownloadState, handler);
 }
 
 export function onDownloadConflict(
   handler: (p: ConflictEventPayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<ConflictEventPayload>(EVENTS.DownloadConflict, (e) =>
-    handler(e.payload),
-  );
+  return tauriListen(EVENTS.DownloadConflict, handler);
 }
 
 export function onDownloadCompleted(
   handler: (p: CompletedEventPayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<CompletedEventPayload>(EVENTS.DownloadCompleted, (e) =>
-    handler(e.payload),
-  );
+  return tauriListen(EVENTS.DownloadCompleted, handler);
 }
 
 export function onDownloadFailed(
   handler: (p: FailedEventPayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<FailedEventPayload>(EVENTS.DownloadFailed, (e) =>
-    handler(e.payload),
-  );
+  return tauriListen(EVENTS.DownloadFailed, handler);
 }
 
 export function onClipboardDetected(
   handler: (p: ClipboardEventPayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<ClipboardEventPayload>(EVENTS.ClipboardDetected, (e) =>
-    handler(e.payload),
-  );
+  return tauriListen(EVENTS.ClipboardDetected, handler);
 }
 
 export function onNotificationClicked(
   handler: (p: NotificationClickedPayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<NotificationClickedPayload>(EVENTS.NotificationClicked, (e) =>
-    handler(e.payload),
-  );
+  return tauriListen(EVENTS.NotificationClicked, handler);
 }
 
 export function onQueueUpdated(
   handler: (p: QueueUpdatedPayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<QueueUpdatedPayload>(EVENTS.QueueUpdated, (e) =>
-    handler(e.payload),
-  );
+  return tauriListen(EVENTS.QueueUpdated, handler);
+}
+
+export function onDouyinScraperProgress(
+  handler: (p: DouyinScraperProgressPayload) => void,
+): Promise<UnlistenFn> {
+  return tauriListen(EVENTS.DouyinScraperProgress, handler);
+}
+
+export function onDouyinScraperStarted(
+  handler: (p: DouyinScraperStartedPayload) => void,
+): Promise<UnlistenFn> {
+  return tauriListen(EVENTS.DouyinScraperStarted, handler);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// React hooks — auto-manage subscription/unsubscription lifecycle
+// ──────────────────────────────────────────────────────────────────────────────
+
+import { useEffect } from "react";
+
+export function useEventListener<T>(
+  setup: (handler: (payload: T) => void) => Promise<UnlistenFn>,
+  handler: (payload: T) => void,
+): void {
+  useEffect(() => {
+    let cancelled = false;
+    setup((payload) => {
+      if (!cancelled) handler(payload);
+    }).then((unlisten) => {
+      if (!cancelled) unlisten();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [setup, handler]);
+}
+
+export function useDownloadProgress(handler: (p: ProgressEventPayload) => void): void {
+  useEventListener(onDownloadProgress, handler);
+}
+
+export function useDownloadState(handler: (p: StateEventPayload) => void): void {
+  useEventListener(onDownloadState, handler);
+}
+
+export function useDownloadConflict(handler: (p: ConflictEventPayload) => void): void {
+  useEventListener(onDownloadConflict, handler);
+}
+
+export function useDownloadCompleted(handler: (p: CompletedEventPayload) => void): void {
+  useEventListener(onDownloadCompleted, handler);
+}
+
+export function useDownloadFailed(handler: (p: FailedEventPayload) => void): void {
+  useEventListener(onDownloadFailed, handler);
+}
+
+export function useClipboardDetected(handler: (p: ClipboardEventPayload) => void): void {
+  useEventListener(onClipboardDetected, handler);
+}
+
+export function useNotificationClicked(handler: (p: NotificationClickedPayload) => void): void {
+  useEventListener(onNotificationClicked, handler);
+}
+
+export function useQueueUpdated(handler: (p: QueueUpdatedPayload) => void): void {
+  useEventListener(onQueueUpdated, handler);
 }

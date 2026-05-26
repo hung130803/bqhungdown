@@ -28,6 +28,7 @@ interface RowProps {
   entry: HistoryEntry;
   selectable?: boolean;
   selected?: boolean;
+  focused?: boolean;
   view?: HistoryViewMode;
   onCheckboxMouseDown?: (shortId: string, e: React.MouseEvent) => void;
   /** Plain click on a selected row → untick that row. */
@@ -231,6 +232,7 @@ function HistoryRowDetailed({
   entry,
   selectable,
   selected,
+  focused,
   onCheckboxMouseDown,
   onPlainClickSelected,
 }: RowProps) {
@@ -252,7 +254,7 @@ function HistoryRowDetailed({
         selected
           ? "bg-accent/10 border-accent"
           : "bg-surface border-border hover:border-accent/40"
-      }`}
+      }${focused ? " ring-2 ring-accent ring-offset-1 ring-offset-bg" : ""}`}
       data-history-id={entry.shortId}
       data-file-path={canOpen && filePath ? filePath : undefined}
       data-selected={selected ? "true" : undefined}
@@ -347,6 +349,7 @@ function HistoryRowCompact({
   entry,
   selectable,
   selected,
+  focused,
   onCheckboxMouseDown,
   onPlainClickSelected,
 }: RowProps) {
@@ -367,7 +370,7 @@ function HistoryRowCompact({
         selected
           ? "bg-accent/10 border-accent"
           : "bg-surface border-border hover:border-accent/40"
-      }`}
+      }${focused ? " ring-2 ring-accent ring-offset-1 ring-offset-bg" : ""}`}
       data-history-id={entry.shortId}
       data-file-path={canOpen && filePath ? filePath : undefined}
       data-selected={selected ? "true" : undefined}
@@ -440,6 +443,7 @@ function HistoryCard({
   entry,
   selectable,
   selected,
+  focused,
   onCheckboxMouseDown,
   onPlainClickSelected,
 }: RowProps) {
@@ -460,7 +464,7 @@ function HistoryCard({
         selected
           ? "bg-accent/10 border-accent"
           : "bg-surface border-border hover:border-accent/40"
-      }`}
+      }${focused ? " outline outline-2 outline-accent outline-offset-1" : ""}`}
       data-history-id={entry.shortId}
       data-file-path={canOpen && filePath ? filePath : undefined}
       data-selected={selected ? "true" : undefined}

@@ -6,6 +6,9 @@
  * - Selection của user: mode (video/audio), formatId, save folder, sub langs,
  *   conflict policy, playlist all.
  *
+ * Anti-race: mỗi `setUrl` tăng `fetchGen`. `fetchMetadata` check gen trước
+ * khi ghi kết quả — nếu gen đã thay đổi thì bỏ qua kết quả cũ.
+ *
  * Tham chiếu: design.md — Stores (Zustand), HomePage.
  */
 
@@ -26,6 +29,10 @@ interface UrlState {
   metadata: VideoMetadata | null;
   fetching: boolean;
   error: string | null;
+
+  // Anti-race: tăng mỗi khi setUrl được gọi.
+  // fetchMetadata so sánh gen trước khi ghi kết quả.
+  fetchGen: number;
 
   // Selection
   mode: DownloadMode;
@@ -58,6 +65,7 @@ export const useUrlStore = create<UrlState>()((set, get) => ({
   metadata: null,
   fetching: false,
   error: null,
+  fetchGen: 0,
 
   mode: "video",
   formatId: null,
@@ -68,13 +76,15 @@ export const useUrlStore = create<UrlState>()((set, get) => ({
   playlistAll: false,
 
   setUrl: (s) =>
-    set({
+    set((state) => ({
       url: s,
       valid: null,
       extractor: null,
       metadata: null,
       error: null,
-    }),
+      // Tăng gen để invalidate mọi fetch đang chạy cho URL cũ.
+      fetchGen: state.fetchGen + 1,
+    })),
   setMode: (m) => set({ mode: m }),
   setFormatId: (id) => set({ formatId: id }),
   setSaveFolder: (f) => set({ saveFolder: f }),
@@ -92,8 +102,11 @@ export const useUrlStore = create<UrlState>()((set, get) => ({
     set({ validating: true });
     try {
       const v = await cmd.validateUrl(url);
+      // Bỏ qua kết quả nếu URL đã thay đổi trong lúc validate.
+      if (get().url.trim() !== url) return;
       set({ valid: v.valid, extractor: v.extractor, validating: false });
     } catch (e: unknown) {
+      if (get().url.trim() !== url) return;
       set({
         valid: false,
         extractor: null,
@@ -106,11 +119,15 @@ export const useUrlStore = create<UrlState>()((set, get) => ({
   fetchMetadata: async () => {
     const url = get().url.trim();
     if (!url) return;
+    const gen = get().fetchGen;
     set({ fetching: true, error: null, metadata: null });
     try {
       const md = await cmd.fetchMetadata(url);
+      // Bỏ qua kết quả nếu setUrl đã được gọi lại (URL khác rồi).
+      if (get().fetchGen !== gen) return;
       set({ metadata: md, fetching: false, extractor: md.extractor });
     } catch (e: unknown) {
+      if (get().fetchGen !== gen) return;
       set({ fetching: false, error: formatError(e) });
     }
   },
@@ -126,5 +143,6 @@ export const useUrlStore = create<UrlState>()((set, get) => ({
       subLangs: [],
       autoTranslateTo: null,
       playlistAll: false,
+      fetchGen: 0,
     }),
 }));

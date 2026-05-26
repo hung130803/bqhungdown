@@ -118,6 +118,96 @@ export function HistoryPage() {
   const [bandTick, setBandTick] = useState(0); // bumped to redraw the box
   const containerRef = useRef<HTMLDivElement | null>(null);
 
+  // ── Keyboard navigation ─────────────────────────────────────────────────────
+  // Arrow keys to move focus between rows; Space/Enter to toggle selection;
+  // Shift+arrow to extend range selection. Escape clears focus.
+  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
+
+  // Mutable ref holding the latest filtered list — populated via the
+  // useMemo below and kept up-to-date without causing re-renders.
+  // NOTE: filteredItemsRef.current is assigned in the useMemo below, after
+  // `filtered` is computed. It's safe to read inside event handlers because
+  // handlers run after the render phase where useMemo executes.
+  const filteredItemsRef = useRef<HistoryEntry[]>([]);
+
+  // 1. Set initial focus when the list first loads.
+  useEffect(() => {
+    if (filteredItemsRef.current.length > 0) setFocusedIdx(0);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 2. Clamp focus when filtered length changes (filter/sort toggled).
+  useEffect(() => {
+    setFocusedIdx((prev) => {
+      const len = filteredItemsRef.current.length;
+      return prev != null && prev < len ? prev : len > 0 ? 0 : null;
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Only handle when the list has items and no input is focused.
+      const tag = (document.activeElement?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea") return;
+
+      const items = filteredItemsRef.current;
+      if (items.length === 0) return;
+
+      const prevIdx = focusedIdx ?? -1;
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const next = prevIdx < items.length - 1 ? prevIdx + 1 : items.length - 1;
+        setFocusedIdx(next);
+        if (e.shiftKey) {
+          setSelected((sel) => {
+            const ns = new Set(sel);
+            ns.add(items[next].shortId);
+            return ns;
+          });
+        }
+        document.querySelector(`[data-history-id="${CSS.escape(items[next].shortId)}"]`)?.scrollIntoView({ block: "nearest" });
+        return;
+      }
+
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const next = prevIdx > 0 ? prevIdx - 1 : 0;
+        setFocusedIdx(next);
+        if (e.shiftKey) {
+          setSelected((sel) => {
+            const ns = new Set(sel);
+            ns.add(items[next].shortId);
+            return ns;
+          });
+        }
+        document.querySelector(`[data-history-id="${CSS.escape(items[next].shortId)}"]`)?.scrollIntoView({ block: "nearest" });
+        return;
+      }
+
+      if (e.key === " " || e.key === "Enter") {
+        // Toggle selection of focused row.
+        if (e.key === " ") e.preventDefault();
+        const idx = focusedIdx ?? prevIdx;
+        if (idx < 0 || idx >= items.length) return;
+        const id = items[idx].shortId;
+        setSelected((prev) => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        });
+        return;
+      }
+
+      if (e.key === "Escape") {
+        setFocusedIdx(null);
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusedIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -166,6 +256,9 @@ export function HistoryPage() {
     });
     return out;
   }, [entries, platform, status, editFilter, sortKey, sortDir]);
+
+  // Keep the keyboard nav ref in sync with the latest filtered list.
+  filteredItemsRef.current = filtered;
 
   const groups = useMemo(() => {
     if (sortKey === "time") {
@@ -470,17 +563,15 @@ export function HistoryPage() {
     await refresh();
   };
 
-  // Render row directly — HistoryRow now puts data-history-id on its root
-  // along with data-file-path/data-selected, so the multi-file drag selector
-  // `[data-history-id][data-selected='true']` matches the same element.
-  // Plain-click toggling is handled in the page's mouseup (onUp).
-  const renderRow = (e: HistoryEntry) => (
+  // renderRow receives the array index so we can compute focused state.
+  const renderRow = (e: HistoryEntry, idx: number) => (
     <HistoryRow
       key={e.shortId}
       entry={e}
       view={view}
       selectable
       selected={selected.has(e.shortId)}
+      focused={focusedIdx === idx}
       onCheckboxMouseDown={onCheckboxMouseDown}
       onPlainClickSelected={(id) => {
         // Untick that single row.

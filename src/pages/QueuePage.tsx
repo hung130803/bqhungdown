@@ -10,7 +10,7 @@ const TERMINAL = ["completed", "failed", "cancelled", "skipped"];
 
 export function QueuePage() {
   const { t } = useTranslation();
-  const items = useQueueStore((s) => s.items);
+  const items = useQueueStore((s) => s.items ?? []);
   const refresh = useQueueStore((s) => s.refresh);
   const clearTerminal = useQueueStore((s) => s.clearTerminal);
   const removeLocal = useQueueStore((s) => s.remove);

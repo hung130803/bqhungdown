@@ -217,7 +217,7 @@ impl YtDlpRunner {
         );
         let cmd = self.app.shell().sidecar("yt-dlp").map_err(|e| AppError::YtDlpFailed(e.to_string()))?.args(args);
 
-        let (mut rx, mut child) = cmd.spawn().map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
+        let (mut rx, child) = cmd.spawn().map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
         // SAFETY: rustc tưởng `child` không cần `mut` vì .kill() lấy &self,
         // nhưng đa số API tauri-plugin-shell version mới yêu cầu mut. Giữ nguyên.
 

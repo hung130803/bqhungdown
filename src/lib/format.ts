@@ -21,8 +21,22 @@ export function formatEta(sec: number | null | undefined): string {
   return `${m}:${String(ss).padStart(2, "0")}`;
 }
 
+/**
+ * Format video/audio duration in a human-readable way:
+ *   < 1h  → "12:34"
+ *   ≥ 1h  → "1h 23m"
+ */
 export function formatDuration(sec: number | null | undefined): string {
-  return formatEta(sec);
+  if (sec == null || !Number.isFinite(sec)) return "—";
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (h > 0) {
+    const mm = String(m).padStart(2, "0");
+    return `${h}h ${mm}m`;
+  }
+  return `${m}:${String(ss).padStart(2, "0")}`;
 }
 
 export function formatPercent(p: number | null | undefined): string {

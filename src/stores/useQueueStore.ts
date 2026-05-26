@@ -5,8 +5,8 @@
  *   để patch thông tin tốc độ/ETA mà không reorder list.
  * - `applyState(shortId, state, errorMessage, outputPath)` xử lý
  *   `download://state`; tự gắn `finishedAt` cho các terminal state.
- * - Các method `pause/resume/cancel/retry` ủy quyền sang backend; UI sẽ nhận
- *   state cập nhật qua event listener thay vì optimistic update.
+ * - Các method `pause/resume/cancel/retry` dùng optimistic update: UI cập
+ *   nhật ngay, rollback nếu backend lỗi.
  *
  * Tham chiếu: design.md — Stores (Zustand), Queue_Manager.
  */
@@ -97,16 +97,76 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
     const items = await cmd.listQueue();
     set({ items });
   },
+
+  /** Optimistic: update UI immediately, rollback on backend failure. */
   pause: async (id) => {
-    await cmd.pauseDownload(id);
+    const prev = get().items.find((i) => i.shortId === id);
+    if (!prev || prev.state !== "downloading") return;
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.shortId === id ? { ...i, state: "paused" } : i,
+      ),
+    }));
+    try {
+      await cmd.pauseDownload(id);
+    } catch {
+      set((s) => ({
+        items: s.items.map((i) => (i.shortId === id ? { ...i, state: prev.state } : i)),
+      }));
+    }
   },
+
+  /** Optimistic: update UI immediately, rollback on backend failure. */
   resume: async (id) => {
-    await cmd.resumeDownload(id);
+    const prev = get().items.find((i) => i.shortId === id);
+    if (!prev || prev.state !== "paused") return;
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.shortId === id ? { ...i, state: "downloading" } : i,
+      ),
+    }));
+    try {
+      await cmd.resumeDownload(id);
+    } catch {
+      set((s) => ({
+        items: s.items.map((i) => (i.shortId === id ? { ...i, state: prev.state } : i)),
+      }));
+    }
   },
+
+  /** Optimistic: update UI immediately, rollback on backend failure. */
   cancel: async (id) => {
-    await cmd.cancelDownload(id);
+    const prev = get().items.find((i) => i.shortId === id);
+    if (!prev || TERMINAL_STATES.includes(prev.state)) return;
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.shortId === id ? { ...i, state: "cancelled" } : i,
+      ),
+    }));
+    try {
+      await cmd.cancelDownload(id);
+    } catch {
+      set((s) => ({
+        items: s.items.map((i) => (i.shortId === id ? { ...i, state: prev.state } : i)),
+      }));
+    }
   },
+
+  /** Optimistic: update UI immediately, rollback on backend failure. */
   retry: async (id) => {
-    await cmd.retryDownload(id);
+    const prev = get().items.find((i) => i.shortId === id);
+    if (!prev || !TERMINAL_STATES.includes(prev.state)) return;
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.shortId === id ? { ...i, state: "queued", errorMessage: null } : i,
+      ),
+    }));
+    try {
+      await cmd.retryDownload(id);
+    } catch {
+      set((s) => ({
+        items: s.items.map((i) => (i.shortId === id ? { ...i, state: prev.state } : i)),
+      }));
+    }
   },
 }));

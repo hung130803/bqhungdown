@@ -1,7 +1,10 @@
+import i18n from "@/i18n";
+
 /**
- * Format an ISO timestamp as a human-friendly relative string in Vietnamese.
+ * Format an ISO timestamp as a human-friendly relative string.
+ * Uses i18n for all strings so it works in both Vietnamese and English.
  *
- * Examples:
+ * Examples (vi):
  *   "vài giây trước"
  *   "5 phút trước"
  *   "2 giờ trước"
@@ -21,26 +24,29 @@ export function formatRelative(isoOrDate: string | Date | null | undefined): str
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);
 
-  if (diffSec < 0) return d.toLocaleString("vi-VN");
-  if (diffSec < 30) return "vài giây trước";
-  if (diffMin < 1) return `${diffSec} giây trước`;
-  if (diffMin < 60) return `${diffMin} phút trước`;
+  if (diffSec < 0) return d.toLocaleString(i18n.language === "en" ? "en-US" : "vi-VN");
+  if (diffSec < 30) return i18n.t("time.justNow");
+  if (diffMin < 1) return i18n.t("time.secondsAgo", { count: diffSec });
+  if (diffMin < 60) return i18n.t("time.minutesAgo", { count: diffMin });
 
   // Compute calendar-day difference (not just 24h windows).
   const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const dayDiff = Math.floor((startOf(now) - startOf(d)) / (24 * 3600 * 1000));
 
-  const hhmm = d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  const hhmm = d.toLocaleTimeString(i18n.language === "en" ? "en-US" : "vi-VN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
   if (dayDiff === 0) {
-    if (diffHour < 6) return `${diffHour} giờ trước`;
-    return `Hôm nay ${hhmm}`;
+    if (diffHour < 6) return i18n.t("time.hoursAgo", { count: diffHour });
+    return i18n.t("time.today", { time: hhmm });
   }
-  if (dayDiff === 1) return `Hôm qua ${hhmm}`;
-  if (dayDiff < 7) return `${dayDiff} ngày trước`;
-  if (dayDiff < 30) return `${Math.floor(dayDiff / 7)} tuần trước`;
-  if (dayDiff < 365) return `${Math.floor(dayDiff / 30)} tháng trước`;
-  return `${Math.floor(dayDiff / 365)} năm trước`;
+  if (dayDiff === 1) return i18n.t("time.yesterday", { time: hhmm });
+  if (dayDiff < 7) return i18n.t("time.daysAgo", { count: dayDiff });
+  if (dayDiff < 30) return i18n.t("time.weeksAgo", { count: Math.floor(dayDiff / 7) });
+  if (dayDiff < 365) return i18n.t("time.monthsAgo", { count: Math.floor(dayDiff / 30) });
+  return i18n.t("time.yearsAgo", { count: Math.floor(dayDiff / 365) });
 }
 
 /** Returns true if `iso` looks like a date today. */

@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "@/ipc/commands";
-import type { ChannelVideo } from "@/types/models";
+import { onDouyinScraperProgress } from "@/ipc/events";
+import type { ChannelInfo, ChannelVideo } from "@/types/models";
+import { formatDuration } from "@/lib/format";
 import { Thumbnail } from "./Thumbnail";
 import { useChannelStore } from "@/stores/useChannelStore";
+
+/** Detect if a URL is a Douyin user channel link. */
+function isDouyinChannelUrl(url: string): boolean {
+  const u = url.toLowerCase();
+  return u.includes("douyin.com") && (u.includes("/user/") || u.includes("v.douyin.com"));
+}
 
 type SortKey = "newest" | "oldest" | "popular" | "longest" | "shortest";
 type LengthFilter = "all" | "short" | "medium" | "long";
@@ -18,18 +26,6 @@ function parseDate(yyyymmdd: string | null | undefined): Date | null {
   const d = +yyyymmdd.slice(6, 8);
   if (!y || !m || !d) return null;
   return new Date(y, m - 1, d);
-}
-
-function formatDuration(sec: number | null | undefined): string {
-  if (sec == null) return "";
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  if (m >= 60) {
-    const h = Math.floor(m / 60);
-    const mm = m % 60;
-    return `${h}:${String(mm).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  }
-  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function formatComma(n: number | null | undefined): string {
@@ -101,6 +97,8 @@ export function ChannelInput({ onSubmit }: Props) {
   const [submitting, setSubmitting] = useState(false);
   /** Tab kết quả đang xem: "long" hoặc "short". */
   const [resultTab, setResultTab] = useState<"long" | "short">("long");
+  /** Số video đã scrape được (Douyin WebView scraper). */
+  const [scrapeProgress, setScrapeProgress] = useState(0);
 
   /** Đồng hồ ms hiện tại — re-render mỗi giây để tính elapsedSec. */
   const [, setNowTick] = useState(0);
@@ -109,6 +107,23 @@ export function ChannelInput({ onSubmit }: Props) {
     const t = setInterval(() => setNowTick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [loading, fetchStartedAt]);
+
+  /** Listen for Douyin scraper progress events (video count updates). */
+  useEffect(() => {
+    let ignore = false;
+    const setup = async () => {
+      const unlisten = await onDouyinScraperProgress((p) => {
+        if (!ignore) setScrapeProgress(p.count);
+      });
+      return unlisten;
+    };
+    let unlisten: (() => void) | undefined;
+    setup().then((u) => { unlisten = u; });
+    return () => {
+      ignore = true;
+      unlisten?.();
+    };
+  }, []);
   const elapsedSec =
     loading && fetchStartedAt != null
       ? Math.max(0, Math.floor((Date.now() - fetchStartedAt) / 1000))
@@ -144,10 +159,41 @@ export function ChannelInput({ onSubmit }: Props) {
     setLoading(true);
     setFetchStartedAt(Date.now());
     setError(null);
+    setScrapeProgress(0);
     resetResult();
+
+    const trimmed = url.trim();
+
     try {
-      // Lấy CẢ video dài + shorts gộp lại — tab="all".
-      const r = await cmd.fetchChannelVideos(url.trim(), 0, detailed, "all");
+      // ── Douyin: use WebView-based scraper ───────────────────────────────
+      if (isDouyinChannelUrl(trimmed)) {
+        const posts = await cmd.scrapeDouyinChannel(trimmed);
+
+        if (posts.length === 0) {
+          setError("Không lấy được video nào từ kênh này.");
+          return;
+        }
+
+        // Convert scraped posts → ChannelVideo format.
+        const info: ChannelInfo = {
+          url: trimmed,
+          title: `Kênh Douyin — ${posts.length} video`,
+          thumbnail: posts[0]?.thumbnail ?? null,
+          videoCount: posts.length,
+          extractor: "douyin",
+        };
+        const videos: ChannelVideo[] = posts.map((p) => ({
+          url: p.url,
+          title: p.title || "(Không có tiêu đề)",
+          thumbnail: p.thumbnail || null,
+          isPhoto: p.isPhoto,
+        }));
+        setResult(info, videos);
+        return;
+      }
+
+      // ── YouTube / TikTok / other: use yt-dlp via Rust backend ───────────
+      const r = await cmd.fetchChannelVideos(trimmed, 0, detailed, "all");
       setResult(r.info, r.videos);
     } catch (e) {
       const msg = formatErr(e);
@@ -526,7 +572,9 @@ export function ChannelInput({ onSubmit }: Props) {
             onClick={() => void handleCancel()}
             className="px-3 py-2 rounded-md bg-danger/10 border border-danger text-danger text-sm hover:bg-danger/20"
           >
-            Huỷ ({elapsedSec}s)
+            {scrapeProgress > 0
+              ? `Đã lấy ${scrapeProgress} video…`
+              : `Huỷ (${elapsedSec}s)`}
           </button>
         ) : (
           <button

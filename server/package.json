@@ -1,0 +1,16 @@
+{
+  "name": "prodowwn-api",
+  "version": "1.0.0",
+  "description": "Backend API for ProDowwn web version",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "fluent-ffmpeg": "^2.1.3"
+  }
+}

@@ -107,7 +107,12 @@ pub async fn fetch_channel(
     // out of cursors.
     let lower_url = url.to_lowercase();
     if lower_url.contains("douyin.com/user/") {
-        return fetch_douyin_channel(url, limit, my_gen).await;
+        return Err(AppError::YtDlpFailed(
+            "Douyin chặn quá chặt nên không thể tự lấy danh sách kênh được. \
+             Cách tải: mở Douyin trong trình duyệt, sao chép link từng video bạn muốn tải, \
+             rồi dán vào tab \"Hàng loạt\" (mỗi link 1 dòng). App sẽ tải hết bằng tikwm proxy."
+                .into(),
+        ));
     }
 
     // Step 1: enumerate the requested tab(s). For "all" we run /videos +
@@ -168,6 +173,8 @@ pub async fn fetch_channel(
 /// Fetch a Douyin user's video listing via tikwm. Pages are 30 entries each;
 /// we keep requesting with `cursor` until we hit `limit` or `hasMore=false`.
 /// `limit = 0` means "all pages".
+#[allow(dead_code)] // tikwm /user/posts is Cloudflare-protected; kept as
+                    // reference for if we get a working endpoint later.
 async fn fetch_douyin_channel(
     url: &str,
     limit: u32,
@@ -305,6 +312,7 @@ async fn fetch_douyin_channel(
     Ok((info, videos))
 }
 
+#[allow(dead_code)]
 fn parse_tikwm_entry(v: &serde_json::Value) -> Option<ChannelVideo> {
     let id = v.get("video_id").and_then(|x| x.as_str()).map(String::from)
         .or_else(|| v.get("aweme_id").and_then(|x| x.as_str()).map(String::from))?;
@@ -400,7 +408,7 @@ async fn run_flat_fetch(
         .map_err(|e| AppError::YtDlpFailed(e.to_string()))?
         .args(args);
 
-    let (mut rx, mut child) = cmd
+    let (mut rx, child) = cmd
         .spawn()
         .map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
     let mut stdout_buf = String::new();
@@ -615,7 +623,7 @@ async fn probe_batch(
         .sidecar("yt-dlp")
         .map_err(|e| AppError::YtDlpFailed(e.to_string()))?
         .args(args);
-    let (mut rx, mut child) = cmd
+    let (mut rx, child) = cmd
         .spawn()
         .map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
     let mut stdout = String::new();

@@ -138,7 +138,7 @@ function Shell() {
 
 function Header() {
   const { t } = useTranslation();
-  const queueCount = useQueueStore((s) => s.items.filter((i) => i.state === "downloading" || i.state === "queued" || i.state === "paused").length);
+  const queueCount = useQueueStore((s) => (s.items ?? []).filter((i) => i.state === "downloading" || i.state === "queued" || i.state === "paused").length);
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `relative px-3.5 py-2 rounded-lg text-sm font-medium transition-colors ${

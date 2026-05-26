@@ -108,6 +108,18 @@
     "InvalidSetting": "Giá trị cài đặt không hợp lệ",
     "Generic": "Đã xảy ra lỗi"
   },
+  "time": {
+    "justNow": "vài giây trước",
+    "secondsAgo": "{{count}} giây trước",
+    "minutesAgo": "{{count}} phút trước",
+    "hoursAgo": "{{count}} giờ trước",
+    "today": "Hôm nay {{time}}",
+    "yesterday": "Hôm qua {{time}}",
+    "daysAgo": "{{count}} ngày trước",
+    "weeksAgo": "{{count}} tuần trước",
+    "monthsAgo": "{{count}} tháng trước",
+    "yearsAgo": "{{count}} năm trước"
+  },
   "common": {
     "ok": "Đồng ý",
     "cancel": "Huỷ",

@@ -73,7 +73,180 @@ pub async fn resolve_with_meta(url: &str) -> (String, Option<DouyinMeta>) {
         }
     }
 
+    // ── Instagram: yt-dlp k chạy được nếu thiếu cookies. Dùng tikwm-style
+    //    public API (igram.io / sssinstagram) để lấy thumbnail + caption +
+    //    direct CDN URL. Fallback xuống og:scrape nếu API fail.
+    if lower.contains("instagram.com/") || lower.contains("instagr.am/") {
+        if let Some((direct, meta)) = resolve_instagram_via_api(url).await {
+            return (direct, Some(meta));
+        }
+        if let Some(meta) = scrape_instagram_meta(url).await {
+            return (url.to_string(), Some(meta));
+        }
+    }
+
     (url.to_string(), None)
+}
+
+/// Scrape Instagram share page for og:title / og:image. No login required.
+async fn scrape_instagram_meta(url: &str) -> Option<DouyinMeta> {
+    static RE_TITLE: OnceLock<Regex> = OnceLock::new();
+    static RE_IMAGE: OnceLock<Regex> = OnceLock::new();
+    static RE_DESC: OnceLock<Regex> = OnceLock::new();
+
+    let re_title = RE_TITLE.get_or_init(|| {
+        Regex::new(r#"<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)"#).unwrap()
+    });
+    let re_image = RE_IMAGE.get_or_init(|| {
+        Regex::new(r#"<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)"#).unwrap()
+    });
+    let re_desc = RE_DESC.get_or_init(|| {
+        Regex::new(r#"<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)"#).unwrap()
+    });
+
+    let html = http_get(url).await?;
+    let title = re_title
+        .captures(&html)
+        .and_then(|c| c.get(1).map(|m| html_decode(m.as_str())))
+        // Description thường chứa caption thật + view count → nếu có dùng thay
+        .or_else(|| re_desc.captures(&html).and_then(|c| c.get(1).map(|m| html_decode(m.as_str()))));
+    let thumbnail = re_image
+        .captures(&html)
+        .and_then(|c| c.get(1).map(|m| html_decode(m.as_str())));
+
+    if title.is_none() && thumbnail.is_none() {
+        return None;
+    }
+    Some(DouyinMeta {
+        title,
+        thumbnail,
+        channel: None,
+    })
+}
+
+/// Decode common HTML entities in OG meta tags (`&amp;`, `&quot;`, `&#x27;`).
+fn html_decode(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
+/// Resolve Instagram URL → direct CDN URL + metadata via public API mirrors.
+/// Tries igram.io (POST GraphQL-like), sssinstagram, snapinst.app v2 lần
+/// lượt. Trả None nếu tất cả endpoints đều fail (Cloudflare / rate limit).
+async fn resolve_instagram_via_api(url: &str) -> Option<(String, DouyinMeta)> {
+    let client = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .user_agent(UA)
+        .build()
+        .ok()?;
+
+    // Strategy 1: igram.io public AJAX endpoint.
+    // POST application/x-www-form-urlencoded: url=<IG URL>
+    // Response: { url: [{ url: "<cdn>", subName: "video" }, ...], thumb, title }
+    let body = format!("url={}", url_encode(url));
+    let endpoints = [
+        "https://api.igram.io/api/convert",
+        "https://igram.world/api/convert",
+        "https://snapinst.app/action.php",
+    ];
+    for ep in endpoints {
+        let resp = client
+            .post(ep)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Origin", domain_of(ep))
+            .header("Referer", format!("{}/", domain_of(ep)))
+            .body(body.clone())
+            .send()
+            .await;
+        let resp = match resp {
+            Ok(r) if r.status().is_success() => r,
+            _ => continue,
+        };
+        let json: serde_json::Value = match resp.json().await {
+            Ok(j) => j,
+            Err(_) => continue,
+        };
+        if let Some((direct, meta)) = parse_igram_response(&json) {
+            return Some((direct, meta));
+        }
+    }
+    None
+}
+
+fn domain_of(url: &str) -> String {
+    if let Some(rest) = url.strip_prefix("https://") {
+        let host = rest.split('/').next().unwrap_or("");
+        return format!("https://{host}");
+    }
+    "https://igram.io".into()
+}
+
+/// Minimal URL component encoder. Escapes everything except RFC 3986 unreserved.
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(out, "%{:02X}", b);
+            }
+        }
+    }
+    out
+}
+
+/// Parse igram-style response. Schema is loosely:
+///   { url: [ { url: "...", subName: "video"|"image", quality }, ... ],
+///     title: "...", thumb: "..." }
+/// We pick the first entry whose subName/type contains "video".
+fn parse_igram_response(json: &serde_json::Value) -> Option<(String, DouyinMeta)> {
+    let title = json
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(html_decode)
+        .or_else(|| {
+            json.get("caption")
+                .and_then(|v| v.as_str())
+                .map(html_decode)
+        });
+    let thumbnail = json
+        .get("thumb")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or_else(|| json.get("thumbnail").and_then(|v| v.as_str()).map(String::from));
+
+    // Find a video entry.
+    let arr = json.get("url").and_then(|v| v.as_array())?;
+    let direct = arr.iter().find_map(|e| {
+        let kind = e
+            .get("subName")
+            .or_else(|| e.get("type"))
+            .or_else(|| e.get("ext"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if kind.contains("video") || kind.contains("mp4") {
+            e.get("url").and_then(|v| v.as_str()).map(String::from)
+        } else {
+            None
+        }
+    })?;
+
+    Some((
+        direct,
+        DouyinMeta {
+            title,
+            thumbnail,
+            channel: None,
+        },
+    ))
 }
 
 /// TikWM scraping API endpoints, tried in order. Same response schema across

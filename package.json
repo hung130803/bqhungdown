@@ -19,7 +19,11 @@
     "setup:sidecars": "node scripts/fetch-sidecars.mjs",
     "update:ytdlp": "node scripts/fetch-sidecars.mjs --only=ytdlp --force",
     "verify:sidecars": "node scripts/verify-sidecars.mjs",
-    "test": "vitest"
+    "test": "vitest",
+    "web:dev": "concurrently -n SERVER,VITE -c blue,green \"node server/server.js\" \"vite --config vite.web.config.ts\"",
+    "web:build": "vite build --config vite.web.config.ts",
+    "server:dev": "node server/server.js",
+    "server:start": "node server/server.js"
   },
   "dependencies": {
     "@crabnebula/tauri-plugin-drag": "^2.1.0",
@@ -46,6 +50,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
     "fast-check": "^3.22.0",
     "jsdom": "^25.0.1",
     "postcss": "^8.4.47",

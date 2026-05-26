@@ -15,6 +15,7 @@ pub mod notification;
 pub mod url_validator;
 pub mod url_resolver;
 pub mod tiktok_photo;
+pub mod douyin_scraper;
 pub mod clipboard;
 pub mod channel_fetcher;
 pub mod ytdlp_runner;
@@ -120,6 +121,8 @@ pub fn run() {
             commands::fetch_metadata,
             commands::fetch_channel_videos,
             commands::cancel_channel_fetch,
+            commands::fetch_thumbnail_data_url,
+            douyin_scraper::scrape_douyin_channel,
             commands::enqueue_download,
             commands::enqueue_batch,
             commands::enqueue_playlist,

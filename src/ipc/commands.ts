@@ -1,16 +1,12 @@
 /**
- * Typed wrappers quanh `@tauri-apps/api/core` `invoke`.
+ * Typed wrappers cho backend.
  *
- * Mọi command đều trả `Promise<T>`. Nếu backend trả `Err(AppError)`, Tauri sẽ
- * throw — caller `try/catch` và parse `AppErrorPayload` (xem `@/types/models`).
+ * - Desktop (Tauri): gọi Rust backend qua `invoke`
+ * - Web (VITE_WEB_MODE=1): gọi API server qua fetch
  *
- * Tên command tuân theo Tauri convention (snake_case tiếng Anh) và phải khớp
- * với `#[tauri::command]` bên Rust (`src-tauri/src/commands/*`).
- *
- * Tham chiếu: design.md — IPC Commands (Tauri).
+ * Module này chọn implementation phù hợp lúc load.
  */
 
-import { invoke } from "@tauri-apps/api/core";
 import type {
   Settings,
   SettingsPatch,
@@ -26,33 +22,84 @@ import type {
   ChannelFetchResult,
 } from "@/types/models";
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Bootstrap
-// ──────────────────────────────────────────────────────────────────────────────
+export interface DouyinPost {
+  id: string;
+  url: string;
+  title: string;
+  thumbnail: string;
+  isPhoto: boolean;
+}
+
+// ── Backend abstraction ──────────────────────────────────────────────────────
+
+const IS_WEB = import.meta.env.VITE_WEB_MODE === "1";
+const API_BASE = import.meta.env.VITE_API_URL || "";
+
+async function api<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: body ? "POST" : "GET",
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// ── Bootstrap ────────────────────────────────────────────────────────────────
 
 export async function appBootstrap(): Promise<BootstrapPayload> {
+  if (IS_WEB) {
+    return {
+      settings: { defaultFolder: "", maxConcurrency: 3, theme: "system", language: "vi", clipboardWatcher: false, notifications: true, aria2cEnabled: false } as Settings,
+      queue: [],
+      ffmpegAvailable: true,
+      aria2cAvailable: false,
+    };
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<BootstrapPayload>("app_bootstrap");
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// URL / metadata
-// ──────────────────────────────────────────────────────────────────────────────
+// ── URL / metadata ──────────────────────────────────────────────────────────
 
 export async function validateUrl(url: string): Promise<UrlValidation> {
+  if (IS_WEB) {
+    return { valid: true, extractor: detectExtractor(url) };
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<UrlValidation>("validate_url", { url });
 }
 
 export async function fetchMetadata(url: string): Promise<VideoMetadata> {
+  if (IS_WEB) {
+    const raw = await api<any>("/api/info", { url });
+    // Transform API response to match VideoMetadata shape
+    return {
+      url,
+      extractor: raw.extractor || detectExtractor(url),
+      title: raw.title || "Không có tiêu đề",
+      channel: raw.channel || null,
+      thumbnail: raw.thumbnail || null,
+      durationSec: raw.duration || null,
+      formats: (raw.formats || []).map((f: any) => ({
+        format_id: f.format_id,
+        ext: f.ext,
+        resolution: f.resolution || (f.height ? `${f.height}p` : "audio"),
+        filesize: f.filesize || f.filesize_approx || null,
+        vcodec: f.vcodec || "none",
+        acodec: f.acodec || "none",
+      })),
+      subtitles: [],
+      playlistEntries: null,
+      playlistTotal: null,
+    } as VideoMetadata;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<VideoMetadata>("fetch_metadata", { url });
 }
 
-/** Fetch a flat list of videos from a channel/user URL.
- *  `limit = 0` means no limit (fetch every video on the channel). */
-/** Cancel any in-flight channel-fetch (`fetchChannelVideos`). The original
- *  promise will reject with an "Đã huỷ" error which the UI can swallow. */
-export async function cancelChannelFetch(): Promise<void> {
-  return invoke<void>("cancel_channel_fetch");
-}
+export async function cancelChannelFetch(): Promise<void> {}
 
 export async function fetchChannelVideos(
   url: string,
@@ -60,12 +107,14 @@ export async function fetchChannelVideos(
   detailed: boolean = false,
   tab: "all" | "videos" | "shorts" | "streams" = "videos",
 ): Promise<ChannelFetchResult> {
+  if (IS_WEB) {
+    throw new Error("Tính năng kênh chưa hỗ trợ trên web. Dùng app desktop.");
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<ChannelFetchResult>("fetch_channel_videos", { url, limit, detailed, tab });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Enqueue
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Enqueue ──────────────────────────────────────────────────────────────────
 
 export async function enqueueDownload(input: {
   url: string;
@@ -75,6 +124,66 @@ export async function enqueueDownload(input: {
   extractor?: string;
   channel?: string | null;
 }): Promise<DownloadItem> {
+  if (IS_WEB) {
+    // Trigger direct download in browser
+    const resp = await fetch(`${API_BASE}/api/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: input.url,
+        formatId: input.options?.formatId || null,
+        isAudioOnly: input.options?.mode === "audio",
+      }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: "Lỗi tải video" }));
+      throw new Error(err.error || "Lỗi tải video");
+    }
+    const disposition = resp.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="?([^";\n]+)"?/);
+    const filename = match?.[1] || `${input.title || "video"}.mp4`;
+    const blob = await resp.blob();
+
+    // Auto-download via browser
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(blobUrl);
+
+    return {
+      shortId: Math.random().toString(36).slice(2, 8),
+      request: {
+        url: input.url,
+        mode: input.options?.mode || "video",
+        formatId: input.options?.formatId || null,
+        saveFolder: "",
+        subLangs: [],
+        autoTranslateTo: null,
+        onConflict: "ask",
+        useAria2c: false,
+        playlistAll: false,
+      },
+      title: input.title || "Video",
+      thumbnail: input.thumbnail ?? null,
+      channel: input.channel ?? null,
+      extractor: input.extractor || detectExtractor(input.url),
+      state: "completed",
+      bytesDownloaded: 0,
+      bytesTotal: null,
+      speedBps: null,
+      etaSec: null,
+      attempt: 0,
+      errorMessage: null,
+      outputPath: filename,
+      createdAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    } as unknown as DownloadItem;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<DownloadItem>("enqueue_download", input);
 }
 
@@ -82,6 +191,12 @@ export async function enqueueBatch(input: {
   urls: string[];
   options: DownloadOptions;
 }): Promise<DownloadItem[]> {
+  if (IS_WEB) {
+    return Promise.all(input.urls.map((url) =>
+      enqueueDownload({ url, options: input.options, extractor: detectExtractor(url) })
+    ));
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<DownloadItem[]>("enqueue_batch", input);
 }
 
@@ -91,87 +206,104 @@ export async function enqueuePlaylist(input: {
   options: DownloadOptions;
   allWithYesPlaylist?: boolean;
 }): Promise<DownloadItem[]> {
+  if (IS_WEB) throw new Error("Playlist chưa hỗ trợ trên web.");
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<DownloadItem[]>("enqueue_playlist", input);
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Queue control
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Queue control ────────────────────────────────────────────────────────────
 
 export async function pauseDownload(shortId: string): Promise<void> {
-  await invoke<void>("pause_download", { shortId });
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("pause_download", { shortId });
 }
 
 export async function resumeDownload(shortId: string): Promise<void> {
-  await invoke<void>("resume_download", { shortId });
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("resume_download", { shortId });
 }
 
 export async function cancelDownload(shortId: string): Promise<void> {
-  await invoke<void>("cancel_download", { shortId });
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("cancel_download", { shortId });
 }
 
 export async function retryDownload(shortId: string): Promise<DownloadItem> {
+  if (IS_WEB) throw new Error("Retry chưa hỗ trợ trên web.");
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<DownloadItem>("retry_download", { shortId });
 }
 
-export async function resolveConflict(
-  shortId: string,
-  choice: ConflictChoice,
-): Promise<void> {
-  await invoke<void>("resolve_conflict", { shortId, choice });
+export async function resolveConflict(shortId: string, choice: ConflictChoice): Promise<void> {
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("resolve_conflict", { shortId, choice });
 }
 
 export async function listQueue(): Promise<DownloadItem[]> {
+  if (IS_WEB) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<DownloadItem[]>("list_queue");
 }
 
-/** Remove one item from the queue (no file deletion on disk). */
 export async function removeQueueItem(shortId: string): Promise<void> {
-  await invoke<void>("remove_queue_item", { shortId });
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("remove_queue_item", { shortId });
 }
 
-/** Cheap existence check before opening a file. */
 export async function pathExists(path: string): Promise<boolean> {
+  if (IS_WEB) return false;
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<boolean>("path_exists", { path });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Settings
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Settings ─────────────────────────────────────────────────────────────────
 
 export async function getSettings(): Promise<Settings> {
+  if (IS_WEB) return { defaultFolder: "", maxConcurrency: 3, theme: "system", language: "vi", clipboardWatcher: false, notifications: true, aria2cEnabled: false } as Settings;
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<Settings>("get_settings");
 }
 
 export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
+  if (IS_WEB) return { ...(await getSettings()), ...patch };
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<Settings>("update_settings", { patch });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Filesystem helpers
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Filesystem helpers ───────────────────────────────────────────────────────
 
 export async function pickFolder(): Promise<string | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string | null>("pick_folder");
 }
 
 export async function pickFile(): Promise<string | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string | null>("pick_file");
 }
 
 export async function checkFolderWritable(path: string): Promise<boolean> {
+  if (IS_WEB) return true;
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<boolean>("check_folder_writable", { path });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// History
-// ──────────────────────────────────────────────────────────────────────────────
+// ── History ─────────────────────────────────────────────────────────────────
 
 export async function listHistory(input: {
   query?: string | null;
   limit?: number;
   offset?: number;
 }): Promise<HistoryEntry[]> {
+  if (IS_WEB) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<HistoryEntry[]>("list_history", {
     query: input.query ?? null,
     limit: input.limit ?? 200,
@@ -179,79 +311,110 @@ export async function listHistory(input: {
   });
 }
 
-export async function deleteHistoryEntry(
-  shortId: string,
-  deleteFile: boolean = false,
-): Promise<void> {
-  await invoke<void>("delete_history_entry", { shortId, deleteFile });
+export async function deleteHistoryEntry(shortId: string, deleteFile = false): Promise<void> {
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("delete_history_entry", { shortId, deleteFile });
 }
 
-/** Delete multiple history entries in one IPC call. Returns count removed. */
-export async function deleteHistoryEntries(
-  shortIds: string[],
-  deleteFiles: boolean = false,
-): Promise<number> {
+export async function deleteHistoryEntries(shortIds: string[], deleteFiles = false): Promise<number> {
+  if (IS_WEB) return shortIds.length;
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<number>("delete_history_entries", { shortIds, deleteFiles });
 }
 
-/** Mark history entries as edited (or unedited). Returns rows changed. */
-export async function setHistoryEdited(
-  shortIds: string[],
-  edited: boolean,
-): Promise<number> {
+export async function setHistoryEdited(shortIds: string[], edited: boolean): Promise<number> {
+  if (IS_WEB) return shortIds.length;
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<number>("set_history_edited", { shortIds, edited });
 }
 
-export async function clearHistory(deleteFiles: boolean = false): Promise<number> {
+export async function clearHistory(deleteFiles = false): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<number>("clear_history", { deleteFiles });
 }
 
-export async function redownloadFromHistory(
-  shortId: string,
-): Promise<DownloadItem> {
+export async function redownloadFromHistory(shortId: string): Promise<DownloadItem> {
+  if (IS_WEB) throw new Error("Chưa hỗ trợ trên web.");
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<DownloadItem>("redownload_from_history", { shortId });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Clipboard watcher
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Clipboard watcher ────────────────────────────────────────────────────────
 
 export async function setClipboardWatcher(enabled: boolean): Promise<void> {
-  await invoke<void>("set_clipboard_watcher", { enabled });
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("set_clipboard_watcher", { enabled });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Shell-out helpers
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Shell helpers ───────────────────────────────────────────────────────────
 
 export async function openInFolder(path: string): Promise<void> {
-  await invoke<void>("open_in_folder", { path });
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("open_in_folder", { path });
 }
 
 export async function openFile(path: string): Promise<void> {
-  await invoke<void>("open_file", { path });
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("open_file", { path });
 }
 
 export async function findOutputFile(saveFolder: string, title: string): Promise<string | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string | null>("find_output_file", { saveFolder, title });
 }
 
 export async function updateHistoryOutputPath(shortId: string, outputPath: string): Promise<void> {
-  await invoke<void>("update_history_output_path", { shortId, outputPath });
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("update_history_output_path", { shortId, outputPath });
 }
 
 export async function openUrl(url: string): Promise<void> {
-  await invoke<void>("open_url", { url });
+  if (IS_WEB) { window.open(url, "_blank"); return; }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("open_url", { url });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Misc
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Misc ────────────────────────────────────────────────────────────────────
 
 export async function getSubtitleLangs(url: string): Promise<SubtitleTrack[]> {
+  if (IS_WEB) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<SubtitleTrack[]>("get_subtitle_langs", { url });
 }
 
 export async function listExtractors(): Promise<ExtractorInfo[]> {
+  if (IS_WEB) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<ExtractorInfo[]>("list_extractors");
+}
+
+// ── Douyin scraper ──────────────────────────────────────────────────────────
+
+export async function scrapeDouyinChannel(url: string): Promise<DouyinPost[]> {
+  if (IS_WEB) throw new Error("Kênh Douyin chưa hỗ trợ trên web. Dùng app desktop.");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<DouyinPost[]>("scrape_douyin_channel", { url });
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function detectExtractor(url: string): string {
+  const u = url.toLowerCase();
+  if (u.includes("youtube.com") || u.includes("youtu.be")) return "youtube";
+  if (u.includes("tiktok.com")) return "tiktok";
+  if (u.includes("douyin.com")) return "douyin";
+  if (u.includes("instagram.com")) return "instagram";
+  if (u.includes("facebook.com") || u.includes("fb.watch")) return "facebook";
+  if (u.includes("twitter.com") || u.includes("x.com")) return "twitter";
+  if (u.includes("reddit.com")) return "reddit";
+  if (u.includes("pinterest.com")) return "pinterest";
+  if (u.includes("threads.net")) return "threads";
+  return "unknown";
 }

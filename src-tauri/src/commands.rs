@@ -118,6 +118,47 @@ pub fn cancel_channel_fetch() -> AppResult<()> {
     Ok(())
 }
 
+/// Fetch a thumbnail URL and return it as a `data:image/...;base64,...` URL.
+#[tauri::command]
+pub async fn fetch_thumbnail_data_url(url: String) -> AppResult<String> {
+    let lower = url.to_lowercase();
+    let referer = if lower.contains("cdninstagram.com") || lower.contains("fbcdn.net") {
+        Some("https://www.instagram.com/")
+    } else if lower.contains("tiktokcdn") || lower.contains("byteoversea") {
+        Some("https://www.tiktok.com/")
+    } else if lower.contains("aweme") || lower.contains("douyin") {
+        Some("https://www.douyin.com/")
+    } else {
+        None
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        )
+        .build()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    let mut req = client.get(&url);
+    if let Some(r) = referer {
+        req = req.header("Referer", r);
+    }
+    let resp = req.send().await.map_err(|e| AppError::Other(e.to_string()))?;
+    if !resp.status().is_success() {
+        return Err(AppError::Other(format!("HTTP {}", resp.status())));
+    }
+    let mime = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from)
+        .unwrap_or_else(|| "image/jpeg".to_string());
+    let bytes = resp.bytes().await.map_err(|e| AppError::Other(e.to_string()))?;
+    use data_encoding::BASE64;
+    let b64 = BASE64.encode(&bytes);
+    Ok(format!("data:{mime};base64,{b64}"))
+}
+
 // ---------- Enqueue ----------
 
 fn build_request(url: String, options: DownloadOptions, settings: &Settings) -> DownloadRequest {
