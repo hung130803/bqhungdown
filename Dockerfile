@@ -10,23 +10,21 @@ COPY . .
 RUN npx vite build --config vite.web.config.ts
 
 # ── Stage 2: Full app (backend + frontend) ───────────────────────────────────
-FROM node:20-alpine
-
-# Install yt-dlp and ffmpeg (required for video processing)
-RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    ffmpeg \
-    && pip3 install --break-system-packages yt-dlp \
-    && ln -s /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp \
-    && rm -rf /var/cache/apk/*
-
-# Install Playwright chromium for TikTok/Douyin
-RUN npm install -g playwright \
-    && playwright install chromium --with-deps \
-    || true
+FROM node:20-slim
 
 WORKDIR /app
+
+# Install yt-dlp and ffmpeg (required for video processing)
+# Using node:20-slim (Debian) instead of Alpine for better package compatibility
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    ffmpeg \
+    curl \
+    && pip3 install --break-system-packages yt-dlp \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
 
 COPY --from=frontend-builder /app/dist ./dist
 COPY server/ ./server/
