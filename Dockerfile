@@ -24,10 +24,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=frontend-builder /app/dist ./dist
-COPY server/package.json server/package-lock.json ./server/
+COPY server/ ./server/
 COPY package.json package-lock.json ./
 
-# Install both root and server dependencies
 RUN npm install --omit=dev && cd server && npm install --omit=dev && cd ..
 
 EXPOSE 3001
