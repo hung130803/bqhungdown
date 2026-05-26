@@ -1,5 +1,5 @@
 # ── Stage 1: Build frontend ────────────────────────────────────────────────────
-FROM node:20-alpine AS frontend-builder
+FROM node:18-bookworm AS frontend-builder
 
 WORKDIR /app
 
@@ -10,19 +10,18 @@ COPY . .
 RUN npx vite build --config vite.web.config.ts
 
 # ── Stage 2: Full app (backend + frontend) ───────────────────────────────────
-FROM node:20-alpine
+FROM node:18-slim
 
 WORKDIR /app
 
-# Install ffmpeg and curl
-RUN apk add --no-cache ffmpeg curl ca-certificates python3
-
-# Install yt-dlp via binary (avoids pip issues on Alpine)
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
-    && chmod a+rx /usr/local/bin/yt-dlp
-
-# Set python SSL certs
-RUN update-ca-certificates 2>/dev/null || true
+# Install yt-dlp and ffmpeg
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg curl python3 python3-pip ca-certificates \
+    && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp \
+    && pip3 install --break-system-packages yt-dlp --upgrade \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=frontend-builder /app/dist ./dist
 COPY server/ ./server/
