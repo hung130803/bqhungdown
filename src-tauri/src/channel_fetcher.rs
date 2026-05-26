@@ -44,18 +44,36 @@ pub fn cancel() {
     FETCH_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
-/// Normalise a YouTube channel URL so we always hit the requested tab.
+/// Normalise a raw channel/user URL so we can append the correct tab suffix.
 /// `tab` is one of: "videos", "shorts", "streams", or empty/other (leave as-is).
 fn normalise_channel_url(raw: &str, tab: &str) -> String {
     let lower = raw.to_lowercase();
 
-    // TikTok: collapse `/@user/video/<id>` → `/@user`. Even if the user
-    // already gave us `/@user`, leave it as-is. Tabs are YouTube-only.
+    // TikTok: collapse `/@user/video/<id>` → `/@user`. Add `/video` tab suffix.
     if lower.contains("tiktok.com/@") {
-        if let Some(idx) = raw.find("/video/") {
-            return raw[..idx].to_string();
-        }
-        return raw.to_string();
+        let base = if let Some(idx) = raw.find("/video/") {
+            raw[..idx].to_string()
+        } else {
+            raw.trim_end_matches('/').to_string()
+        };
+        let suffix = if tab == "videos" || tab == "all" { "/video" } else { "" };
+        return format!("{base}{suffix}");
+    }
+
+    // Facebook: add `/videos` tab suffix.
+    if lower.contains("facebook.com/") && !lower.contains("/photo") && !lower.contains("/watch") {
+        let base = raw.trim_end_matches('/').to_string();
+        return if base.to_lowercase().ends_with("/videos") { base } else { format!("{base}/videos") };
+    }
+
+    // Instagram: pass through as-is (no public video tab URL).
+    if lower.contains("instagram.com/") {
+        return raw.trim_end_matches('/').to_string();
+    }
+
+    // Reddit: pass through as-is.
+    if lower.contains("reddit.com/") {
+        return raw.trim_end_matches('/').to_string();
     }
 
     if !lower.contains("youtube.com") {
@@ -149,7 +167,6 @@ pub async fn fetch_channel(
                 }
             }
             Ok(Err(_)) | Err(_) => {
-                // Tab not present (e.g., channel has no Shorts) → continue.
             }
         }
         if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
@@ -158,6 +175,12 @@ pub async fn fetch_channel(
     }
 
     let info = info.ok_or_else(|| AppError::YtDlpFailed("Không có video nào trên kênh".into()))?;
+
+    // Sort descending by upload_date so newest videos come first.
+    videos.sort_by(|a, b| b.upload_date.cmp(&a.upload_date));
+
+    // Deduplicate across /videos + /shorts tabs.
+    videos = videos.into_iter().filter(|v| seen.remove(&v.url)).collect();
 
     // Step 2: probe details only when user explicitly opts in via "detailed".
     // Default mode trusts the flat-playlist response — yt-dlp's

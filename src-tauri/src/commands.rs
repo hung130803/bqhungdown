@@ -93,12 +93,12 @@ pub async fn fetch_channel_videos(
     settings: State<'_, Arc<SettingsStore>>,
 ) -> AppResult<ChannelFetchResult> {
     let s = settings.get();
-    // 0 = unlimited; cap at 5000 to avoid 10k-video YouTube channels
-    // hammering the UI thread when parsed.
     let cap = limit.unwrap_or(0).min(5000);
     let det = detailed.unwrap_or(false);
     let tab_s = tab.unwrap_or_else(|| "videos".into());
-    let (info, videos) = crate::channel_fetcher::fetch_channel(&app, &url, cap, det, &tab_s, &s).await?;
+    let (info, videos) = crate::channel_fetcher::fetch_channel(
+        &app, &url, cap, det, &tab_s, &s,
+    ).await?;
     Ok(ChannelFetchResult { info, videos })
 }
 

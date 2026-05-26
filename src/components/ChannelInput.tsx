@@ -520,7 +520,6 @@ export function ChannelInput({ onSubmit }: Props) {
             <div
               key={v.url}
               data-vid-url={v.url}
-              onClick={() => toggleOne(v.url)}
               className={`flex items-center gap-3 px-3 py-2 cursor-pointer ${checked ? "bg-accent/5" : "bg-surface"}`}
             >
               <input

@@ -76,8 +76,6 @@ export const useChannelStore = create<ChannelState>()((set, get) => ({
     set({
       info,
       videos,
-      // Mặc định KHÔNG tick video nào — user tự chọn. `excluded` giữ tất cả
-      // URL nên mỗi row hiển thị chưa tick (checked = !excluded.has(url)).
       excluded: new Set(videos.map((v) => v.url)),
     }),
   resetResult: () => set({ info: null, videos: [], excluded: new Set() }),

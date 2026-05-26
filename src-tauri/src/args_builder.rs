@@ -57,12 +57,10 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
     args.push("--socket-timeout".into());
     args.push("30".into());
 
-    // Modern browser User-Agent — required to bypass YouTube bot detection.
+    // User-agent để bỏ qua bot detection.
+    // Dùng default của yt-dlp (thay đổi theo phiên bản, khó bị block hơn).
     args.push("--user-agent".into());
-    args.push("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36".into());
-
-    // Force IPv4 — YouTube CDN paths over IPv6 are sometimes much slower.
-    args.push("-4".into());
+    args.push("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36".into());
 
     // Site-specific request headers. Critical for Douyin CDN URLs: when we
     // resolve `https://www.douyin.com/...` to `https://...aweme.snssdk.com/...`
