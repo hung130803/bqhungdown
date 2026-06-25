@@ -159,6 +159,9 @@ impl SettingsStore {
             if let Some(opt) = patch.cookies_file {
                 s.cookies_file = opt;
             }
+            if let Some(v) = patch.skip_downloaded {
+                s.skip_downloaded = v;
+            }
             Ok(())
         })
     }

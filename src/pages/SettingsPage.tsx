@@ -67,6 +67,8 @@ export function SettingsPage() {
       <Toggle label={t("settings.clipboardWatcher")} checked={settings.clipboardWatcher} onChange={v => set("clipboardWatcher", v)} />
       <Toggle label={t("settings.notifications")} checked={settings.notifications} onChange={v => set("notifications", v)} />
       <Toggle label={t("settings.aria2cEnabled")} checked={settings.aria2cEnabled} onChange={v => set("aria2cEnabled", v)} />
+      <Toggle label={t("settings.skipDownloaded")} checked={settings.skipDownloaded} onChange={v => set("skipDownloaded", v)} />
+      <p className="text-xs text-muted -mt-1">{t("settings.skipDownloadedHint")}</p>
 
       <Field label={t("settings.cookiesBrowser")}>
         <select

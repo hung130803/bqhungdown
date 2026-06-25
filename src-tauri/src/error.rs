@@ -47,6 +47,19 @@ pub enum AppError {
 
 pub type AppResult<T> = Result<T, AppError>;
 
+/// True when a yt-dlp error means it couldn't read/decrypt browser cookies
+/// (modern Chrome/Edge on Windows use AppBound/DPAPI encryption that yt-dlp
+/// can't decrypt). When this happens we retry the call WITHOUT cookies, since
+/// public videos don't need them. See https://github.com/yt-dlp/yt-dlp/issues/10927
+pub fn is_cookie_decrypt_error(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    l.contains("dpapi")
+        || l.contains("failed to decrypt")
+        || l.contains("unable to decrypt")
+        || l.contains("could not copy")
+        || (l.contains("cookie") && l.contains("decrypt"))
+}
+
 impl From<std::io::Error> for AppError {
     fn from(err: std::io::Error) -> Self { AppError::Io(err.to_string()) }
 }

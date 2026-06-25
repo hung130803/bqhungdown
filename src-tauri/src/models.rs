@@ -293,6 +293,16 @@ pub struct Settings {
     /// trên Windows mới). Khi cả 2 cùng set, file ưu tiên hơn browser.
     #[serde(default)]
     pub cookies_file: Option<String>,
+    /// Khi true, yt-dlp chạy với `--download-archive <file>` → tự bỏ qua video
+    /// đã tải xong trước đó (so theo extractor+id). Cực hữu ích cho reup: tải
+    /// lại 1 kênh sẽ không tải trùng video cũ. File archive nằm ở app_data_dir.
+    /// Mặc định bật. Archive chỉ ghi nhận video tải từ lúc bật trở đi.
+    #[serde(default = "default_true")]
+    pub skip_downloaded: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -312,6 +322,7 @@ impl Default for Settings {
             aria2c_enabled: false,
             cookies_browser: None,
             cookies_file: None,
+            skip_downloaded: true,
         }
     }
 }
@@ -333,6 +344,7 @@ pub struct SettingsPatch {
     /// Same Option<Option<String>> trick for the cookies.txt file path.
     #[serde(default, deserialize_with = "deserialize_optional_optional_string")]
     pub cookies_file: Option<Option<String>>,
+    pub skip_downloaded: Option<bool>,
 }
 
 /// Custom serde deserializer that distinguishes:

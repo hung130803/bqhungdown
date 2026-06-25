@@ -206,6 +206,11 @@ export interface Settings {
    * vì Edge/Chrome trên Windows mới mã hoá AppBound khiến browser-based fail.
    */
   cookiesFile?: string | null;
+  /**
+   * Bỏ qua video đã tải xong trước đó (yt-dlp `--download-archive`). Hữu ích
+   * khi tải lại 1 kênh: không tải trùng. Mặc định bật.
+   */
+  skipDownloaded: boolean;
 }
 
 export type SettingsPatch = Partial<Settings>;

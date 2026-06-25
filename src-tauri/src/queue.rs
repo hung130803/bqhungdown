@@ -548,6 +548,23 @@ impl QueueManager {
                     // chỉ chứa các mục Completed.
                 }
             }
+            Ok(RunOutcome::Skipped) => {
+                // Video đã có trong download-archive → bỏ qua. Đánh dấu Skipped
+                // (không lưu History, không báo lỗi). UI hiện "Đã bỏ qua".
+                let snap = {
+                    let mut map = self.items.write().unwrap();
+                    if let Some(it) = map.get_mut(&id) {
+                        it.state = DownloadState::Skipped;
+                        it.finished_at = Some(Utc::now());
+                        it.error_message = None;
+                    }
+                    map.get(&id).cloned()
+                };
+                if let Some(it) = snap {
+                    self.emit_state(&it);
+                    self.emit_queue_updated();
+                }
+            }
             Ok(RunOutcome::Failed { reason }) => {
                 self.clone().handle_failure(id.clone(), reason, settings_snapshot.clone());
             }

@@ -17,6 +17,7 @@ use crate::progress_parser;
 use serde_json::Value;
 use std::time::Duration;
 use tauri::AppHandle;
+use tauri::Manager;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::mpsc;
@@ -33,6 +34,9 @@ pub enum RunOutcome {
         channel: Option<String>,
     },
     Cancelled,
+    /// yt-dlp skipped the item because it's already in the download-archive
+    /// (the "Bỏ qua video đã tải" feature). Not an error, not a real download.
+    Skipped,
     Failed { reason: String },
 }
 
@@ -49,10 +53,20 @@ pub enum MetaEvent {
 #[derive(Clone)]
 pub struct YtDlpRunner {
     app: AppHandle,
+    /// Path to the yt-dlp `--download-archive` file (records IDs of finished
+    /// downloads so re-runs skip them). `None` if app_data_dir can't resolve.
+    archive_path: Option<std::path::PathBuf>,
 }
 
 impl YtDlpRunner {
-    pub fn new(app: AppHandle) -> Self { Self { app } }
+    pub fn new(app: AppHandle) -> Self {
+        let archive_path = app
+            .path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("download_archive.txt"));
+        Self { app, archive_path }
+    }
 
     pub async fn fetch_metadata(&self, url: &str, settings: &Settings) -> AppResult<VideoMetadata> {
         // Pre-resolve site-specific quirks (e.g., viralhog watch → embed URL)
@@ -68,6 +82,14 @@ impl YtDlpRunner {
 
         match self.fetch_metadata_inner(url_for_dlp, force_generic_first, settings).await {
             Ok(md) => Ok(md),
+            // Browser cookies couldn't be decrypted (DPAPI) — retry without them.
+            Err(AppError::YtDlpFailed(ref msg))
+                if args_builder::settings_have_cookies(settings)
+                    && crate::error::is_cookie_decrypt_error(msg) =>
+            {
+                let no_cookies = args_builder::settings_without_cookies(settings);
+                self.fetch_metadata_inner(url_for_dlp, force_generic_first, &no_cookies).await
+            }
             Err(AppError::YtDlpFailed(msg)) if !force_generic_first && is_unsupported_url(&msg) => {
                 // yt-dlp doesn't have a handler for this site; retry with generic
                 // extractor — it scans the HTML for `<video>` / og:video.
@@ -94,19 +116,9 @@ impl YtDlpRunner {
             "--socket-timeout".into(), "30".into(),
         ];
         // Cookies từ trình duyệt — bắt buộc cho Douyin / Bilibili / IG private /
-        // YouTube age-gated. Cùng giá trị áp dụng ở download path qua args_builder.
-        // File cookies.txt ưu tiên hơn browser (AppBound encryption issue).
-        if let Some(file) = settings.cookies_file.as_deref() {
-            if !file.is_empty() {
-                args.push("--cookies".into());
-                args.push(file.to_string());
-            }
-        } else if let Some(browser) = settings.cookies_browser.as_deref() {
-            if !browser.is_empty() {
-                args.push("--cookies-from-browser".into());
-                args.push(browser.to_string());
-            }
-        }
+        // YouTube age-gated. File cookies.txt ưu tiên hơn browser (AppBound
+        // encryption issue). Caller retries without cookies on DPAPI failure.
+        args_builder::push_cookie_args(&mut args, settings);
         if force_generic {
             args.push("--force-generic-extractor".into());
         }
@@ -186,10 +198,21 @@ impl YtDlpRunner {
             .run_once(item, settings, resume, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
             .await?;
 
-        // Auto-retry with `--force-generic-extractor` when yt-dlp says it can't
-        // handle the site — works for viralhog and any other "self-hosted MP4"
-        // page that exposes the URL in HTML <video> / og:video.
         if let RunOutcome::Failed { reason } = &outcome {
+            // Browser cookies couldn't be decrypted (DPAPI) — retry without them.
+            // Public videos don't need cookies, so this recovers transparently.
+            if args_builder::settings_have_cookies(settings)
+                && crate::error::is_cookie_decrypt_error(reason)
+                && !cancel.is_cancelled()
+            {
+                let no_cookies = args_builder::settings_without_cookies(settings);
+                return self
+                    .run_once(item, &no_cookies, resume, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
+                    .await;
+            }
+            // Auto-retry with `--force-generic-extractor` when yt-dlp says it
+            // can't handle the site — works for viralhog and any other
+            // "self-hosted MP4" page that exposes the URL in HTML <video>.
             if is_unsupported_url(reason) && !cancel.is_cancelled() {
                 return self
                     .run_once(item, settings, resume, true, cancel, progress_tx, meta_tx, output_stem)
@@ -210,11 +233,21 @@ impl YtDlpRunner {
         meta_tx: mpsc::Sender<MetaEvent>,
         output_stem: Option<String>,
     ) -> AppResult<RunOutcome> {
-        let args = args_builder::build(
+        let mut args = args_builder::build(
             &item.request,
             settings,
             BuildMode::Download { resume, force_generic, output_stem },
         );
+        // "Bỏ qua video đã tải": record finished downloads in an archive file and
+        // skip anything already listed. yt-dlp accepts options after the URL, so
+        // appending here is fine. Only YouTube/most extractors expose a stable id;
+        // ones that don't simply never match and download normally.
+        if settings.skip_downloaded {
+            if let Some(archive) = &self.archive_path {
+                args.push("--download-archive".into());
+                args.push(archive.to_string_lossy().to_string());
+            }
+        }
         let cmd = self.app.shell().sidecar("yt-dlp").map_err(|e| AppError::YtDlpFailed(e.to_string()))?.args(args);
 
         let (mut rx, child) = cmd.spawn().map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
@@ -228,6 +261,7 @@ impl YtDlpRunner {
         let mut resolved_thumbnail: Option<String> = None;
         let mut resolved_channel: Option<String> = None;
         let mut cancelled = false;
+        let mut archived_skip = false;
         let mut exit_code: Option<i32> = None;
         let started_at = std::time::Instant::now();
         let mut last_activity = std::time::Instant::now();
@@ -260,6 +294,11 @@ impl YtDlpRunner {
                         CommandEvent::Stdout(bytes) => {
                             let text = String::from_utf8_lossy(&bytes);
                             for line in text.split_terminator(|c| c == '\n' || c == '\r') {
+                                // "Bỏ qua video đã tải": yt-dlp prints this when the
+                                // id is already in the download-archive and exits 0.
+                                if line.contains("has already been recorded in the archive") {
+                                    archived_skip = true;
+                                }
                                 if let Some(p) = progress_parser::parse_progress(line) {
                                     // Always emit the FIRST progress event immediately so the
                                     // UI bar starts moving without waiting for the throttle window.
@@ -327,6 +366,9 @@ impl YtDlpRunner {
         }
 
         if cancelled { return Ok(RunOutcome::Cancelled); }
+        if archived_skip && output_path.is_none() {
+            return Ok(RunOutcome::Skipped);
+        }
         match exit_code.unwrap_or(-1) {
             0 => Ok(RunOutcome::Completed {
                 output_path,

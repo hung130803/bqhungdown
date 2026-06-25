@@ -66,6 +66,8 @@
     "clipboardWatcher": "Tự động phát hiện liên kết từ clipboard",
     "notifications": "Hiện thông báo hệ thống",
     "aria2cEnabled": "Tăng tốc aria2c (nhanh hơn 3-5x, nhưng không hiện tiến độ chi tiết)",
+    "skipDownloaded": "Bỏ qua video đã tải (không tải trùng)",
+    "skipDownloadedHint": "Khi tải lại 1 kênh, tự bỏ qua video đã tải xong trước đó. Chỉ tính các video tải từ lúc bật trở đi.",
     "cookiesBrowser": "Lấy cookies từ trình duyệt",
     "cookiesNone": "Không dùng (mặc định)",
     "cookiesHint": "Bật khi cần tải Douyin / Bilibili / Instagram riêng tư / YouTube giới hạn tuổi. Trình duyệt được chọn phải đã đăng nhập / đã từng vào site đó.",

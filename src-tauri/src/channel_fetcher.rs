@@ -50,6 +50,12 @@ pub fn cancel() {
 /// not an empty channel.
 fn friendly_fetch_error(raw: &str) -> String {
     let l = raw.to_lowercase();
+    if crate::error::is_cookie_decrypt_error(raw) {
+        return "Không đọc được cookie từ trình duyệt (Windows mã hoá DPAPI). \
+                Vào Cài đặt → tắt \"Lấy cookies từ trình duyệt\" (để trống). \
+                Video YouTube công khai không cần cookie."
+            .into();
+    }
     if l.contains("sign in to confirm")
         || l.contains("not a bot")
         || l.contains("confirm you")
@@ -424,7 +430,30 @@ fn parse_tikwm_entry(v: &serde_json::Value) -> Option<ChannelVideo> {
 }
 
 
+/// Fetch a channel's flat listing, retrying without cookies if the first
+/// attempt fails because browser cookies couldn't be decrypted (DPAPI). Public
+/// channels don't need cookies, so this keeps listing working even when the
+/// user has a broken "cookies from browser" setting.
 async fn run_flat_fetch(
+    app: &AppHandle,
+    resolved: &str,
+    limit: u32,
+    settings: &Settings,
+    my_gen: u64,
+) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
+    let res = run_flat_fetch_attempt(app, resolved, limit, settings, my_gen).await;
+    if let Err(AppError::YtDlpFailed(ref msg)) = res {
+        if crate::args_builder::settings_have_cookies(settings)
+            && crate::error::is_cookie_decrypt_error(msg)
+        {
+            let no_cookies = crate::args_builder::settings_without_cookies(settings);
+            return run_flat_fetch_attempt(app, resolved, limit, &no_cookies, my_gen).await;
+        }
+    }
+    res
+}
+
+async fn run_flat_fetch_attempt(
     app: &AppHandle,
     resolved: &str,
     limit: u32,
@@ -455,17 +484,7 @@ async fn run_flat_fetch(
         args.push("--playlist-end".into());
         args.push(limit.to_string());
     }
-    if let Some(file) = settings.cookies_file.as_deref() {
-        if !file.is_empty() {
-            args.push("--cookies".into());
-            args.push(file.to_string());
-        }
-    } else if let Some(browser) = settings.cookies_browser.as_deref() {
-        if !browser.is_empty() {
-            args.push("--cookies-from-browser".into());
-            args.push(browser.to_string());
-        }
-    }
+    crate::args_builder::push_cookie_args(&mut args, settings);
     args.push(resolved.to_string());
 
     let cmd = app
@@ -644,6 +663,25 @@ async fn probe_batch(
     my_gen: u64,
     want_view: bool,
 ) -> AppResult<std::collections::HashMap<String, (Option<u64>, Option<String>)>> {
+    let res = probe_batch_attempt(app, urls, settings, my_gen, want_view).await;
+    if let Err(AppError::YtDlpFailed(ref msg)) = res {
+        if crate::args_builder::settings_have_cookies(settings)
+            && crate::error::is_cookie_decrypt_error(msg)
+        {
+            let no_cookies = crate::args_builder::settings_without_cookies(settings);
+            return probe_batch_attempt(app, urls, &no_cookies, my_gen, want_view).await;
+        }
+    }
+    res
+}
+
+async fn probe_batch_attempt(
+    app: &AppHandle,
+    urls: &[String],
+    settings: &Settings,
+    my_gen: u64,
+    want_view: bool,
+) -> AppResult<std::collections::HashMap<String, (Option<u64>, Option<String>)>> {
     use std::collections::HashMap;
 
     let print_tpl = if want_view {
@@ -669,17 +707,7 @@ async fn probe_batch(
         "--print".into(),
         print_tpl.into(),
     ];
-    if let Some(file) = settings.cookies_file.as_deref() {
-        if !file.is_empty() {
-            args.push("--cookies".into());
-            args.push(file.to_string());
-        }
-    } else if let Some(browser) = settings.cookies_browser.as_deref() {
-        if !browser.is_empty() {
-            args.push("--cookies-from-browser".into());
-            args.push(browser.to_string());
-        }
-    }
+    crate::args_builder::push_cookie_args(&mut args, settings);
     for u in urls {
         args.push(u.clone());
     }

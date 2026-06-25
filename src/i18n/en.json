@@ -66,6 +66,8 @@
     "clipboardWatcher": "Auto-detect links from clipboard",
     "notifications": "Show system notifications",
     "aria2cEnabled": "aria2c boost (3-5x faster, but no detailed progress)",
+    "skipDownloaded": "Skip already-downloaded videos (no duplicates)",
+    "skipDownloadedHint": "When re-fetching a channel, automatically skip videos already downloaded. Only counts videos downloaded after enabling this.",
     "cookiesBrowser": "Use cookies from browser",
     "cookiesNone": "Off (default)",
     "cookiesHint": "Enable for Douyin / Bilibili / private Instagram / age-restricted YouTube. The chosen browser must be logged in or have visited the site.",

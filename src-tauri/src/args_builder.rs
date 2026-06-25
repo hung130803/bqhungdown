@@ -24,6 +24,41 @@ fn should_force_generic(url: &str) -> bool {
     FORCE_GENERIC_EXTRACTORS.contains(&extractor)
 }
 
+/// Push `--cookies <file>` or `--cookies-from-browser <browser>` based on
+/// settings. File takes priority over browser (browser cookies hit AppBound/
+/// DPAPI decryption failures on modern Windows Chrome/Edge). Shared by every
+/// yt-dlp call site so cookie behaviour is consistent.
+pub fn push_cookie_args(args: &mut Vec<String>, settings: &Settings) {
+    if let Some(file) = settings.cookies_file.as_deref() {
+        if !file.is_empty() {
+            args.push("--cookies".into());
+            args.push(file.to_string());
+            return;
+        }
+    }
+    if let Some(browser) = settings.cookies_browser.as_deref() {
+        if !browser.is_empty() {
+            args.push("--cookies-from-browser".into());
+            args.push(browser.to_string());
+        }
+    }
+}
+
+/// True when any cookie source is configured.
+pub fn settings_have_cookies(s: &Settings) -> bool {
+    s.cookies_file.as_deref().map(|f| !f.is_empty()).unwrap_or(false)
+        || s.cookies_browser.as_deref().map(|b| !b.is_empty()).unwrap_or(false)
+}
+
+/// Clone settings with all cookie sources cleared — used to retry a call after
+/// a cookie-decryption failure (DPAPI).
+pub fn settings_without_cookies(s: &Settings) -> Settings {
+    let mut c = s.clone();
+    c.cookies_file = None;
+    c.cookies_browser = None;
+    c
+}
+
 /// Mode hint cho fetch_metadata vs run_download.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildMode {
@@ -81,17 +116,7 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
     // cho Douyin / Bilibili / video YouTube giới hạn tuổi v.v.
     // Ưu tiên file cookies.txt > browser khi cả 2 cùng set, vì AppBound
     // encryption của Edge/Chrome trên Windows làm browser-based fail.
-    if let Some(file) = settings.cookies_file.as_deref() {
-        if !file.is_empty() {
-            args.push("--cookies".into());
-            args.push(file.to_string());
-        }
-    } else if let Some(browser) = settings.cookies_browser.as_deref() {
-        if !browser.is_empty() {
-            args.push("--cookies-from-browser".into());
-            args.push(browser.to_string());
-        }
-    }
+    push_cookie_args(&mut args, settings);
 
     // Sites without a native yt-dlp extractor but with direct media in HTML
     // (viralhog, 9gag, imgur, redgifs…) → force the generic extractor so it
