@@ -8,10 +8,11 @@ use crate::history_store::HistoryStore;
 use crate::models::{
     BootstrapPayload, ChannelInfo, ChannelVideo, ConflictChoice, ConflictPolicy, DownloadItem, DownloadOptions,
     DownloadRequest, DownloadState, ExtractorInfo, HistoryEntry, Settings, SettingsPatch,
-    SubtitleTrack, UrlValidation, VideoMetadata,
+    SubtitleTrack, UrlValidation, VideoMetadata, WatchedChannel,
 };
 use crate::queue::QueueManager;
 use crate::settings_store::SettingsStore;
+use crate::watchlist_store::WatchlistStore;
 use crate::short_id;
 use crate::sidecar_detect;
 use crate::url_validator;
@@ -161,7 +162,7 @@ pub async fn fetch_thumbnail_data_url(url: String) -> AppResult<String> {
 
 // ---------- Enqueue ----------
 
-fn build_request(url: String, options: DownloadOptions, settings: &Settings) -> DownloadRequest {
+pub(crate) fn build_request(url: String, options: DownloadOptions, settings: &Settings) -> DownloadRequest {
     DownloadRequest {
         url,
         mode: options.mode,
@@ -176,7 +177,7 @@ fn build_request(url: String, options: DownloadOptions, settings: &Settings) -> 
     }
 }
 
-fn make_item(
+pub(crate) fn make_item(
     req: DownloadRequest,
     title: Option<String>,
     thumbnail: Option<String>,
@@ -815,6 +816,90 @@ pub fn set_clipboard_watcher(
         ..Default::default()
     })?;
     Ok(())
+}
+
+// ---------- Auto-watch channels ----------
+
+#[tauri::command]
+pub fn list_watched_channels(
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Vec<WatchedChannel>> {
+    Ok(store.list())
+}
+
+#[tauri::command]
+pub async fn add_watched_channel(
+    url: String,
+    tab: Option<String>,
+    app: AppHandle,
+    store: State<'_, Arc<WatchlistStore>>,
+    queue: State<'_, Arc<QueueManager>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    history: State<'_, Arc<HistoryStore>>,
+) -> AppResult<WatchedChannel> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err(AppError::InvalidUrl);
+    }
+    // Already watching this URL → return the existing entry (idempotent add).
+    if store.contains_url(&url) {
+        if let Some(c) = store
+            .list()
+            .into_iter()
+            .find(|c| c.url.trim_end_matches('/').to_lowercase() == url.trim_end_matches('/').to_lowercase())
+        {
+            return Ok(c);
+        }
+    }
+    let taken: std::collections::HashSet<String> =
+        store.list().into_iter().map(|c| c.id).collect();
+    let id = short_id::generate(&url, Utc::now().timestamp_millis(), &taken);
+    let channel = WatchedChannel {
+        id: id.clone(),
+        url: url.clone(),
+        title: None,
+        enabled: true,
+        tab: tab.unwrap_or_else(|| "all".into()),
+        added_at: Utc::now(),
+        last_checked: None,
+        last_new_count: None,
+        last_error: None,
+        seen_ids: vec![],
+    };
+    store.add(channel)?;
+    // Baseline pass: records current videos as "seen" and enqueues NOTHING
+    // (seen_ids was empty), so watching starts from now, not the backlog.
+    crate::watcher::check_channel(&app, store.inner(), queue.inner(), settings.inner(), history.inner(), &id).await;
+    store.get(&id).ok_or_else(|| AppError::NotFound(id))
+}
+
+#[tauri::command]
+pub fn remove_watched_channel(
+    id: String,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<()> {
+    store.remove(&id)
+}
+
+#[tauri::command]
+pub fn set_watched_enabled(
+    id: String,
+    enabled: bool,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    store.update(&id, |c| c.enabled = enabled)
+}
+
+/// Manually trigger an immediate check of all enabled watched channels.
+#[tauri::command]
+pub async fn check_watched_now(
+    app: AppHandle,
+    store: State<'_, Arc<WatchlistStore>>,
+    queue: State<'_, Arc<QueueManager>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    history: State<'_, Arc<HistoryStore>>,
+) -> AppResult<Vec<WatchedChannel>> {
+    Ok(crate::watcher::check_all(&app, store.inner(), queue.inner(), settings.inner(), history.inner()).await)
 }
 
 // ---------- Bootstrap ----------

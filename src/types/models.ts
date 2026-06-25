@@ -186,6 +186,25 @@ export interface ChannelFetchResult {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Auto-watch channels
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface WatchedChannel {
+  id: string;
+  url: string;
+  title?: string | null;
+  enabled: boolean;
+  /** "all" | "videos" | "shorts" */
+  tab: string;
+  addedAt: string;
+  lastChecked?: string | null;
+  /** New videos enqueued on the last check. */
+  lastNewCount?: number | null;
+  lastError?: string | null;
+  seenIds?: string[];
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Settings
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -213,6 +232,8 @@ export interface Settings {
    * khi tải lại 1 kênh: không tải trùng. Mặc định bật.
    */
   skipDownloaded: boolean;
+  /** Phút giữa mỗi lần auto-watch kiểm tra kênh (5–1440). */
+  watchIntervalMin: number;
 }
 
 export type SettingsPatch = Partial<Settings>;

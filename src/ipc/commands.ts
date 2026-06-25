@@ -20,6 +20,7 @@ import type {
   SubtitleTrack,
   ExtractorInfo,
   ChannelFetchResult,
+  WatchedChannel,
 } from "@/types/models";
 
 export interface DouyinPost {
@@ -393,6 +394,38 @@ export async function listExtractors(): Promise<ExtractorInfo[]> {
   if (IS_WEB) return [];
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<ExtractorInfo[]>("list_extractors");
+}
+
+// ── Auto-watch channels ───────────────────────────────────────────────────────
+
+export async function listWatchedChannels(): Promise<WatchedChannel[]> {
+  if (IS_WEB) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel[]>("list_watched_channels");
+}
+
+export async function addWatchedChannel(url: string, tab: string = "all"): Promise<WatchedChannel> {
+  if (IS_WEB) throw new Error("Theo dõi kênh chưa hỗ trợ trên web. Dùng app desktop.");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel>("add_watched_channel", { url, tab });
+}
+
+export async function removeWatchedChannel(id: string): Promise<void> {
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("remove_watched_channel", { id });
+}
+
+export async function setWatchedEnabled(id: string, enabled: boolean): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("set_watched_enabled", { id, enabled });
+}
+
+export async function checkWatchedNow(): Promise<WatchedChannel[]> {
+  if (IS_WEB) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel[]>("check_watched_now");
 }
 
 // ── Douyin scraper ──────────────────────────────────────────────────────────

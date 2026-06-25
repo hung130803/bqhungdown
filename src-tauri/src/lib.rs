@@ -20,6 +20,8 @@ pub mod clipboard;
 pub mod channel_fetcher;
 pub mod ytdlp_runner;
 pub mod ytdlp_update;
+pub mod watchlist_store;
+pub mod watcher;
 pub mod queue;
 pub mod commands;
 
@@ -102,11 +104,25 @@ pub fn run() {
             // picked up automatically without shipping a whole new app version.
             crate::ytdlp_update::spawn_update_check(handle.clone(), data_dir.clone());
 
+            // Auto-watch channels: load the watchlist and start the background
+            // monitor that periodically enqueues new uploads.
+            let watchlist = Arc::new(crate::watchlist_store::WatchlistStore::load(
+                config_dir.join("watchlist.json"),
+            ));
+            crate::watcher::spawn_monitor(
+                handle.clone(),
+                watchlist.clone(),
+                queue.clone(),
+                settings.clone(),
+                history.clone(),
+            );
+
             // Manage state.
             app.manage(settings);
             app.manage(history);
             app.manage(runner);
             app.manage(queue);
+            app.manage(watchlist);
             app.manage(PendingConflicts::default());
 
             Ok(())
@@ -155,6 +171,11 @@ pub fn run() {
             commands::list_extractors,
             commands::get_subtitle_langs,
             commands::set_clipboard_watcher,
+            commands::list_watched_channels,
+            commands::add_watched_channel,
+            commands::remove_watched_channel,
+            commands::set_watched_enabled,
+            commands::check_watched_now,
             commands::app_bootstrap,
         ])
         .run(tauri::generate_context!())

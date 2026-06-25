@@ -584,7 +584,7 @@ async fn run_flat_fetch_attempt(
 /// the partial list (UI shows whatever managed to come back).
 /// Pull a video id out of a YouTube/TikTok/Douyin URL. Returns None for
 /// hosts we don't recognise.
-fn extract_video_id(url: &str) -> Option<String> {
+pub(crate) fn extract_video_id(url: &str) -> Option<String> {
     // YouTube `?v=<id>`
     if let Some(idx) = url.find("?v=").or_else(|| url.find("&v=")) {
         let rest = &url[idx + 3..];

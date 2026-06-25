@@ -162,6 +162,9 @@ impl SettingsStore {
             if let Some(v) = patch.skip_downloaded {
                 s.skip_downloaded = v;
             }
+            if let Some(v) = patch.watch_interval_min {
+                s.watch_interval_min = v.clamp(5, 1440);
+            }
             Ok(())
         })
     }

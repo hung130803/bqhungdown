@@ -6,6 +6,7 @@
   "nav": {
     "home": "New download",
     "queue": "Downloading",
+    "watch": "Watch",
     "history": "History",
     "settings": "Settings"
   },

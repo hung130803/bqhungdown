@@ -171,6 +171,30 @@ pub struct PlaylistEntry {
     pub duration_sec: Option<u64>,
 }
 
+/// A channel the user is auto-watching. The monitor periodically re-fetches it
+/// and enqueues any video whose id isn't in `seen_ids` yet. `seen_ids` is
+/// seeded with the channel's current videos when first added (baseline), so we
+/// only ever grab uploads that appear AFTER watching starts — never the backlog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchedChannel {
+    pub id: String,
+    pub url: String,
+    pub title: Option<String>,
+    pub enabled: bool,
+    /// Which tab to watch: "all" | "videos" | "shorts".
+    pub tab: String,
+    pub added_at: DateTime<Utc>,
+    pub last_checked: Option<DateTime<Utc>>,
+    /// How many new videos the last check enqueued.
+    pub last_new_count: Option<u32>,
+    /// Last error message (e.g. bot block), shown in UI; None when OK.
+    pub last_error: Option<String>,
+    /// Video ids already handled (baseline + everything enqueued since).
+    #[serde(default)]
+    pub seen_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoMetadata {
@@ -303,10 +327,17 @@ pub struct Settings {
     /// Mặc định bật. Archive chỉ ghi nhận video tải từ lúc bật trở đi.
     #[serde(default = "default_true")]
     pub skip_downloaded: bool,
+    /// Phút giữa mỗi lần auto-watch kiểm tra kênh mới. Clamp `5..=1440`.
+    #[serde(default = "default_watch_interval")]
+    pub watch_interval_min: u32,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_watch_interval() -> u32 {
+    60
 }
 
 impl Default for Settings {
@@ -327,6 +358,7 @@ impl Default for Settings {
             cookies_browser: None,
             cookies_file: None,
             skip_downloaded: true,
+            watch_interval_min: 60,
         }
     }
 }
@@ -349,6 +381,7 @@ pub struct SettingsPatch {
     #[serde(default, deserialize_with = "deserialize_optional_optional_string")]
     pub cookies_file: Option<Option<String>>,
     pub skip_downloaded: Option<bool>,
+    pub watch_interval_min: Option<u32>,
 }
 
 /// Custom serde deserializer that distinguishes:

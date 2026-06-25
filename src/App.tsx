@@ -21,6 +21,7 @@ import { PasteUrlPage } from "@/pages/PasteUrlPage";
 import { QueuePage } from "@/pages/QueuePage";
 import { HistoryPage } from "@/pages/HistoryPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { WatchPage } from "@/pages/WatchPage";
 
 export default function App() {
   return (
@@ -103,7 +104,7 @@ function Shell() {
   // browser tab-cycle muscle memory).
   const navigate = useNavigate();
   useEffect(() => {
-    const ROUTES = ["/", "/queue", "/history", "/settings"];
+    const ROUTES = ["/", "/queue", "/watch", "/history", "/settings"];
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.key !== "Tab") return;
       e.preventDefault();
@@ -127,6 +128,7 @@ function Shell() {
           <Routes>
             <Route path="/" element={<PageContainer><PasteUrlPage /></PageContainer>} />
             <Route path="/queue" element={<PageContainer><QueuePage /></PageContainer>} />
+            <Route path="/watch" element={<PageContainer><WatchPage /></PageContainer>} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/settings" element={<PageContainer><SettingsPage /></PageContainer>} />
           </Routes>
@@ -171,6 +173,9 @@ function Header() {
                 </span>
               )}
             </span>
+          </NavLink>
+          <NavLink to="/watch" className={linkClass}>
+            {t("nav.watch")}
           </NavLink>
           <NavLink to="/history" className={linkClass}>
             {t("nav.history")}
