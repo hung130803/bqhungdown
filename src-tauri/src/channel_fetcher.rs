@@ -323,6 +323,7 @@ async fn fetch_douyin_channel(
         video_count: None,
         extractor: "douyin".into(),
         hidden_downloaded: None,
+        channel_id: None,
     };
     let mut videos: Vec<ChannelVideo> = Vec::new();
     let mut cursor: i64 = 0;
@@ -833,6 +834,12 @@ fn parse_channel(source_url: &str, value: Value) -> (ChannelInfo, Vec<ChannelVid
             .unwrap_or("generic")
             .to_string(),
         hidden_downloaded: None,
+        channel_id: value
+            .get("channel_id")
+            .or_else(|| value.get("uploader_id"))
+            .and_then(|v| v.as_str())
+            .filter(|s| s.starts_with("UC"))
+            .map(String::from),
     };
 
     let mut videos = Vec::new();

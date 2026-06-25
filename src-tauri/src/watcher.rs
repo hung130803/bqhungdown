@@ -30,9 +30,20 @@ fn video_id_of(url: &str) -> String {
     crate::channel_fetcher::extract_video_id(url).unwrap_or_else(|| url.to_string())
 }
 
+/// A fetched video plus its dedup id.
+struct Fetched {
+    id: String,
+    video: ChannelVideo,
+}
+
 /// Re-fetch one watched channel and enqueue any new videos. Returns the number
 /// of videos enqueued (0 on baseline / error / nothing new). Always updates the
 /// channel's `last_checked` / `last_new_count` / `last_error`.
+///
+/// Fast path: for an already-baselined YouTube channel whose id we know, we hit
+/// the lightweight RSS feed (no bot wall, ~instant) instead of a heavy yt-dlp
+/// scrape — so the monitor can run every 1-2 minutes safely. Baseline, non-
+/// YouTube channels, or an RSS miss fall back to the yt-dlp path.
 pub async fn check_channel(
     app: &AppHandle,
     store: &Arc<WatchlistStore>,
@@ -45,43 +56,30 @@ pub async fn check_channel(
         Some(c) => c,
         None => return 0,
     };
+    let is_baseline = channel.seen_ids.is_empty();
+
+    // Fast incremental check via RSS (YouTube only, after baseline).
+    if !is_baseline {
+        if let Some(cid) = channel.channel_id.clone() {
+            if let Ok(fetched) = fetch_rss_videos(&cid).await {
+                if !fetched.is_empty() {
+                    return apply(app, store, queue, settings_store, history, &channel, fetched, None, None, id).await;
+                }
+            }
+        }
+    }
+
+    // yt-dlp path: baseline, non-YouTube, or RSS unavailable.
     let settings = settings_store.get();
     let tab = if channel.tab.is_empty() { "all".to_string() } else { channel.tab.clone() };
-
     match crate::channel_fetcher::fetch_channel(app, &channel.url, CHECK_LIMIT, false, &tab, &settings).await {
         Ok((info, videos)) => {
-            let fetched_ids: Vec<String> = videos.iter().map(|v| video_id_of(&v.url)).collect();
-            let is_baseline = channel.seen_ids.is_empty();
-            let seen: std::collections::HashSet<&String> = channel.seen_ids.iter().collect();
-
-            // On baseline we enqueue nothing — just record current videos.
-            let new_videos: Vec<ChannelVideo> = if is_baseline {
-                Vec::new()
-            } else {
-                videos
-                    .iter()
-                    .filter(|v| !seen.contains(&video_id_of(&v.url)))
-                    .cloned()
-                    .collect()
-            };
-
-            let enq = enqueue_new(app, queue, settings_store, history, &channel.title, &new_videos, &settings).await;
-
+            let fetched: Vec<Fetched> = videos
+                .into_iter()
+                .map(|v| Fetched { id: video_id_of(&v.url), video: v })
+                .collect();
             let title = if info.title.is_empty() { None } else { Some(info.title) };
-            let _ = store.update(id, |c| {
-                for fid in &fetched_ids {
-                    if !c.seen_ids.contains(fid) {
-                        c.seen_ids.push(fid.clone());
-                    }
-                }
-                c.last_checked = Some(Utc::now());
-                c.last_new_count = Some(enq);
-                c.last_error = None;
-                if c.title.is_none() {
-                    c.title = title.clone();
-                }
-            });
-            enq
+            apply(app, store, queue, settings_store, history, &channel, fetched, info.channel_id, title, id).await
         }
         Err(e) => {
             let msg = format!("{e}");
@@ -92,6 +90,116 @@ pub async fn check_channel(
             0
         }
     }
+}
+
+/// Diff `fetched` against the channel's `seen_ids`, enqueue new videos (none on
+/// baseline), and persist the updated channel. Returns count enqueued.
+#[allow(clippy::too_many_arguments)]
+async fn apply(
+    app: &AppHandle,
+    store: &Arc<WatchlistStore>,
+    queue: &Arc<QueueManager>,
+    settings_store: &Arc<SettingsStore>,
+    history: &Arc<HistoryStore>,
+    channel: &crate::models::WatchedChannel,
+    fetched: Vec<Fetched>,
+    channel_id: Option<String>,
+    title: Option<String>,
+    id: &str,
+) -> u32 {
+    let is_baseline = channel.seen_ids.is_empty();
+    let seen: std::collections::HashSet<&String> = channel.seen_ids.iter().collect();
+    let new_videos: Vec<ChannelVideo> = if is_baseline {
+        Vec::new()
+    } else {
+        fetched
+            .iter()
+            .filter(|f| !seen.contains(&f.id))
+            .map(|f| f.video.clone())
+            .collect()
+    };
+
+    let settings = settings_store.get();
+    let enq = enqueue_new(app, queue, settings_store, history, &channel.title, &new_videos, &settings).await;
+
+    let _ = store.update(id, |c| {
+        for f in &fetched {
+            if !c.seen_ids.contains(&f.id) {
+                c.seen_ids.push(f.id.clone());
+            }
+        }
+        c.last_checked = Some(Utc::now());
+        c.last_new_count = Some(enq);
+        c.last_error = None;
+        if c.title.is_none() {
+            c.title = title.clone();
+        }
+        if c.channel_id.is_none() {
+            c.channel_id = channel_id.clone();
+        }
+    });
+    enq
+}
+
+/// Fetch a YouTube channel's RSS feed (newest ~15 uploads) and parse out the
+/// video id / title / thumbnail. Lightweight and not bot-gated.
+async fn fetch_rss_videos(channel_id: &str) -> Result<Vec<Fetched>, String> {
+    let url = format!("https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(parse_rss(&body))
+}
+
+fn parse_rss(xml: &str) -> Vec<Fetched> {
+    let mut out = Vec::new();
+    for entry in xml.split("<entry>").skip(1) {
+        let vid = match between(entry, "<yt:videoId>", "</yt:videoId>") {
+            Some(v) if !v.is_empty() => v,
+            _ => continue,
+        };
+        let title = between(entry, "<title>", "</title>").map(|t| unescape_xml(&t)).unwrap_or_default();
+        let thumbnail = between(entry, "<media:thumbnail url=\"", "\"");
+        out.push(Fetched {
+            id: vid.clone(),
+            video: ChannelVideo {
+                url: format!("https://www.youtube.com/watch?v={vid}"),
+                title,
+                duration_sec: None,
+                view_count: None,
+                upload_date: None,
+                thumbnail,
+                is_short: false,
+                is_photo: false,
+            },
+        });
+    }
+    out
+}
+
+fn between(s: &str, start: &str, end: &str) -> Option<String> {
+    let i = s.find(start)? + start.len();
+    let rest = &s[i..];
+    let j = rest.find(end)?;
+    Some(rest[..j].to_string())
+}
+
+fn unescape_xml(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
 }
 
 /// Build queue items for the new videos and enqueue them. Background downloads
@@ -176,7 +284,7 @@ pub fn spawn_monitor(
         tokio::time::sleep(STARTUP_DELAY).await;
         loop {
             let _ = check_all(&app, &store, &queue, &settings_store, &history).await;
-            let interval_min = settings_store.get().watch_interval_min.clamp(5, 1440);
+            let interval_min = settings_store.get().watch_interval_min.clamp(1, 1440);
             tokio::time::sleep(Duration::from_secs(interval_min as u64 * 60)).await;
         }
     });

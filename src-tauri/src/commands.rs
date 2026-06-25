@@ -864,6 +864,7 @@ pub async fn add_watched_channel(
         last_checked: None,
         last_new_count: None,
         last_error: None,
+        channel_id: None,
         seen_ids: vec![],
     };
     store.add(channel)?;

@@ -85,7 +85,8 @@ export function WatchPage() {
       <div>
         <h2 className="text-xl font-medium text-fg">Theo dõi kênh</h2>
         <p className="text-sm text-muted mt-1">
-          Thêm kênh vào đây — app sẽ tự kiểm tra định kỳ và tải video mới đăng (không tải lại video cũ).
+          Thêm kênh vào đây — app tự kiểm tra định kỳ và tải video mới đăng (không tải lại video cũ).
+          Với YouTube dùng kiểm tra nhanh qua RSS nên đặt 1-2 phút là phát hiện video mới gần như tức thì.
           Khi mới thêm, app chỉ ghi nhận video hiện có làm mốc, KHÔNG tải hết kho cũ.
         </p>
       </div>
@@ -126,12 +127,12 @@ export function WatchPage() {
         <span className="text-fg">Kiểm tra mỗi</span>
         <input
           type="number"
-          min={5}
+          min={1}
           max={1440}
           value={interval}
           onChange={(e) => {
             const n = parseInt(e.target.value, 10);
-            if (Number.isFinite(n) && n >= 5) void updateSettings({ watchIntervalMin: n });
+            if (Number.isFinite(n) && n >= 1) void updateSettings({ watchIntervalMin: n });
           }}
           className="w-20 px-2 py-1.5 rounded-md bg-surface border border-border text-fg"
         />

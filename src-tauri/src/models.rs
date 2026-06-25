@@ -137,6 +137,9 @@ pub struct ChannelInfo {
     /// `None` khi tính năng "Bỏ qua video đã tải" tắt. UI hiện "đã ẩn N".
     #[serde(default)]
     pub hidden_downloaded: Option<u32>,
+    /// YouTube channel id (`UC...`) — dùng cho RSS feed kiểm tra nhanh.
+    #[serde(default)]
+    pub channel_id: Option<String>,
 }
 
 /// Single entry inside a channel listing — what the user picks via checkbox.
@@ -190,6 +193,10 @@ pub struct WatchedChannel {
     pub last_new_count: Option<u32>,
     /// Last error message (e.g. bot block), shown in UI; None when OK.
     pub last_error: Option<String>,
+    /// YouTube channel id (`UC...`), resolved on first add. Enables the fast
+    /// RSS-feed check (~1-2 min latency) instead of a heavy yt-dlp scrape.
+    #[serde(default)]
+    pub channel_id: Option<String>,
     /// Video ids already handled (baseline + everything enqueued since).
     #[serde(default)]
     pub seen_ids: Vec<String>,
