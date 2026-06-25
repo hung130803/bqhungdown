@@ -44,6 +44,39 @@ pub fn cancel() {
     FETCH_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
+/// Translate a raw yt-dlp stderr line into a short, actionable Vietnamese
+/// message. Most importantly, detect YouTube's anti-bot wall so the user knows
+/// it's a temporary block (and that updating yt-dlp / retrying usually helps),
+/// not an empty channel.
+fn friendly_fetch_error(raw: &str) -> String {
+    let l = raw.to_lowercase();
+    if l.contains("sign in to confirm")
+        || l.contains("not a bot")
+        || l.contains("confirm you")
+    {
+        return "YouTube đang chặn (yêu cầu xác minh \"không phải robot\"). \
+                App sẽ tự cập nhật yt-dlp ở nền — hãy đợi 1-2 phút rồi thử lại. \
+                Nếu vẫn lỗi, thử lại sau ít phút hoặc đổi mạng/IP."
+            .into();
+    }
+    if l.contains("http error 429") || l.contains("too many requests") {
+        return "YouTube tạm chặn vì tải quá nhiều trong thời gian ngắn (lỗi 429). \
+                Hãy đợi vài phút rồi thử lại, hoặc giảm số kênh tải cùng lúc."
+            .into();
+    }
+    if l.contains("this channel does not have")
+        || l.contains("does not exist")
+        || l.contains("not found")
+    {
+        return "Không tìm thấy video trên kênh (kênh trống, sai link, hoặc tab không có video).".into();
+    }
+    if l.contains("private") || l.contains("members-only") {
+        return "Kênh/nội dung này ở chế độ riêng tư hoặc chỉ dành cho thành viên.".into();
+    }
+    // Fallback: keep the original yt-dlp message so power users can read it.
+    format!("Không lấy được danh sách video: {raw}")
+}
+
 /// Normalise a raw channel/user URL so we can append the correct tab suffix.
 /// `tab` is one of: "videos", "shorts", "streams", or empty/other (leave as-is).
 fn normalise_channel_url(raw: &str, tab: &str) -> String {
@@ -147,6 +180,9 @@ pub async fn fetch_channel(
     let mut info: Option<ChannelInfo> = None;
     let mut videos: Vec<ChannelVideo> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Keep the last real yt-dlp error so we can surface *why* nothing came back
+    // (bot wall vs. private channel vs. network) instead of a generic message.
+    let mut last_err: Option<String> = None;
 
     for t in tabs {
         let resolved = normalise_channel_url(url, t);
@@ -166,15 +202,22 @@ pub async fn fetch_channel(
                     }
                 }
             }
-            Ok(Err(_)) | Err(_) => {
-            }
+            Ok(Err(AppError::YtDlpFailed(msg))) => last_err = Some(msg),
+            Ok(Err(e)) => last_err = Some(e.to_string()),
+            Err(_) => last_err = Some("Hết thời gian chờ (timeout)".into()),
         }
         if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
             return Err(AppError::YtDlpFailed("Đã huỷ".into()));
         }
     }
 
-    let info = info.ok_or_else(|| AppError::YtDlpFailed("Không có video nào trên kênh".into()))?;
+    let info = match info {
+        Some(i) => i,
+        None => {
+            let raw = last_err.unwrap_or_else(|| "Không có video nào trên kênh".into());
+            return Err(AppError::YtDlpFailed(friendly_fetch_error(&raw)));
+        }
+    };
 
     // Sort descending by upload_date so newest videos come first.
     videos.sort_by(|a, b| b.upload_date.cmp(&a.upload_date));

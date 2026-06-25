@@ -102,10 +102,13 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
         args.push("--force-generic-extractor".into());
     }
 
-    // NOTE: We do not set `--extractor-args player_client=...` because limiting
-    // the player client list also limits which formats YouTube exposes (e.g.,
-    // android tops out at 720p, tv_simply returns nothing). Default behaviour
-    // (let yt-dlp negotiate) gives us up to 2160p / 4K when available.
+    // NOTE: We deliberately do NOT pin `--extractor-args player_client=...`.
+    // Tested 2026-06 against a fresh yt-dlp: forcing `tv`/`web_safari`/`mweb`
+    // returned ZERO formats, while yt-dlp's own `default` client set returned
+    // the full ladder up to 2160p/4K. The maintainers tune `default` per
+    // release to be the best working combo, so the real anti-bot fix is simply
+    // keeping yt-dlp current — see `ytdlp_update`. Pinning a client here makes
+    // things worse, not better.
 
     // NOTE: We previously tried `--cookies-from-browser edge` to bypass YouTube
     // anti-bot, but Edge/Chrome on Windows now use AppBound encryption that yt-dlp

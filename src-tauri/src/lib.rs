@@ -19,6 +19,7 @@ pub mod douyin_scraper;
 pub mod clipboard;
 pub mod channel_fetcher;
 pub mod ytdlp_runner;
+pub mod ytdlp_update;
 pub mod queue;
 pub mod commands;
 
@@ -95,10 +96,11 @@ pub fn run() {
             let watcher = crate::clipboard::ClipboardWatcher::new(handle.clone(), settings.clone());
             watcher.start();
 
-            // NOTE: yt-dlp auto-update on startup intentionally disabled.
-            // Updates ship with each app release (GitHub Actions re-fetches the
-            // latest yt-dlp at build time and bundles it into the installer).
-            // Users get yt-dlp updates by accepting the in-app "Cập nhật" banner.
+            // Keep yt-dlp fresh on every machine, decoupled from app releases.
+            // YouTube breaks old yt-dlp builds every few weeks; this throttled
+            // background self-update (max once / 12h) means a YouTube change is
+            // picked up automatically without shipping a whole new app version.
+            crate::ytdlp_update::spawn_update_check(handle.clone(), data_dir.clone());
 
             // Manage state.
             app.manage(settings);
