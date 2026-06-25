@@ -249,6 +249,8 @@ export interface Settings {
   skipDownloaded: boolean;
   /** Phút giữa mỗi lần auto-watch kiểm tra kênh (5–1440). */
   watchIntervalMin: number;
+  /** Danh sách proxy (mỗi dòng 1 cái). App tự xoay vòng + đổi khi bị chặn bot. */
+  proxies: string[];
 }
 
 export type SettingsPatch = Partial<Settings>;

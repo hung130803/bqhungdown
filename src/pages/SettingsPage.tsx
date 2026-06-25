@@ -126,6 +126,21 @@ export function SettingsPage() {
         </div>
       </Field>
       <p className="text-xs text-muted -mt-3">{t("settings.cookiesFileHint")}</p>
+
+      <Field label="Proxy (chống chặn khi tải số lượng lớn)">
+        <textarea
+          rows={4}
+          value={(settings.proxies ?? []).join("\n")}
+          onChange={e => set("proxies", e.target.value.split("\n") as unknown as Settings["proxies"])}
+          placeholder={"Mỗi dòng 1 proxy, ví dụ:\nhttp://user:pass@host:port\nsocks5://host:port"}
+          className="w-full px-3 py-2 rounded-md bg-surface border border-border text-fg placeholder:text-muted font-mono text-xs"
+          spellCheck={false}
+        />
+      </Field>
+      <p className="text-xs text-muted -mt-3">
+        Dán nhiều proxy (mỗi dòng 1 cái) — app tự xoay vòng và tự đổi proxy khi bị YouTube chặn.
+        Nên dùng proxy <b>dân cư (residential)</b>; proxy datacenter thường bị chặn. Để trống = không dùng.
+      </p>
     </div>
   );
 }

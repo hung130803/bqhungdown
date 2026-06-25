@@ -359,6 +359,12 @@ pub struct Settings {
     /// Phút giữa mỗi lần auto-watch kiểm tra kênh mới. Clamp `5..=1440`.
     #[serde(default = "default_watch_interval")]
     pub watch_interval_min: u32,
+    /// Danh sách proxy (mỗi dòng 1 cái, ví dụ `http://user:pass@host:port` hoặc
+    /// `socks5://host:port`). Rỗng = không dùng proxy. App tự xoay vòng + đổi
+    /// proxy khi bị chặn bot — cách duy nhất tải số lượng lớn không bị YouTube
+    /// chặn IP. Nên dùng proxy DÂN CƯ (residential), proxy datacenter hay bị chặn.
+    #[serde(default)]
+    pub proxies: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -388,6 +394,7 @@ impl Default for Settings {
             cookies_file: None,
             skip_downloaded: true,
             watch_interval_min: 60,
+            proxies: Vec::new(),
         }
     }
 }
@@ -411,6 +418,7 @@ pub struct SettingsPatch {
     pub cookies_file: Option<Option<String>>,
     pub skip_downloaded: Option<bool>,
     pub watch_interval_min: Option<u32>,
+    pub proxies: Option<Vec<String>>,
 }
 
 /// Custom serde deserializer that distinguishes:

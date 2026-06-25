@@ -24,6 +24,30 @@ fn should_force_generic(url: &str) -> bool {
     FORCE_GENERIC_EXTRACTORS.contains(&extractor)
 }
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Round-robin cursor over the configured proxy list. Each yt-dlp invocation
+/// advances it, so requests spread across proxies; a bot error advances it
+/// again on retry → a fresh IP.
+static PROXY_CURSOR: AtomicUsize = AtomicUsize::new(0);
+
+/// Pick the next proxy round-robin, or `None` when no proxies are configured.
+pub fn next_proxy(settings: &Settings) -> Option<String> {
+    if settings.proxies.is_empty() {
+        return None;
+    }
+    let i = PROXY_CURSOR.fetch_add(1, Ordering::Relaxed);
+    settings.proxies.get(i % settings.proxies.len()).cloned()
+}
+
+/// Push `--proxy <url>` for the next proxy in rotation (no-op if none set).
+pub fn push_proxy_args(args: &mut Vec<String>, settings: &Settings) {
+    if let Some(p) = next_proxy(settings) {
+        args.push("--proxy".into());
+        args.push(p);
+    }
+}
+
 /// Push `--cookies <file>` or `--cookies-from-browser <browser>` based on
 /// settings. File takes priority over browser (browser cookies hit AppBound/
 /// DPAPI decryption failures on modern Windows Chrome/Edge). Shared by every
@@ -117,6 +141,7 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
     // Ưu tiên file cookies.txt > browser khi cả 2 cùng set, vì AppBound
     // encryption của Edge/Chrome trên Windows làm browser-based fail.
     push_cookie_args(&mut args, settings);
+    push_proxy_args(&mut args, settings);
 
     // Sites without a native yt-dlp extractor but with direct media in HTML
     // (viralhog, 9gag, imgur, redgifs…) → force the generic extractor so it

@@ -522,6 +522,7 @@ async fn run_flat_fetch_attempt(
         args.push(limit.to_string());
     }
     crate::args_builder::push_cookie_args(&mut args, settings);
+    crate::args_builder::push_proxy_args(&mut args, settings);
     args.push(resolved.to_string());
 
     let cmd = app
@@ -745,6 +746,7 @@ async fn probe_batch_attempt(
         print_tpl.into(),
     ];
     crate::args_builder::push_cookie_args(&mut args, settings);
+    crate::args_builder::push_proxy_args(&mut args, settings);
     for u in urls {
         args.push(u.clone());
     }

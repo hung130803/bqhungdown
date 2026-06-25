@@ -579,7 +579,13 @@ impl QueueManager {
         let (should_retry, delay) = {
             let mut map = self.items.write().unwrap();
             let it = match map.get_mut(&id) { Some(i) => i, None => return };
-            let delay = next_retry_delay(it.attempt);
+            // Bot/429 errors: back off ≥60s so the IP cools down (or the next
+            // attempt rotates to a fresh proxy). Normal errors use the short ladder.
+            let delay = if crate::error::is_bot_error(&reason) {
+                next_retry_delay(it.attempt).map(|d| d.max(Duration::from_secs(60)))
+            } else {
+                next_retry_delay(it.attempt)
+            };
             it.attempt += 1;
             it.error_message = Some(reason.clone());
             (delay.is_some(), delay)

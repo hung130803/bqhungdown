@@ -51,6 +51,18 @@ pub type AppResult<T> = Result<T, AppError>;
 /// (modern Chrome/Edge on Windows use AppBound/DPAPI encryption that yt-dlp
 /// can't decrypt). When this happens we retry the call WITHOUT cookies, since
 /// public videos don't need them. See https://github.com/yt-dlp/yt-dlp/issues/10927
+/// True when yt-dlp hit YouTube's anti-bot / rate-limit wall ("Sign in to
+/// confirm you're not a bot" or HTTP 429). We respond by rotating to the next
+/// proxy (if configured) and backing off longer before retrying.
+pub fn is_bot_error(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    l.contains("sign in to confirm")
+        || l.contains("not a bot")
+        || l.contains("confirm you")
+        || l.contains("http error 429")
+        || l.contains("too many requests")
+}
+
 pub fn is_cookie_decrypt_error(msg: &str) -> bool {
     let l = msg.to_lowercase();
     l.contains("dpapi")

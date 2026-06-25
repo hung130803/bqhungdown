@@ -119,6 +119,7 @@ impl YtDlpRunner {
         // YouTube age-gated. File cookies.txt ưu tiên hơn browser (AppBound
         // encryption issue). Caller retries without cookies on DPAPI failure.
         args_builder::push_cookie_args(&mut args, settings);
+        args_builder::push_proxy_args(&mut args, settings);
         if force_generic {
             args.push("--force-generic-extractor".into());
         }
@@ -199,6 +200,16 @@ impl YtDlpRunner {
             .await?;
 
         if let RunOutcome::Failed { reason } = &outcome {
+            // YouTube anti-bot / 429 — if proxies are configured, retry once so
+            // run_once rebuilds args and rotates to the next proxy (fresh IP).
+            if !settings.proxies.is_empty()
+                && crate::error::is_bot_error(reason)
+                && !cancel.is_cancelled()
+            {
+                return self
+                    .run_once(item, settings, resume, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
+                    .await;
+            }
             // Browser cookies couldn't be decrypted (DPAPI) — retry without them.
             // Public videos don't need cookies, so this recovers transparently.
             if args_builder::settings_have_cookies(settings)

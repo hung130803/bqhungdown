@@ -165,6 +165,15 @@ impl SettingsStore {
             if let Some(v) = patch.watch_interval_min {
                 s.watch_interval_min = v.clamp(1, 1440);
             }
+            if let Some(list) = patch.proxies {
+                // Trim + drop blank lines so a textarea with trailing newlines
+                // doesn't create empty "proxies".
+                s.proxies = list
+                    .into_iter()
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+            }
             Ok(())
         })
     }
