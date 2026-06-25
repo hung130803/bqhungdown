@@ -22,7 +22,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Pending conflict resolutions, keyed by short_id. Frontend sends choice via
 /// `resolve_conflict`; queue/runner reads from this map (future use).
@@ -427,9 +427,30 @@ pub async fn update_settings(
     app: AppHandle,
 ) -> AppResult<Settings> {
     let new_concurrency = patch.max_concurrency;
+    let po_change = patch.po_token_enabled;
     let next = settings.apply_patch(patch)?;
     if let Some(n) = new_concurrency {
         queue.set_concurrency(n).await;
+    }
+    // Start/stop the PO token provider live when the toggle flips.
+    if let Some(enabled) = po_change {
+        let po_arc = app
+            .state::<Arc<crate::po_token::ProviderProcess>>()
+            .inner()
+            .clone();
+        let yt_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|x| x.to_path_buf()));
+        if enabled {
+            if let Ok(dd) = app.path().app_data_dir() {
+                crate::po_token::enable(app.clone(), dd, yt_dir, po_arc);
+            }
+        } else {
+            crate::po_token::shutdown(&po_arc);
+            if let Some(dir) = yt_dir.as_deref() {
+                crate::po_token::uninstall_plugin(dir);
+            }
+        }
     }
     let _ = app.emit(EV_SETTINGS_CHANGED, next.clone());
     Ok(next)

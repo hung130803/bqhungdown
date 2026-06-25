@@ -365,6 +365,10 @@ pub struct Settings {
     /// chặn IP. Nên dùng proxy DÂN CƯ (residential), proxy datacenter hay bị chặn.
     #[serde(default)]
     pub proxies: Vec<String>,
+    /// Bật PO Token provider (bgutil) — giảm chặn bot YouTube mà không cần
+    /// cookie. App tự tải + chạy server token ngầm. Mặc định tắt (opt-in).
+    #[serde(default)]
+    pub po_token_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -395,6 +399,7 @@ impl Default for Settings {
             skip_downloaded: true,
             watch_interval_min: 60,
             proxies: Vec::new(),
+            po_token_enabled: false,
         }
     }
 }
@@ -419,6 +424,7 @@ pub struct SettingsPatch {
     pub skip_downloaded: Option<bool>,
     pub watch_interval_min: Option<u32>,
     pub proxies: Option<Vec<String>>,
+    pub po_token_enabled: Option<bool>,
 }
 
 /// Custom serde deserializer that distinguishes:

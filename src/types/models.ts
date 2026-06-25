@@ -251,6 +251,8 @@ export interface Settings {
   watchIntervalMin: number;
   /** Danh sách proxy (mỗi dòng 1 cái). App tự xoay vòng + đổi khi bị chặn bot. */
   proxies: string[];
+  /** Bật PO Token (bgutil) — giảm chặn bot không cần cookie (app tự tải + chạy ngầm). */
+  poTokenEnabled: boolean;
 }
 
 export type SettingsPatch = Partial<Settings>;

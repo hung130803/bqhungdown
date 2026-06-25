@@ -22,6 +22,7 @@ pub mod ytdlp_runner;
 pub mod ytdlp_update;
 pub mod watchlist_store;
 pub mod watcher;
+pub mod po_token;
 pub mod queue;
 pub mod commands;
 
@@ -117,12 +118,25 @@ pub fn run() {
                 history.clone(),
             );
 
+            // PO Token provider (bgutil) — opt-in anti-bot helper. Start it in
+            // the background when enabled; killed on shutdown.
+            let po_proc = Arc::new(crate::po_token::ProviderProcess::default());
+            if settings.get().po_token_enabled {
+                crate::po_token::enable(
+                    handle.clone(),
+                    data_dir.clone(),
+                    bundled_dir.clone(),
+                    po_proc.clone(),
+                );
+            }
+
             // Manage state.
             app.manage(settings);
             app.manage(history);
             app.manage(runner);
             app.manage(queue);
             app.manage(watchlist);
+            app.manage(po_proc);
             app.manage(PendingConflicts::default());
 
             Ok(())
@@ -131,6 +145,9 @@ pub fn run() {
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(queue) = window.try_state::<Arc<QueueManager>>() {
                     queue.shutdown();
+                }
+                if let Some(po) = window.try_state::<Arc<crate::po_token::ProviderProcess>>() {
+                    crate::po_token::shutdown(&po);
                 }
             }
         })

@@ -174,6 +174,9 @@ impl SettingsStore {
                     .filter(|p| !p.is_empty())
                     .collect();
             }
+            if let Some(v) = patch.po_token_enabled {
+                s.po_token_enabled = v;
+            }
             Ok(())
         })
     }

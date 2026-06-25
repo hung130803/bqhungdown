@@ -141,6 +141,16 @@ export function SettingsPage() {
         Dán nhiều proxy (mỗi dòng 1 cái) — app tự xoay vòng và tự đổi proxy khi bị YouTube chặn.
         Nên dùng proxy <b>dân cư (residential)</b>; proxy datacenter thường bị chặn. Để trống = không dùng.
       </p>
+
+      <Toggle
+        label="Bật PO Token (giảm chặn bot, không cần cookie)"
+        checked={settings.poTokenEnabled ?? false}
+        onChange={v => set("poTokenEnabled", v)}
+      />
+      <p className="text-xs text-muted -mt-3">
+        Lần đầu bật, app tải gói chống bot (~46MB) rồi chạy ngầm. Giúp đỡ bị "đòi robot" mà không cần cookie.
+        Lưu ý: không đổi IP — tải cực nhiều vẫn nên dùng proxy. Lỗi gì thì tải vẫn chạy bình thường.
+      </p>
     </div>
   );
 }
