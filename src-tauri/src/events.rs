@@ -13,6 +13,7 @@ pub const EV_CLIPBOARD_DETECTED: &str   = "clipboard://detected";
 pub const EV_NOTIFICATION_CLICKED: &str = "notification://clicked";
 pub const EV_SETTINGS_CHANGED: &str     = "settings://changed";
 pub const EV_QUEUE_UPDATED: &str        = "queue://updated";
+pub const EV_WATCH_UPDATED: &str        = "watch://updated";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,3 +51,7 @@ pub struct NotificationClickedPayload { pub short_id: String }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueUpdatedPayload { pub items: Vec<DownloadItem> }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchUpdatedPayload { pub channel_id: String, pub new_count: u32 }

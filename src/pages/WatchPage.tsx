@@ -31,6 +31,16 @@ export function WatchPage() {
     void reload();
   }, []);
 
+  // Live refresh when the background monitor detects new videos.
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      un = await listen("watch://updated", () => { void reload(); });
+    })();
+    return () => un?.();
+  }, []);
+
   const add = async () => {
     const u = url.trim();
     if (!u || adding) return;
@@ -59,6 +69,33 @@ export function WatchPage() {
   const toggle = async (id: string, enabled: boolean) => {
     try {
       await cmd.setWatchedEnabled(id, enabled);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
+  const toggleAuto = async (id: string, auto: boolean) => {
+    try {
+      await cmd.setWatchedAutoDownload(id, auto);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
+  const downloadOne = async (id: string, videoUrl: string) => {
+    try {
+      await cmd.downloadPending(id, videoUrl);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
+  const dismissOne = async (id: string, videoUrl: string) => {
+    try {
+      await cmd.dismissPending(id, videoUrl);
       await reload();
     } catch (e) {
       setError(formatErr(e));
@@ -158,42 +195,86 @@ export function WatchPage() {
           <p className="text-muted text-center py-8 text-sm">Chưa theo dõi kênh nào.</p>
         )}
         {channels.map((c) => (
-          <div key={c.id} className="flex items-center gap-3 p-3 rounded-lg border border-border bg-surface">
-            <input
-              type="checkbox"
-              checked={c.enabled}
-              onChange={(e) => void toggle(c.id, e.target.checked)}
-              className="h-4 w-4 shrink-0"
-              title={c.enabled ? "Đang theo dõi" : "Đã tạm dừng"}
-            />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-fg truncate" title={c.url}>
-                {c.title || c.url}
-              </div>
-              <div className="text-xs text-muted truncate flex items-center gap-2">
-                <span>{tabLabel(c.tab)}</span>
-                <span>·</span>
-                <span>{c.lastChecked ? `Kiểm tra: ${formatTime(c.lastChecked)}` : "Chưa kiểm tra"}</span>
-                {typeof c.lastNewCount === "number" && c.lastNewCount > 0 && (
-                  <>
-                    <span>·</span>
-                    <span className="text-success">+{c.lastNewCount} video mới</span>
-                  </>
+          <div key={c.id} className="rounded-lg border border-border bg-surface">
+            <div className="flex items-center gap-3 p-3">
+              <input
+                type="checkbox"
+                checked={c.enabled}
+                onChange={(e) => void toggle(c.id, e.target.checked)}
+                className="h-4 w-4 shrink-0"
+                title={c.enabled ? "Đang theo dõi" : "Đã tạm dừng"}
+              />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-fg truncate" title={c.url}>
+                  {c.title || c.url}
+                </div>
+                <div className="text-xs text-muted truncate flex items-center gap-2">
+                  <span>{tabLabel(c.tab)}</span>
+                  <span>·</span>
+                  <span>{c.lastChecked ? `Kiểm tra: ${formatTime(c.lastChecked)}` : "Chưa kiểm tra"}</span>
+                  {typeof c.lastNewCount === "number" && c.lastNewCount > 0 && (
+                    <>
+                      <span>·</span>
+                      <span className="text-success">+{c.lastNewCount} video mới</span>
+                    </>
+                  )}
+                </div>
+                {c.lastError && (
+                  <div className="text-xs text-danger truncate mt-0.5" title={c.lastError}>
+                    ⚠ {c.lastError}
+                  </div>
                 )}
               </div>
-              {c.lastError && (
-                <div className="text-xs text-danger truncate mt-0.5" title={c.lastError}>
-                  ⚠ {c.lastError}
-                </div>
-              )}
+              {/* Tự tải vs Chỉ báo */}
+              <button
+                onClick={() => void toggleAuto(c.id, !c.autoDownload)}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium shrink-0 border ${
+                  c.autoDownload
+                    ? "bg-accent text-accent-fg border-accent"
+                    : "bg-surface-2 text-fg border-border"
+                }`}
+                title={c.autoDownload ? "Đang TỰ TẢI video mới — bấm để chỉ báo" : "Chỉ BÁO video mới — bấm để tự tải"}
+              >
+                {c.autoDownload ? "Tự tải" : "Chỉ báo"}
+              </button>
+              <button
+                onClick={() => void remove(c.id)}
+                className="px-2 py-1 rounded-md border border-border text-fg shrink-0 hover:bg-surface-2"
+                title="Bỏ theo dõi"
+              >
+                ✕
+              </button>
             </div>
-            <button
-              onClick={() => void remove(c.id)}
-              className="px-2 py-1 rounded-md border border-border text-fg shrink-0 hover:bg-surface-2"
-              title="Bỏ theo dõi"
-            >
-              ✕
-            </button>
+
+            {/* Video mới phát hiện (chế độ "Chỉ báo") — chờ bấm tải */}
+            {c.pending && c.pending.length > 0 && (
+              <div className="border-t border-border">
+                <div className="px-3 py-1.5 text-xs text-muted bg-surface-2">
+                  {c.pending.length} video mới — bấm "Tải" để lấy về
+                </div>
+                {c.pending.map((p) => (
+                  <div key={p.id} className="flex items-center gap-3 px-3 py-2 border-t border-border">
+                    <div className="text-sm text-fg flex-1 min-w-0">
+                      <div className="truncate" title={p.title}>{p.title || p.url}</div>
+                      <div className="text-xs text-muted">đăng {timeAgo(p.published ?? p.detectedAt)}</div>
+                    </div>
+                    <button
+                      onClick={() => void downloadOne(c.id, p.url)}
+                      className="px-3 py-1 rounded-md bg-accent text-accent-fg text-xs font-medium shrink-0"
+                    >
+                      Tải
+                    </button>
+                    <button
+                      onClick={() => void dismissOne(c.id, p.url)}
+                      className="px-2 py-1 rounded-md border border-border text-fg text-xs shrink-0 hover:bg-surface-2"
+                      title="Bỏ qua, không tải"
+                    >
+                      Bỏ qua
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -213,6 +294,26 @@ function formatTime(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/** "vừa xong" / "X phút trước" / "X giờ trước" / "X ngày trước". Accepts ISO or
+ *  YYYYMMDD (yt-dlp date-only). */
+function timeAgo(value?: string | null): string {
+  if (!value) return "";
+  let d: Date;
+  if (/^\d{8}$/.test(value)) {
+    d = new Date(+value.slice(0, 4), +value.slice(4, 6) - 1, +value.slice(6, 8));
+  } else {
+    d = new Date(value);
+  }
+  const ms = Date.now() - d.getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "vừa xong";
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "vừa xong";
+  if (min < 60) return `${min} phút trước`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} giờ trước`;
+  return `${Math.floor(h / 24)} ngày trước`;
 }
 
 function formatErr(e: unknown): string {

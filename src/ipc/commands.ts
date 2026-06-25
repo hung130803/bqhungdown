@@ -428,6 +428,24 @@ export async function checkWatchedNow(): Promise<WatchedChannel[]> {
   return invoke<WatchedChannel[]>("check_watched_now");
 }
 
+export async function setWatchedAutoDownload(id: string, auto: boolean): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("set_watched_auto_download", { id, auto });
+}
+
+export async function downloadPending(id: string, videoUrl: string): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("download_pending", { id, videoUrl });
+}
+
+export async function dismissPending(id: string, videoUrl: string): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("dismiss_pending", { id, videoUrl });
+}
+
 // ── Douyin scraper ──────────────────────────────────────────────────────────
 
 export async function scrapeDouyinChannel(url: string): Promise<DouyinPost[]> {

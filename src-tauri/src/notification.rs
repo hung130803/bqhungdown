@@ -34,6 +34,32 @@ pub fn notify_failed(app: &AppHandle, settings: &Settings, item: &DownloadItem, 
         .show();
 }
 
+/// Notify that a watched channel just posted new video(s). `auto` switches the
+/// wording between "đang tải" (auto-download) and "bấm để tải" (notify-only).
+pub fn notify_new_videos(
+    app: &AppHandle,
+    settings: &Settings,
+    channel: &str,
+    count: u32,
+    first_title: &str,
+    auto: bool,
+) {
+    if !settings.notifications {
+        return;
+    }
+    let title = if auto {
+        format!("🔔 {channel} có {count} video mới — đang tải")
+    } else {
+        format!("🔔 {channel} có {count} video mới")
+    };
+    let body = if count == 1 {
+        first_title.to_string()
+    } else {
+        format!("Mới nhất: {first_title}")
+    };
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
 pub fn dispatch_terminal(app: &AppHandle, settings: &Settings, item: &DownloadItem) {
     use crate::models::DownloadState::*;
     match item.state {

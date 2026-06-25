@@ -197,9 +197,31 @@ pub struct WatchedChannel {
     /// RSS-feed check (~1-2 min latency) instead of a heavy yt-dlp scrape.
     #[serde(default)]
     pub channel_id: Option<String>,
+    /// Khi true: video mới phát hiện được TỰ TẢI. Khi false ("Chỉ báo"): chỉ
+    /// thông báo + đưa vào `pending` để user tự bấm tải. Mặc định true.
+    #[serde(default = "default_true")]
+    pub auto_download: bool,
+    /// Video mới phát hiện ở chế độ "Chỉ báo" (chưa tải), chờ user xử lý.
+    #[serde(default)]
+    pub pending: Vec<DetectedVideo>,
     /// Video ids already handled (baseline + everything enqueued since).
     #[serde(default)]
     pub seen_ids: Vec<String>,
+}
+
+/// A new video detected by the watcher in "notify only" mode — shown in the UI
+/// with how long ago it was published, awaiting a manual download/dismiss.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedVideo {
+    pub id: String,
+    pub url: String,
+    pub title: String,
+    pub thumbnail: Option<String>,
+    /// ISO-8601 publish time from the RSS `<published>` tag (or `YYYYMMDD` from
+    /// yt-dlp). UI computes "đăng X phút trước" from this.
+    pub published: Option<String>,
+    pub detected_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -189,6 +189,16 @@ export interface ChannelFetchResult {
 // Auto-watch channels
 // ──────────────────────────────────────────────────────────────────────────────
 
+export interface DetectedVideo {
+  id: string;
+  url: string;
+  title: string;
+  thumbnail?: string | null;
+  /** ISO-8601 publish time (or YYYYMMDD). UI shows "đăng X phút trước". */
+  published?: string | null;
+  detectedAt: string;
+}
+
 export interface WatchedChannel {
   id: string;
   url: string;
@@ -198,9 +208,14 @@ export interface WatchedChannel {
   tab: string;
   addedAt: string;
   lastChecked?: string | null;
-  /** New videos enqueued on the last check. */
+  /** New videos detected on the last check. */
   lastNewCount?: number | null;
   lastError?: string | null;
+  channelId?: string | null;
+  /** True = auto-download new videos; false = chỉ báo (notify only). */
+  autoDownload: boolean;
+  /** Videos detected in notify-only mode, awaiting manual download. */
+  pending?: DetectedVideo[];
   seenIds?: string[];
 }
 

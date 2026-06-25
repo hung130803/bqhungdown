@@ -12,10 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use crate::history_store::HistoryStore;
-use crate::models::{ChannelVideo, ConflictPolicy, DownloadMode, DownloadOptions};
+use crate::models::{ChannelVideo, ConflictPolicy, DetectedVideo, DownloadMode, DownloadOptions};
 use crate::queue::QueueManager;
 use crate::settings_store::SettingsStore;
 use crate::watchlist_store::WatchlistStore;
@@ -30,10 +30,11 @@ fn video_id_of(url: &str) -> String {
     crate::channel_fetcher::extract_video_id(url).unwrap_or_else(|| url.to_string())
 }
 
-/// A fetched video plus its dedup id.
+/// A fetched video plus its dedup id and publish time (for "đăng X phút trước").
 struct Fetched {
     id: String,
     video: ChannelVideo,
+    published: Option<String>,
 }
 
 /// Re-fetch one watched channel and enqueue any new videos. Returns the number
@@ -76,7 +77,11 @@ pub async fn check_channel(
         Ok((info, videos)) => {
             let fetched: Vec<Fetched> = videos
                 .into_iter()
-                .map(|v| Fetched { id: video_id_of(&v.url), video: v })
+                .map(|v| Fetched {
+                    id: video_id_of(&v.url),
+                    published: v.upload_date.clone(),
+                    video: v,
+                })
                 .collect();
             let title = if info.title.is_empty() { None } else { Some(info.title) };
             apply(app, store, queue, settings_store, history, &channel, fetched, info.channel_id, title, id).await
@@ -109,18 +114,45 @@ async fn apply(
 ) -> u32 {
     let is_baseline = channel.seen_ids.is_empty();
     let seen: std::collections::HashSet<&String> = channel.seen_ids.iter().collect();
-    let new_videos: Vec<ChannelVideo> = if is_baseline {
+    // New = fetched videos not seen before (none on baseline).
+    let new_fetched: Vec<&Fetched> = if is_baseline {
         Vec::new()
     } else {
-        fetched
-            .iter()
-            .filter(|f| !seen.contains(&f.id))
-            .map(|f| f.video.clone())
-            .collect()
+        fetched.iter().filter(|f| !seen.contains(&f.id)).collect()
     };
-
+    let new_count = new_fetched.len() as u32;
     let settings = settings_store.get();
-    let enq = enqueue_new(app, queue, settings_store, history, &channel.title, &new_videos, &settings).await;
+    let auto = channel.auto_download;
+
+    if new_count > 0 {
+        let chan_name = channel.title.clone().unwrap_or_else(|| channel.url.clone());
+        let first = new_fetched.first().map(|f| f.video.title.clone()).unwrap_or_default();
+        crate::notification::notify_new_videos(app, &settings, &chan_name, new_count, &first, auto);
+
+        if auto {
+            let vids: Vec<ChannelVideo> = new_fetched.iter().map(|f| f.video.clone()).collect();
+            enqueue_new(app, queue, settings_store, history, &channel.title, &vids, &settings).await;
+        }
+    }
+
+    let now = Utc::now();
+    // In "notify only" mode, remember the new videos so the UI can list them
+    // with a manual download button. Auto mode pushes them to the queue instead.
+    let detections: Vec<DetectedVideo> = if !auto {
+        new_fetched
+            .iter()
+            .map(|f| DetectedVideo {
+                id: f.id.clone(),
+                url: f.video.url.clone(),
+                title: f.video.title.clone(),
+                thumbnail: f.video.thumbnail.clone(),
+                published: f.published.clone(),
+                detected_at: now,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     let _ = store.update(id, |c| {
         for f in &fetched {
@@ -128,8 +160,8 @@ async fn apply(
                 c.seen_ids.push(f.id.clone());
             }
         }
-        c.last_checked = Some(Utc::now());
-        c.last_new_count = Some(enq);
+        c.last_checked = Some(now);
+        c.last_new_count = Some(new_count);
         c.last_error = None;
         if c.title.is_none() {
             c.title = title.clone();
@@ -137,8 +169,22 @@ async fn apply(
         if c.channel_id.is_none() {
             c.channel_id = channel_id.clone();
         }
+        // Newest detections first; cap to keep the list bounded.
+        for d in detections.iter().rev() {
+            c.pending.insert(0, d.clone());
+        }
+        if c.pending.len() > 200 {
+            c.pending.truncate(200);
+        }
     });
-    enq
+
+    if new_count > 0 {
+        let _ = app.emit(
+            crate::events::EV_WATCH_UPDATED,
+            crate::events::WatchUpdatedPayload { channel_id: id.to_string(), new_count },
+        );
+    }
+    new_count
 }
 
 /// Fetch a YouTube channel's RSS feed (newest ~15 uploads) and parse out the
@@ -169,8 +215,10 @@ fn parse_rss(xml: &str) -> Vec<Fetched> {
         };
         let title = between(entry, "<title>", "</title>").map(|t| unescape_xml(&t)).unwrap_or_default();
         let thumbnail = between(entry, "<media:thumbnail url=\"", "\"");
+        let published = between(entry, "<published>", "</published>");
         out.push(Fetched {
             id: vid.clone(),
+            published,
             video: ChannelVideo {
                 url: format!("https://www.youtube.com/watch?v={vid}"),
                 title,

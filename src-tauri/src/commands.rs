@@ -6,7 +6,7 @@ use crate::extractors;
 use crate::filename_resolver::{self, ResolveOutcome};
 use crate::history_store::HistoryStore;
 use crate::models::{
-    BootstrapPayload, ChannelInfo, ChannelVideo, ConflictChoice, ConflictPolicy, DownloadItem, DownloadOptions,
+    BootstrapPayload, ChannelInfo, ChannelVideo, ConflictChoice, ConflictPolicy, DownloadItem, DownloadMode, DownloadOptions,
     DownloadRequest, DownloadState, ExtractorInfo, HistoryEntry, Settings, SettingsPatch,
     SubtitleTrack, UrlValidation, VideoMetadata, WatchedChannel,
 };
@@ -865,6 +865,8 @@ pub async fn add_watched_channel(
         last_new_count: None,
         last_error: None,
         channel_id: None,
+        auto_download: true,
+        pending: vec![],
         seen_ids: vec![],
     };
     store.add(channel)?;
@@ -889,6 +891,64 @@ pub fn set_watched_enabled(
     store: State<Arc<WatchlistStore>>,
 ) -> AppResult<Option<WatchedChannel>> {
     store.update(&id, |c| c.enabled = enabled)
+}
+
+/// Switch a channel between "tự tải" (auto-download) and "chỉ báo" (notify-only).
+#[tauri::command]
+pub fn set_watched_auto_download(
+    id: String,
+    auto: bool,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    store.update(&id, |c| c.auto_download = auto)
+}
+
+/// Manually download one video that was detected in "notify only" mode, then
+/// drop it from the channel's pending list.
+#[tauri::command]
+pub async fn download_pending(
+    id: String,
+    video_url: String,
+    store: State<'_, Arc<WatchlistStore>>,
+    queue: State<'_, Arc<QueueManager>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    history: State<'_, Arc<HistoryStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    let channel = store.get(&id).ok_or_else(|| AppError::NotFound(id.clone()))?;
+    let det = match channel.pending.iter().find(|d| d.url == video_url).cloned() {
+        Some(d) => d,
+        None => return Ok(store.get(&id)),
+    };
+    let s = settings.get();
+    let options = DownloadOptions {
+        mode: DownloadMode::Video,
+        format_id: None,
+        save_folder: s.default_folder.clone(),
+        sub_langs: vec![],
+        auto_translate_to: None,
+        on_conflict: ConflictPolicy::Rename,
+        playlist_all: None,
+        polite: Some(true),
+    };
+    let mut taken = history.known_short_ids().unwrap_or_default();
+    for it in queue.list() {
+        taken.insert(it.short_id);
+    }
+    let req = build_request(det.url.clone(), options, &s);
+    let extractor = url_validator::resolve_extractor(&det.url).map(|x| x.to_string());
+    let item = make_item(req, Some(det.title.clone()), det.thumbnail.clone(), extractor, channel.title.clone(), &taken);
+    queue.enqueue(item)?;
+    store.update(&id, |c| c.pending.retain(|d| d.url != video_url))
+}
+
+/// Drop a pending detection without downloading it.
+#[tauri::command]
+pub fn dismiss_pending(
+    id: String,
+    video_url: String,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    store.update(&id, |c| c.pending.retain(|d| d.url != video_url))
 }
 
 /// Manually trigger an immediate check of all enabled watched channels.
