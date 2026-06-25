@@ -984,6 +984,24 @@ pub async fn check_watched_now(
     Ok(crate::watcher::check_all(&app, store.inner(), queue.inner(), settings.inner(), history.inner()).await)
 }
 
+// ---------- JS runtime (Deno) ----------
+
+/// "unknown" | "downloading" | "ready" | "failed" — for the Settings UI.
+#[tauri::command]
+pub fn deno_status() -> AppResult<String> {
+    Ok(crate::js_runtime::status().to_string())
+}
+
+/// Re-trigger the Deno download (used by the "Tải lại" button if it failed).
+#[tauri::command]
+pub fn retry_deno() -> AppResult<()> {
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|x| x.to_path_buf()));
+    crate::js_runtime::ensure(dir);
+    Ok(())
+}
+
 // ---------- Bootstrap ----------
 
 #[tauri::command]

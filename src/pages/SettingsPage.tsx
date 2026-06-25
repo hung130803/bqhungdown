@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import * as cmd from "@/ipc/commands";
@@ -8,6 +9,29 @@ export function SettingsPage() {
   const { t } = useTranslation();
   const settings = useSettingsStore(s => s.settings);
   const update = useSettingsStore(s => s.update);
+
+  // Deno (JS runtime) setup status — polled until ready so the user can see
+  // when the video-link decoder is downloaded and active.
+  const [deno, setDeno] = useState<string>("unknown");
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const s = await cmd.denoStatus();
+        if (alive) setDeno(s);
+        return s;
+      } catch {
+        return "unknown";
+      }
+    };
+    void tick();
+    const id = setInterval(async () => {
+      const s = await tick();
+      if (s === "ready") clearInterval(id);
+    }, 3000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
   if (!settings) return null;
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => {
@@ -151,6 +175,28 @@ export function SettingsPage() {
         Lần đầu bật, app tải gói chống bot (~46MB) rồi chạy ngầm. Giúp đỡ bị "đòi robot" mà không cần cookie.
         Lưu ý: không đổi IP — tải cực nhiều vẫn nên dùng proxy. Lỗi gì thì tải vẫn chạy bình thường.
       </p>
+
+      <div className="flex items-center justify-between gap-3 py-2 border-t border-border mt-2 pt-4">
+        <div>
+          <div className="text-sm font-medium text-fg">Bộ giải mã video (Deno)</div>
+          <div className="text-xs text-muted">Bắt buộc để tải YouTube (giải câu đố JavaScript lấy link). App tự tải ~40MB lần đầu.</div>
+        </div>
+        <div className="shrink-0 text-sm flex items-center gap-2">
+          {deno === "ready" && <span className="text-success font-medium">✅ Đã sẵn sàng</span>}
+          {deno === "downloading" && <span className="text-warning">⏳ Đang tải…</span>}
+          {(deno === "failed" || deno === "unknown") && (
+            <>
+              <span className="text-muted">{deno === "failed" ? "❌ Chưa có" : "⏳ Đang kiểm tra…"}</span>
+              <button
+                onClick={() => { void cmd.retryDeno(); setDeno("downloading"); }}
+                className="px-2.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs"
+              >
+                Tải lại
+              </button>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

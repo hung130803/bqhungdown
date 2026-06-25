@@ -194,6 +194,8 @@ pub fn run() {
             commands::list_extractors,
             commands::get_subtitle_langs,
             commands::set_clipboard_watcher,
+            commands::deno_status,
+            commands::retry_deno,
             commands::list_watched_channels,
             commands::add_watched_channel,
             commands::remove_watched_channel,

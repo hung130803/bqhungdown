@@ -396,6 +396,20 @@ export async function listExtractors(): Promise<ExtractorInfo[]> {
   return invoke<ExtractorInfo[]>("list_extractors");
 }
 
+// ── JS runtime (Deno) ─────────────────────────────────────────────────────────
+
+export async function denoStatus(): Promise<string> {
+  if (IS_WEB) return "unknown";
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("deno_status");
+}
+
+export async function retryDeno(): Promise<void> {
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("retry_deno");
+}
+
 // ── Auto-watch channels ───────────────────────────────────────────────────────
 
 export async function listWatchedChannels(): Promise<WatchedChannel[]> {

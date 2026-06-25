@@ -12,24 +12,47 @@
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Latest stable Deno for Windows x64. yt-dlp needs Deno >= 2.3.0.
 const DENO_URL: &str =
     "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip";
 
+/// Deno setup state for the UI: 0 unknown, 1 downloading, 2 ready, 3 failed.
+static STATUS: AtomicU8 = AtomicU8::new(0);
+
+/// Current Deno status as a string for the frontend.
+pub fn status() -> &'static str {
+    match STATUS.load(Ordering::Relaxed) {
+        1 => "downloading",
+        2 => "ready",
+        3 => "failed",
+        _ => "unknown",
+    }
+}
+
 /// Download + unpack Deno next to yt-dlp if missing. Background, best-effort:
 /// on failure some YouTube videos won't resolve (logged), the rest still work.
 pub fn ensure(yt_dlp_dir: Option<PathBuf>) {
     let Some(dir) = yt_dlp_dir else {
+        STATUS.store(3, Ordering::Relaxed);
         return;
     };
     tauri::async_runtime::spawn(async move {
         if dir.join("deno.exe").exists() {
+            STATUS.store(2, Ordering::Relaxed);
             return;
         }
+        STATUS.store(1, Ordering::Relaxed); // downloading
         match download_deno(&dir).await {
-            Ok(()) => eprintln!("[js-runtime] Deno ready next to yt-dlp"),
-            Err(e) => eprintln!("[js-runtime] Deno setup failed: {e}"),
+            Ok(()) => {
+                STATUS.store(2, Ordering::Relaxed);
+                eprintln!("[js-runtime] Deno ready next to yt-dlp");
+            }
+            Err(e) => {
+                STATUS.store(3, Ordering::Relaxed);
+                eprintln!("[js-runtime] Deno setup failed: {e}");
+            }
         }
     });
 }
