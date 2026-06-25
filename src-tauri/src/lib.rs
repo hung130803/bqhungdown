@@ -23,6 +23,7 @@ pub mod ytdlp_update;
 pub mod watchlist_store;
 pub mod watcher;
 pub mod po_token;
+pub mod js_runtime;
 pub mod queue;
 pub mod commands;
 
@@ -104,6 +105,11 @@ pub fn run() {
             // background self-update (max once / 12h) means a YouTube change is
             // picked up automatically without shipping a whole new app version.
             crate::ytdlp_update::spawn_update_check(handle.clone(), data_dir.clone());
+
+            // Ensure Deno (JS runtime) is next to yt-dlp so it can solve
+            // YouTube's signature / n-challenge — required since 2026 to get
+            // real video URLs (otherwise "Requested format is not available").
+            crate::js_runtime::ensure(bundled_dir.clone());
 
             // Auto-watch channels: load the watchlist and start the background
             // monitor that periodically enqueues new uploads.
