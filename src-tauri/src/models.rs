@@ -133,6 +133,10 @@ pub struct ChannelInfo {
     /// `playlist_count` from yt-dlp; not always provided by the extractor.
     pub video_count: Option<u32>,
     pub extractor: String,
+    /// Số video đã bị ẩn khỏi danh sách vì đã tải trước đó (download-archive).
+    /// `None` khi tính năng "Bỏ qua video đã tải" tắt. UI hiện "đã ẩn N".
+    #[serde(default)]
+    pub hidden_downloaded: Option<u32>,
 }
 
 /// Single entry inside a channel listing — what the user picks via checkbox.

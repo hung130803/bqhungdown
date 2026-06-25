@@ -619,6 +619,9 @@ export function ChannelInput({ onSubmit }: Props) {
                 {isYoutube
                   ? `Đã lấy ${videos.length} (${longList.length} dài + ${shortList.length} shorts)`
                   : `Đã lấy ${videos.length} bài`}
+                {info.hiddenDownloaded
+                  ? ` · đã ẩn ${formatComma(info.hiddenDownloaded)} video đã tải`
+                  : ""}
               </div>
             </div>
           </div>

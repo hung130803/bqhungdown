@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::AppHandle;
+use tauri::Manager;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
@@ -81,6 +82,24 @@ fn friendly_fetch_error(raw: &str) -> String {
     }
     // Fallback: keep the original yt-dlp message so power users can read it.
     format!("Không lấy được danh sách video: {raw}")
+}
+
+/// Load the set of video IDs already recorded in the yt-dlp download-archive
+/// (same file used by the download path). Each line is `<extractor> <id>`; we
+/// key on the bare id so it matches `extract_video_id` of a channel entry.
+/// Returns an empty set on any error (archive missing on first run, etc.).
+fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    if let Ok(dir) = app.path().app_data_dir() {
+        if let Ok(text) = std::fs::read_to_string(dir.join("download_archive.txt")) {
+            for line in text.lines() {
+                if let Some(id) = line.split_whitespace().nth(1) {
+                    set.insert(id.to_string());
+                }
+            }
+        }
+    }
+    set
 }
 
 /// Normalise a raw channel/user URL so we can append the correct tab suffix.
@@ -217,7 +236,7 @@ pub async fn fetch_channel(
         }
     }
 
-    let info = match info {
+    let mut info = match info {
         Some(i) => i,
         None => {
             let raw = last_err.unwrap_or_else(|| "Không có video nào trên kênh".into());
@@ -230,6 +249,22 @@ pub async fn fetch_channel(
 
     // Deduplicate across /videos + /shorts tabs.
     videos = videos.into_iter().filter(|v| seen.remove(&v.url)).collect();
+
+    // "Bỏ qua video đã tải" — hide entries already in the download-archive so
+    // the user doesn't re-pick videos they've downloaded (and likely deleted
+    // after re-uploading). Done before the slow detail probe so we don't waste
+    // work on hidden videos. Matches by bare video id.
+    if settings.skip_downloaded {
+        let archived = load_archive_ids(app);
+        if !archived.is_empty() {
+            let before = videos.len();
+            videos.retain(|v| match extract_video_id(&v.url) {
+                Some(id) => !archived.contains(&id),
+                None => true, // can't determine id → keep (don't hide blindly)
+            });
+            info.hidden_downloaded = Some((before - videos.len()) as u32);
+        }
+    }
 
     // Step 2: probe details only when user explicitly opts in via "detailed".
     // Default mode trusts the flat-playlist response — yt-dlp's
@@ -287,6 +322,7 @@ async fn fetch_douyin_channel(
         thumbnail: None,
         video_count: None,
         extractor: "douyin".into(),
+        hidden_downloaded: None,
     };
     let mut videos: Vec<ChannelVideo> = Vec::new();
     let mut cursor: i64 = 0;
@@ -796,6 +832,7 @@ fn parse_channel(source_url: &str, value: Value) -> (ChannelInfo, Vec<ChannelVid
             .and_then(|v| v.as_str())
             .unwrap_or("generic")
             .to_string(),
+        hidden_downloaded: None,
     };
 
     let mut videos = Vec::new();

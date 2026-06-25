@@ -161,6 +161,8 @@ export interface ChannelInfo {
   /** Total videos on the channel — not always available. */
   videoCount?: number | null;
   extractor: string;
+  /** Số video bị ẩn vì đã tải trước đó (khi bật "Bỏ qua video đã tải"). */
+  hiddenDownloaded?: number | null;
 }
 
 export interface ChannelVideo {
