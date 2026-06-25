@@ -196,7 +196,7 @@ impl YtDlpRunner {
 
         // First attempt: native extractor (or generic if URL is in our hint list).
         let outcome = self
-            .run_once(item, settings, resume, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
+            .run_once(item, settings, resume, false, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
             .await?;
 
         if let RunOutcome::Failed { reason } = &outcome {
@@ -207,7 +207,7 @@ impl YtDlpRunner {
                 && !cancel.is_cancelled()
             {
                 return self
-                    .run_once(item, settings, resume, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
+                    .run_once(item, settings, resume, false, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
                     .await;
             }
             // Browser cookies couldn't be decrypted (DPAPI) — retry without them.
@@ -218,7 +218,14 @@ impl YtDlpRunner {
             {
                 let no_cookies = args_builder::settings_without_cookies(settings);
                 return self
-                    .run_once(item, &no_cookies, resume, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
+                    .run_once(item, &no_cookies, resume, false, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
+                    .await;
+            }
+            // "Requested format is not available" (YouTube SABR hiding URLs) —
+            // retry pulling formats from extra clients (tv/mweb) that serve them.
+            if crate::error::is_format_error(reason) && !cancel.is_cancelled() {
+                return self
+                    .run_once(item, settings, resume, false, true, cancel, progress_tx, meta_tx, output_stem)
                     .await;
             }
             // Auto-retry with `--force-generic-extractor` when yt-dlp says it
@@ -226,19 +233,21 @@ impl YtDlpRunner {
             // "self-hosted MP4" page that exposes the URL in HTML <video>.
             if is_unsupported_url(reason) && !cancel.is_cancelled() {
                 return self
-                    .run_once(item, settings, resume, true, cancel, progress_tx, meta_tx, output_stem)
+                    .run_once(item, settings, resume, true, false, cancel, progress_tx, meta_tx, output_stem)
                     .await;
             }
         }
         Ok(outcome)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_once(
         &self,
         item: &DownloadItem,
         settings: &Settings,
         resume: bool,
         force_generic: bool,
+        force_clients: bool,
         cancel: CancellationToken,
         progress_tx: mpsc::Sender<ProgressSnapshot>,
         meta_tx: mpsc::Sender<MetaEvent>,
@@ -249,6 +258,16 @@ impl YtDlpRunner {
             settings,
             BuildMode::Download { resume, force_generic, output_stem },
         );
+        // Format-failure retry: pull formats from extra YouTube clients (tv/mweb
+        // still serve direct download URLs when the default client returns only
+        // SABR/withheld formats → "Requested format is not available").
+        if force_clients {
+            let l = item.request.url.to_lowercase();
+            if l.contains("youtube.com") || l.contains("youtu.be") {
+                args.push("--extractor-args".into());
+                args.push("youtube:player_client=default,tv,mweb,web_safari".into());
+            }
+        }
         // "Bỏ qua video đã tải": record finished downloads in an archive file and
         // skip anything already listed. yt-dlp accepts options after the URL, so
         // appending here is fine. Only YouTube/most extractors expose a stable id;

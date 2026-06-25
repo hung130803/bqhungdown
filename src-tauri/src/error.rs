@@ -63,6 +63,18 @@ pub fn is_bot_error(msg: &str) -> bool {
         || l.contains("too many requests")
 }
 
+/// True when yt-dlp extracted the video but couldn't produce a downloadable
+/// format ("Requested format is not available" / no formats). On YouTube this
+/// is usually the SABR rollout hiding direct URLs on the default client — we
+/// retry pulling formats from additional clients (tv/mweb) that still serve them.
+pub fn is_format_error(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    l.contains("requested format is not available")
+        || l.contains("no video formats")
+        || l.contains("no formats found")
+        || l.contains("only images are available")
+}
+
 pub fn is_cookie_decrypt_error(msg: &str) -> bool {
     let l = msg.to_lowercase();
     l.contains("dpapi")
