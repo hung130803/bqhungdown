@@ -78,9 +78,12 @@ export function PasteUrlPage() {
 
   const startBatch = async (urls: string[]) => {
     if (!folder) return;
+    // Big pasted batches get "polite mode" too (random 2-5s sleep between
+    // requests) so tải số lượng lớn không bị YouTube/TikTok chặn IP (429).
+    const polite = urls.length > 15;
     await cmd.enqueueBatch({
       urls,
-      options: { mode, formatId: null, saveFolder: folder, subLangs: [], autoTranslateTo: null, onConflict, playlistAll: null },
+      options: { mode, formatId: null, saveFolder: folder, subLangs: [], autoTranslateTo: null, onConflict, playlistAll: null, polite },
     });
   };
 
@@ -185,6 +188,9 @@ function BatchOrChannel({
   const setTab = useChannelStore((s) => s.setSubTab);
   return (
     <div className="space-y-3 pt-2 border-t border-border">
+      {/* Folder picker right here so batch/channel downloads don't force a
+          trip to Settings to change where files are saved. */}
+      <FolderPicker />
       <div className="inline-flex rounded-md border border-border overflow-hidden">
         <button
           onClick={() => setTab("batch")}
