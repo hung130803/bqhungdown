@@ -61,6 +61,9 @@ pub fn is_bot_error(msg: &str) -> bool {
         || l.contains("confirm you")
         || l.contains("http error 429")
         || l.contains("too many requests")
+        // Explicit YouTube rate-limit ("rate-limited ... for up to an hour").
+        || l.contains("rate-limit")
+        || l.contains("rate limit")
 }
 
 /// True when yt-dlp extracted the video but couldn't produce a downloadable
