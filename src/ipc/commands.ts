@@ -21,6 +21,7 @@ import type {
   ExtractorInfo,
   ChannelFetchResult,
   WatchedChannel,
+  Bookmark,
 } from "@/types/models";
 
 export interface DouyinPost {
@@ -408,6 +409,32 @@ export async function retryDeno(): Promise<void> {
   if (IS_WEB) return;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<void>("retry_deno");
+}
+
+// ── Saved bookmarks ───────────────────────────────────────────────────────────
+
+export async function listBookmarks(): Promise<Bookmark[]> {
+  if (IS_WEB) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Bookmark[]>("list_bookmarks");
+}
+
+export async function addBookmark(url: string, note?: string): Promise<Bookmark> {
+  if (IS_WEB) throw new Error("Chưa hỗ trợ trên web.");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Bookmark>("add_bookmark", { url, note: note ?? "" });
+}
+
+export async function removeBookmark(id: string): Promise<void> {
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("remove_bookmark", { id });
+}
+
+export async function updateBookmarkNote(id: string, note: string): Promise<void> {
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("update_bookmark_note", { id, note });
 }
 
 // ── Auto-watch channels ───────────────────────────────────────────────────────

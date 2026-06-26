@@ -13,6 +13,8 @@ use crate::models::{
 use crate::queue::QueueManager;
 use crate::settings_store::SettingsStore;
 use crate::watchlist_store::WatchlistStore;
+use crate::bookmarks_store::BookmarksStore;
+use crate::models::Bookmark;
 use crate::short_id;
 use crate::sidecar_detect;
 use crate::url_validator;
@@ -982,6 +984,49 @@ pub async fn check_watched_now(
     history: State<'_, Arc<HistoryStore>>,
 ) -> AppResult<Vec<WatchedChannel>> {
     Ok(crate::watcher::check_all(&app, store.inner(), queue.inner(), settings.inner(), history.inner()).await)
+}
+
+// ---------- Saved bookmarks ----------
+
+#[tauri::command]
+pub fn list_bookmarks(store: State<Arc<BookmarksStore>>) -> AppResult<Vec<Bookmark>> {
+    Ok(store.list())
+}
+
+#[tauri::command]
+pub fn add_bookmark(
+    url: String,
+    note: Option<String>,
+    store: State<Arc<BookmarksStore>>,
+) -> AppResult<Bookmark> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err(AppError::InvalidUrl);
+    }
+    let taken: std::collections::HashSet<String> =
+        store.list().into_iter().map(|b| b.id).collect();
+    let bm = Bookmark {
+        id: short_id::generate(&url, Utc::now().timestamp_millis(), &taken),
+        url,
+        note: note.unwrap_or_default(),
+        added_at: Utc::now(),
+    };
+    store.add(bm.clone())?;
+    Ok(bm)
+}
+
+#[tauri::command]
+pub fn remove_bookmark(id: String, store: State<Arc<BookmarksStore>>) -> AppResult<()> {
+    store.remove(&id)
+}
+
+#[tauri::command]
+pub fn update_bookmark_note(
+    id: String,
+    note: String,
+    store: State<Arc<BookmarksStore>>,
+) -> AppResult<()> {
+    store.update_note(&id, note)
 }
 
 // ---------- JS runtime (Deno) ----------

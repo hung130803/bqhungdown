@@ -189,6 +189,13 @@ export interface ChannelFetchResult {
 // Auto-watch channels
 // ──────────────────────────────────────────────────────────────────────────────
 
+export interface Bookmark {
+  id: string;
+  url: string;
+  note: string;
+  addedAt: string;
+}
+
 export interface DetectedVideo {
   id: string;
   url: string;

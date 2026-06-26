@@ -209,6 +209,17 @@ pub struct WatchedChannel {
     pub seen_ids: Vec<String>,
 }
 
+/// A saved channel/video the user wants to come back to (download or watch
+/// later). A simple bookmark list with an optional note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Bookmark {
+    pub id: String,
+    pub url: String,
+    pub note: String,
+    pub added_at: DateTime<Utc>,
+}
+
 /// A new video detected by the watcher in "notify only" mode — shown in the UI
 /// with how long ago it was published, awaiting a manual download/dismiss.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

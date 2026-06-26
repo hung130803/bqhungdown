@@ -24,6 +24,7 @@ pub mod watchlist_store;
 pub mod watcher;
 pub mod po_token;
 pub mod js_runtime;
+pub mod bookmarks_store;
 pub mod queue;
 pub mod commands;
 
@@ -113,6 +114,10 @@ pub fn run() {
 
             // Auto-watch channels: load the watchlist and start the background
             // monitor that periodically enqueues new uploads.
+            let bookmarks = Arc::new(crate::bookmarks_store::BookmarksStore::load(
+                config_dir.join("bookmarks.json"),
+            ));
+
             let watchlist = Arc::new(crate::watchlist_store::WatchlistStore::load(
                 config_dir.join("watchlist.json"),
             ));
@@ -142,6 +147,7 @@ pub fn run() {
             app.manage(runner);
             app.manage(queue);
             app.manage(watchlist);
+            app.manage(bookmarks);
             app.manage(po_proc);
             app.manage(PendingConflicts::default());
 
@@ -196,6 +202,10 @@ pub fn run() {
             commands::set_clipboard_watcher,
             commands::deno_status,
             commands::retry_deno,
+            commands::list_bookmarks,
+            commands::add_bookmark,
+            commands::remove_bookmark,
+            commands::update_bookmark_note,
             commands::list_watched_channels,
             commands::add_watched_channel,
             commands::remove_watched_channel,
