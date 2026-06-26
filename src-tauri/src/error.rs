@@ -73,6 +73,10 @@ pub fn is_format_error(msg: &str) -> bool {
         || l.contains("no video formats")
         || l.contains("no formats found")
         || l.contains("only images are available")
+        // Format URL served 0 bytes (often a SABR/broken format) — retrying
+        // with other clients usually yields a working URL.
+        || l.contains("downloaded file is empty")
+        || l.contains("did not get any data blocks")
 }
 
 pub fn is_cookie_decrypt_error(msg: &str) -> bool {
