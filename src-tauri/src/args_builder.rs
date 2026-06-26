@@ -37,7 +37,29 @@ pub fn next_proxy(settings: &Settings) -> Option<String> {
         return None;
     }
     let i = PROXY_CURSOR.fetch_add(1, Ordering::Relaxed);
-    settings.proxies.get(i % settings.proxies.len()).cloned()
+    settings.proxies.get(i % settings.proxies.len()).map(|p| normalize_proxy(p))
+}
+
+/// Accept the common proxy formats users paste and turn them into the
+/// `scheme://[user:pass@]host:port` form yt-dlp expects:
+///   - `http://user:pass@ip:port`      → unchanged (already has a scheme)
+///   - `ip:port:user:pass`             → `http://user:pass@ip:port`
+///   - `ip:port`                       → `http://ip:port`
+///   - `user:pass@ip:port`             → `http://user:pass@ip:port`
+pub fn normalize_proxy(raw: &str) -> String {
+    let p = raw.trim();
+    if p.is_empty() || p.contains("://") {
+        return p.to_string();
+    }
+    if p.contains('@') {
+        return format!("http://{p}");
+    }
+    let parts: Vec<&str> = p.split(':').collect();
+    match parts.len() {
+        2 => format!("http://{}:{}", parts[0], parts[1]),
+        4 => format!("http://{}:{}@{}:{}", parts[2], parts[3], parts[0], parts[1]),
+        _ => format!("http://{p}"),
+    }
 }
 
 /// Push `--proxy <url>` for the next proxy in rotation (no-op if none set).
@@ -404,6 +426,25 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("--downloader aria2c"));
         assert!(joined.contains("aria2c:-x 32 -s 32 -k 1M"));
+    }
+
+    #[test]
+    fn normalize_proxy_formats() {
+        // ip:port:user:pass (the format MuaProxy etc. hand out)
+        assert_eq!(
+            normalize_proxy("103.45.235.203:37223:sp07v2-37223:FCUHX"),
+            "http://sp07v2-37223:FCUHX@103.45.235.203:37223"
+        );
+        // ip:port
+        assert_eq!(normalize_proxy("1.2.3.4:8000"), "http://1.2.3.4:8000");
+        // user:pass@ip:port
+        assert_eq!(normalize_proxy("u:p@1.2.3.4:8000"), "http://u:p@1.2.3.4:8000");
+        // already has scheme → unchanged
+        assert_eq!(normalize_proxy("socks5://1.2.3.4:1080"), "socks5://1.2.3.4:1080");
+        assert_eq!(
+            normalize_proxy("http://u:p@1.2.3.4:8000"),
+            "http://u:p@1.2.3.4:8000"
+        );
     }
 
     #[test]

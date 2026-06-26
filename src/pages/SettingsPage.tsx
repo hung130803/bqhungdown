@@ -156,7 +156,7 @@ export function SettingsPage() {
           rows={4}
           value={(settings.proxies ?? []).join("\n")}
           onChange={e => set("proxies", e.target.value.split("\n") as unknown as Settings["proxies"])}
-          placeholder={"Mỗi dòng 1 proxy, ví dụ:\nhttp://user:pass@host:port\nsocks5://host:port"}
+          placeholder={"Mỗi dòng 1 proxy. Dán dạng nào cũng được:\nip:port:user:pass\nhttp://user:pass@host:port\nsocks5://host:port"}
           className="w-full px-3 py-2 rounded-md bg-surface border border-border text-fg placeholder:text-muted font-mono text-xs"
           spellCheck={false}
         />
