@@ -745,6 +745,23 @@ async fn probe_batch_attempt(
         "--print".into(),
         print_tpl.into(),
     ];
+    // Per-probe cookies copy — 4 probes run concurrently and yt-dlp rewrites the
+    // cookies file on exit; sharing one file corrupts/locks it. See copy_cookies.
+    let _ck_guard;
+    let settings_copy;
+    let settings: &Settings = match settings.cookies_file.as_deref() {
+        Some(f) if !f.is_empty() => match crate::ytdlp_runner::copy_cookies(f) {
+            Some(tmp) => {
+                let mut s = settings.clone();
+                s.cookies_file = Some(tmp.to_string_lossy().into_owned());
+                _ck_guard = crate::ytdlp_runner::TempCookieCopy(Some(tmp));
+                settings_copy = s;
+                &settings_copy
+            }
+            None => settings,
+        },
+        _ => settings,
+    };
     crate::args_builder::push_cookie_args(&mut args, settings);
     crate::args_builder::push_proxy_args(&mut args, settings);
     for u in urls {

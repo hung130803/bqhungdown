@@ -25,6 +25,32 @@ use tokio_util::sync::CancellationToken;
 
 const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 
+static COOKIE_COPY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Deletes a per-download cookies copy when dropped.
+pub(crate) struct TempCookieCopy(pub(crate) Option<std::path::PathBuf>);
+impl Drop for TempCookieCopy {
+    fn drop(&mut self) {
+        if let Some(p) = &self.0 {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// Copy the user's cookies.txt to a unique temp file. yt-dlp REWRITES the
+/// `--cookies` file when it exits (to persist refreshed cookies); with several
+/// concurrent downloads sharing one file, those writes race and corrupt it
+/// ("does not look like a Netscape format cookies file") or lock it on Windows
+/// ("[Errno 13] Permission denied"). A per-download copy removes the sharing.
+pub(crate) fn copy_cookies(src: &str) -> Option<std::path::PathBuf> {
+    if src.is_empty() || !std::path::Path::new(src).is_file() {
+        return None;
+    }
+    let n = COOKIE_COPY_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dst = std::env::temp_dir().join(format!("bqh_cookies_{}_{}.txt", std::process::id(), n));
+    std::fs::copy(src, &dst).ok().map(|_| dst)
+}
+
 #[derive(Debug, Clone)]
 pub enum RunOutcome {
     Completed {
@@ -253,6 +279,25 @@ impl YtDlpRunner {
         meta_tx: mpsc::Sender<MetaEvent>,
         output_stem: Option<String>,
     ) -> AppResult<RunOutcome> {
+        // Give this download its own cookies copy so concurrent downloads don't
+        // race on the shared cookies file (yt-dlp rewrites it on exit). The
+        // guard deletes the copy when run_once returns.
+        let _cookie_guard;
+        let settings_copy;
+        let settings: &Settings = match settings.cookies_file.as_deref() {
+            Some(f) if !f.is_empty() => match copy_cookies(f) {
+                Some(tmp) => {
+                    let mut s = settings.clone();
+                    s.cookies_file = Some(tmp.to_string_lossy().into_owned());
+                    _cookie_guard = TempCookieCopy(Some(tmp));
+                    settings_copy = s;
+                    &settings_copy
+                }
+                None => settings,
+            },
+            _ => settings,
+        };
+
         let mut args = args_builder::build(
             &item.request,
             settings,
