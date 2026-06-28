@@ -401,6 +401,13 @@ pub fn remove_queue_item(short_id: String, queue: State<Arc<QueueManager>>) -> A
     queue.remove_item(&short_id)
 }
 
+/// Remove every queued item saving into `folder` (i.e. a whole channel the user
+/// dropped). Cancels active ones + cleans partials. Returns count removed.
+#[tauri::command]
+pub fn remove_queue_group(folder: String, queue: State<Arc<QueueManager>>) -> AppResult<usize> {
+    Ok(queue.remove_group(std::path::Path::new(&folder)))
+}
+
 /// Cheap existence check used by the UI before opening a file. Returns false
 /// for missing/inaccessible paths instead of erroring.
 #[tauri::command]

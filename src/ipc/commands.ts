@@ -257,6 +257,12 @@ export async function removeQueueItem(shortId: string): Promise<void> {
   return invoke<void>("remove_queue_item", { shortId });
 }
 
+export async function removeQueueGroup(folder: string): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("remove_queue_group", { folder });
+}
+
 export async function pathExists(path: string): Promise<boolean> {
   if (IS_WEB) return false;
   const { invoke } = await import("@tauri-apps/api/core");

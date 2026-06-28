@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useQueueStore } from "@/stores/useQueueStore";
@@ -61,6 +61,32 @@ export function QueuePage() {
 
   const terminalCount = items.filter((i) => TERMINAL.includes(i.state)).length;
 
+  // Group by save folder so a whole channel can be dropped at once.
+  const groups = useMemo(() => {
+    const m = new Map<string, { label: string; count: number }>();
+    for (const it of items) {
+      const folder = it.request?.saveFolder ?? "";
+      if (!folder) continue;
+      const label = folder.split(/[\\/]/).filter(Boolean).pop() || folder;
+      const g = m.get(folder) ?? { label, count: 0 };
+      g.count++;
+      m.set(folder, g);
+    }
+    return [...m.entries()].map(([folder, g]) => ({ folder, ...g }));
+  }, [items]);
+
+  const removeGroup = async (folder: string, label: string, count: number) => {
+    if (!window.confirm(`Xóa cả kênh "${label}" (${count} mục) khỏi hàng đợi?\nVideo đã tải xong vẫn còn trên máy, chỉ xóa các mục trong danh sách + đang chờ.`)) {
+      return;
+    }
+    try {
+      await cmd.removeQueueGroup(folder);
+      await refresh();
+    } catch {
+      /* ignore */
+    }
+  };
+
   // Sort newest first using createdAt (descending).
   const sortedItems = [...items].sort((a, b) => {
     const ta = new Date(a.createdAt).getTime();
@@ -76,6 +102,21 @@ export function QueuePage() {
     <>
       <ConflictDialog />
       <div className="space-y-2 max-w-3xl mx-auto">
+        {groups.length >= 1 && items.length > 1 && (
+          <div className="flex flex-wrap gap-1.5 pb-1">
+            <span className="text-xs text-muted self-center mr-1">Xóa cả kênh:</span>
+            {groups.map((g) => (
+              <button
+                key={g.folder}
+                onClick={() => void removeGroup(g.folder, g.label, g.count)}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border bg-surface text-xs text-fg hover:border-danger hover:text-danger"
+                title={`Xóa cả kênh "${g.label}" khỏi hàng đợi`}
+              >
+                {g.label} <span className="text-muted">({g.count})</span> ✕
+              </button>
+            ))}
+          </div>
+        )}
         {terminalCount > 0 && (
           <div className="flex justify-end">
             <button

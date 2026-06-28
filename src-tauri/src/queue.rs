@@ -251,6 +251,44 @@ impl QueueManager {
         self.items.read().unwrap().values().cloned().collect()
     }
 
+    /// Remove ALL queue items whose save folder matches `folder` — used to drop
+    /// a whole channel the user no longer wants. Cancels any in-flight ones,
+    /// wipes their leftover partial files, and drops them from the queue.
+    /// Returns how many were removed.
+    pub fn remove_group(&self, folder: &std::path::Path) -> usize {
+        let ids: Vec<String> = {
+            let map = self.items.read().unwrap();
+            map.values()
+                .filter(|it| it.request.save_folder == folder)
+                .map(|it| it.short_id.clone())
+                .collect()
+        };
+        // Cancel any active downloads in this group.
+        {
+            let mut toks = self.cancel_tokens.lock().unwrap();
+            for id in &ids {
+                if let Some(tok) = toks.remove(id) {
+                    tok.cancel();
+                }
+            }
+        }
+        // Clean leftover partials + drop from the queue.
+        {
+            let mut map = self.items.write().unwrap();
+            for id in &ids {
+                if let Some(it) = map.get(id) {
+                    cleanup_partials_aggressive(it);
+                }
+                map.shift_remove(id);
+            }
+        }
+        if !ids.is_empty() {
+            self.emit_queue_updated();
+            self.persist();
+        }
+        ids.len()
+    }
+
     /// Cancel mọi download đang chạy/dở và xoá file rác. Được gọi khi đóng app.
     pub fn shutdown(&self) {
         // Save the queue first (with current states) so reopening resumes the
