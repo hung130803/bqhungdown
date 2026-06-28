@@ -87,17 +87,21 @@ export function PasteUrlPage() {
     });
   };
 
-  /** Channel batch — same as `startBatch` but turns on "polite mode" so
-   *  yt-dlp adds 2-5s random sleep between requests. Critical for big
-   *  channel scrapes to avoid IP bans on YouTube/TikTok. */
-  const startChannelBatch = async (urls: string[]) => {
+  /** Channel batch — polite mode on, and (by default) each channel's videos go
+   *  into their own subfolder `<folder>/<channel name>` so downloading many
+   *  channels stays organised. */
+  const startChannelBatch = async (urls: string[], channelName?: string) => {
     if (!folder) return;
+    const useSub = settings?.channelSubfolder !== false && channelName;
+    const target = useSub
+      ? `${folder.replace(/[\\/]+$/, "")}/${sanitizeFolderName(channelName!)}`
+      : folder;
     await cmd.enqueueBatch({
       urls,
       options: {
         mode,
         formatId: null,
-        saveFolder: folder,
+        saveFolder: target,
         subLangs: [],
         autoTranslateTo: null,
         onConflict,
@@ -175,12 +179,21 @@ export function PasteUrlPage() {
 /** Two-tab block shown when there's no single-URL metadata to display:
  *   - "Hàng loạt": paste many URLs
  *   - "Kênh": paste a channel URL, fetch videos, filter, queue */
+/** Make a channel title safe to use as a Windows folder name. */
+function sanitizeFolderName(name: string): string {
+  return name
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "channel";
+}
+
 function BatchOrChannel({
   onBatch,
   onChannel,
 }: {
   onBatch: (urls: string[]) => Promise<void> | void;
-  onChannel: (urls: string[]) => Promise<void> | void;
+  onChannel: (urls: string[], channelName?: string) => Promise<void> | void;
 }) {
   // Sub-tab được lưu trong store nên user chuyển sang trang khác xong quay
   // lại sẽ vẫn ở đúng tab "Kênh" nếu họ đang dở việc lấy danh sách.

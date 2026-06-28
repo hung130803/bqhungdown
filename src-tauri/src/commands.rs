@@ -208,6 +208,7 @@ pub(crate) fn make_item(
         speed_bps: None,
         eta_sec: None,
         attempt: 0,
+        bot_retries: 0,
         error_message: None,
         output_path: None,
         created_at: now,
@@ -271,6 +272,9 @@ pub async fn enqueue_batch(
     history: State<'_, Arc<HistoryStore>>,
 ) -> AppResult<Vec<DownloadItem>> {
     let s = settings.get();
+    // Make sure the target folder exists (channel downloads use a per-channel
+    // subfolder that may not exist yet).
+    let _ = std::fs::create_dir_all(&options.save_folder);
     let mut taken = history.known_short_ids().unwrap_or_default();
     let mut existing_active: std::collections::HashSet<String> = std::collections::HashSet::new();
     for it in queue.list() {

@@ -88,6 +88,26 @@ export function SettingsPage() {
         </select>
       </Field>
 
+      <Toggle
+        label="Tạo thư mục riêng cho mỗi kênh khi tải"
+        checked={settings.channelSubfolder ?? true}
+        onChange={v => set("channelSubfolder", v)}
+      />
+
+      <Field label="Bị giới hạn tốc độ → tự tải lại sau (phút)">
+        <input
+          type="number"
+          min={1}
+          max={120}
+          value={settings.rateLimitCooldownMin ?? 10}
+          onChange={e => {
+            const n = parseInt(e.target.value, 10);
+            if (Number.isFinite(n) && n >= 1) set("rateLimitCooldownMin", n);
+          }}
+          className="w-24 px-3 py-2 rounded-md bg-surface border border-border text-fg"
+        />
+      </Field>
+
       <Toggle label={t("settings.clipboardWatcher")} checked={settings.clipboardWatcher} onChange={v => set("clipboardWatcher", v)} />
       <Toggle label={t("settings.notifications")} checked={settings.notifications} onChange={v => set("notifications", v)} />
       <Toggle label={t("settings.aria2cEnabled")} checked={settings.aria2cEnabled} onChange={v => set("aria2cEnabled", v)} />

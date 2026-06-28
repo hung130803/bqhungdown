@@ -177,6 +177,12 @@ impl SettingsStore {
             if let Some(v) = patch.po_token_enabled {
                 s.po_token_enabled = v;
             }
+            if let Some(v) = patch.rate_limit_cooldown_min {
+                s.rate_limit_cooldown_min = v.clamp(1, 120);
+            }
+            if let Some(v) = patch.channel_subfolder {
+                s.channel_subfolder = v;
+            }
             Ok(())
         })
     }

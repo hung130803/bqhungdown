@@ -260,6 +260,10 @@ export interface Settings {
   proxies: string[];
   /** Bật PO Token (bgutil) — giảm chặn bot không cần cookie (app tự tải + chạy ngầm). */
   poTokenEnabled: boolean;
+  /** Bị giới hạn tốc độ → đợi bao nhiêu phút rồi tự tải lại (1–120). */
+  rateLimitCooldownMin: number;
+  /** Tải kênh → tạo thư mục con theo tên kênh. */
+  channelSubfolder: boolean;
 }
 
 export type SettingsPatch = Partial<Settings>;

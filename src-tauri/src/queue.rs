@@ -246,6 +246,7 @@ impl QueueManager {
             let mut map = self.items.write().unwrap();
             if let Some(item) = map.get_mut(id) {
                 item.attempt = 0;
+                item.bot_retries = 0;
                 item.error_message = None;
                 item.bytes_downloaded = 0;
                 item.bytes_total = None;
@@ -575,26 +576,46 @@ impl QueueManager {
     }
 
     fn handle_failure(self: Arc<Self>, id: String, reason: String, settings_snapshot: Settings) {
+        // How many times to keep retrying a rate-limited item (each after a long
+        // cooldown). 30 × 10 min ≈ 5h — generous so big batches finish unattended.
+        const BOT_RETRY_CAP: u8 = 30;
+        let is_bot = crate::error::is_bot_error(&reason);
         // Decide retry vs fail under a short-lived guard.
         let (should_retry, delay) = {
             let mut map = self.items.write().unwrap();
             let it = match map.get_mut(&id) { Some(i) => i, None => return };
-            // Bot/429 errors: back off ≥60s so the IP cools down (or the next
-            // attempt rotates to a fresh proxy). Normal errors use the short ladder.
-            let delay = if crate::error::is_bot_error(&reason) {
-                next_retry_delay(it.attempt).map(|d| d.max(Duration::from_secs(60)))
+            if is_bot {
+                // Rate-limited / bot wall: don't give up — wait the configured
+                // cooldown and retry (counted separately from `attempt`). The
+                // IP cools down (or a proxy rotates in) and it eventually lands.
+                if it.bot_retries < BOT_RETRY_CAP {
+                    it.bot_retries += 1;
+                    let mins = settings_snapshot.rate_limit_cooldown_min.max(1);
+                    it.error_message = Some(format!(
+                        "Bị giới hạn — tự tải lại sau {mins} phút (lần {})",
+                        it.bot_retries
+                    ));
+                    it.state = DownloadState::Queued; // show as waiting, not failed
+                    let cloned = it.clone();
+                    drop(map);
+                    self.emit_state(&cloned);
+                    self.emit_queue_updated();
+                    (true, Duration::from_secs(mins as u64 * 60))
+                } else {
+                    it.error_message = Some(reason.clone());
+                    (false, Duration::default())
+                }
             } else {
-                next_retry_delay(it.attempt)
-            };
-            it.attempt += 1;
-            it.error_message = Some(reason.clone());
-            (delay.is_some(), delay)
+                let delay = next_retry_delay(it.attempt);
+                it.attempt += 1;
+                it.error_message = Some(reason.clone());
+                (delay.is_some(), delay.unwrap_or_default())
+            }
         };
         if should_retry {
             // Spawn separate task for the backoff sleep so the parent
             // worker future stays simple and Send.
             let me = self.clone();
-            let delay = delay.unwrap_or_default();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(delay).await;
                 {

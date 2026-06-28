@@ -65,7 +65,7 @@ function formatErr(e: unknown): string {
 }
 
 interface Props {
-  onSubmit: (urls: string[]) => Promise<void> | void;
+  onSubmit: (urls: string[], channelName?: string) => Promise<void> | void;
 }
 
 export function ChannelInput({ onSubmit }: Props) {
@@ -481,7 +481,7 @@ export function ChannelInput({ onSubmit }: Props) {
     if (urls.length === 0) return;
     setSubmitting(true);
     try {
-      await Promise.resolve(onSubmit(urls));
+      await Promise.resolve(onSubmit(urls, info?.title || undefined));
       setUrl("");
     } finally {
       setSubmitting(false);

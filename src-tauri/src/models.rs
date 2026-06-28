@@ -293,6 +293,10 @@ pub struct DownloadItem {
     pub speed_bps: Option<f64>,
     pub eta_sec: Option<u64>,
     pub attempt: u8,
+    /// Số lần đã tự thử lại do bị giới hạn tốc độ / chặn bot (đếm riêng với
+    /// `attempt` để lỗi rate-limit được thử lại nhiều lần với cooldown dài).
+    #[serde(default)]
+    pub bot_retries: u8,
     pub error_message: Option<String>,
     pub output_path: Option<PathBuf>,
     pub created_at: DateTime<Utc>,
@@ -380,6 +384,18 @@ pub struct Settings {
     /// cookie. App tự tải + chạy server token ngầm. Mặc định tắt (opt-in).
     #[serde(default)]
     pub po_token_enabled: bool,
+    /// Khi bị YouTube giới hạn tốc độ / chặn bot, đợi bao nhiêu phút rồi tự tải
+    /// lại (thay vì bỏ cuộc). Clamp `1..=120`. Mặc định 10.
+    #[serde(default = "default_cooldown")]
+    pub rate_limit_cooldown_min: u32,
+    /// Tải kênh → tự tạo thư mục con theo tên kênh (`<thư mục>/<tên kênh>`).
+    /// Mặc định bật, để tải nhiều kênh không lẫn lộn.
+    #[serde(default = "default_true")]
+    pub channel_subfolder: bool,
+}
+
+fn default_cooldown() -> u32 {
+    10
 }
 
 fn default_true() -> bool {
@@ -411,6 +427,8 @@ impl Default for Settings {
             watch_interval_min: 60,
             proxies: Vec::new(),
             po_token_enabled: false,
+            rate_limit_cooldown_min: 10,
+            channel_subfolder: true,
         }
     }
 }
@@ -436,6 +454,8 @@ pub struct SettingsPatch {
     pub watch_interval_min: Option<u32>,
     pub proxies: Option<Vec<String>>,
     pub po_token_enabled: Option<bool>,
+    pub rate_limit_cooldown_min: Option<u32>,
+    pub channel_subfolder: Option<bool>,
 }
 
 /// Custom serde deserializer that distinguishes:
