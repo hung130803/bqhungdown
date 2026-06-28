@@ -178,6 +178,8 @@ export interface ChannelVideo {
   isShort?: boolean;
   /** True khi entry là TikTok photo post (slideshow ảnh). UI hiện badge. */
   isPhoto?: boolean;
+  /** Hashtag (#abc) lấy từ tiêu đề + mô tả — chỉ có khi dùng YouTube Data API. */
+  hashtags?: string[];
 }
 
 export interface ChannelFetchResult {
@@ -266,6 +268,12 @@ export interface Settings {
   channelSubfolder: boolean;
   /** Bấm X → chạy ngầm dưới khay thay vì thoát (để tiếp tục tải). */
   minimizeToTray: boolean;
+  /**
+   * YouTube Data API v3 key. Khi có → "Lấy danh sách kênh" dùng API lấy
+   * view/thời lượng/ngày/hashtag chính xác cho cả kênh trong vài giây
+   * (thay vì dò yt-dlp từng video). `null`/rỗng = dùng yt-dlp như cũ.
+   */
+  youtubeApiKey?: string | null;
 }
 
 export type SettingsPatch = Partial<Settings>;

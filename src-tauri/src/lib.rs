@@ -18,6 +18,7 @@ pub mod tiktok_photo;
 pub mod douyin_scraper;
 pub mod clipboard;
 pub mod channel_fetcher;
+pub mod youtube_api;
 pub mod ytdlp_runner;
 pub mod ytdlp_update;
 pub mod watchlist_store;
@@ -260,6 +261,7 @@ pub fn run() {
             commands::resolve_conflict,
             commands::get_settings,
             commands::update_settings,
+            commands::validate_youtube_api_key,
             commands::pick_folder,
             commands::pick_file,
             commands::check_folder_writable,

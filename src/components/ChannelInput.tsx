@@ -559,6 +559,11 @@ export function ChannelInput({ onSubmit }: Props) {
                   {v.viewCount != null && <span>{formatComma(v.viewCount)} view</span>}
                   {date && <span>{date.toLocaleDateString("vi-VN")}</span>}
                 </div>
+                {v.hashtags && v.hashtags.length > 0 && (
+                  <div className="text-[11px] text-accent truncate" title={v.hashtags.join(" ")}>
+                    {v.hashtags.slice(0, 6).join(" ")}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -608,6 +613,10 @@ export function ChannelInput({ onSubmit }: Props) {
         />
         <span>Lấy thêm số view + ngày chính xác (chậm hơn nhiều)</span>
       </label>
+      <p className="text-[11px] text-muted -mt-1">
+        💡 Đã nhập <b>YouTube API key</b> trong Cài đặt? Thì khỏi cần tích ô trên —
+        view/thời lượng/ngày/hashtag chuẩn tự lấy cho cả kênh trong vài giây.
+      </p>
       {loading && elapsedSec > 60 && (
         <p className="text-xs text-warning">
           Lấy danh sách lâu hơn dự kiến. Có thể bấm "Huỷ" và thử lại.

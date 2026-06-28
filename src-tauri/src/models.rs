@@ -163,6 +163,9 @@ pub struct ChannelVideo {
     /// Frontend dùng để render 2 nhóm "Video dài" / "Shorts" riêng biệt.
     #[serde(default)]
     pub is_short: bool,
+    /// Hashtag lấy từ tiêu đề + mô tả (chỉ điền khi dùng YouTube Data API).
+    #[serde(default)]
+    pub hashtags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -396,6 +399,10 @@ pub struct Settings {
     /// Mặc định bật. Tắt → bấm X là thoát hẳn.
     #[serde(default = "default_true")]
     pub minimize_to_tray: bool,
+    /// YouTube Data API v3 key — khi có, lấy view/thời lượng/ngày/hashtag cả
+    /// kênh trong vài giây (thay vì dò từng video). Rỗng = dùng yt-dlp như cũ.
+    #[serde(default)]
+    pub youtube_api_key: Option<String>,
 }
 
 fn default_cooldown() -> u32 {
@@ -434,6 +441,7 @@ impl Default for Settings {
             rate_limit_cooldown_min: 10,
             channel_subfolder: true,
             minimize_to_tray: true,
+            youtube_api_key: None,
         }
     }
 }
@@ -462,6 +470,8 @@ pub struct SettingsPatch {
     pub rate_limit_cooldown_min: Option<u32>,
     pub channel_subfolder: Option<bool>,
     pub minimize_to_tray: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_optional_string")]
+    pub youtube_api_key: Option<Option<String>>,
 }
 
 /// Custom serde deserializer that distinguishes:

@@ -15,6 +15,51 @@ export function SettingsPage() {
   const [deno, setDeno] = useState<string>("unknown");
   const [cleaning, setCleaning] = useState(false);
   const [cleanMsg, setCleanMsg] = useState<string | null>(null);
+
+  // YouTube Data API key — ô nhập + đèn xanh/đỏ báo key chạy được hay không.
+  const [ytKey, setYtKey] = useState<string>("");
+  const [ytStatus, setYtStatus] = useState<"idle" | "checking" | "ok" | "bad">("idle");
+  const [ytError, setYtError] = useState<string | null>(null);
+  // Nạp key đã lưu vào ô + tự kiểm tra 1 lần khi mở trang.
+  useEffect(() => {
+    const saved = settings?.youtubeApiKey ?? "";
+    setYtKey(saved);
+    if (!saved.trim()) {
+      setYtStatus("idle");
+      return;
+    }
+    let alive = true;
+    setYtStatus("checking");
+    void cmd.validateYoutubeApiKey(saved).then(r => {
+      if (!alive) return;
+      setYtStatus(r.ok ? "ok" : "bad");
+      setYtError(r.ok ? null : (r.error ?? null));
+    });
+    return () => { alive = false; };
+    // Chỉ chạy khi key đã lưu đổi (không phải mỗi lần gõ).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.youtubeApiKey]);
+
+  const saveAndCheckYtKey = async () => {
+    const key = ytKey.trim();
+    const saved = (settings?.youtubeApiKey ?? "").trim();
+    setYtError(null);
+    if (!key) {
+      if (saved) await update({ youtubeApiKey: null });
+      setYtStatus("idle");
+      return;
+    }
+    if (key !== saved) {
+      // Key mới → lưu lại; effect ở trên tự kiểm tra (xanh/đỏ).
+      await update({ youtubeApiKey: key });
+      return;
+    }
+    // Key không đổi → kiểm tra lại thủ công.
+    setYtStatus("checking");
+    const r = await cmd.validateYoutubeApiKey(key);
+    setYtStatus(r.ok ? "ok" : "bad");
+    setYtError(r.ok ? null : (r.error ?? "Key không hoạt động"));
+  };
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -225,6 +270,48 @@ export function SettingsPage() {
         Dán nhiều proxy (mỗi dòng 1 cái) — app tự xoay vòng và tự đổi proxy khi bị YouTube chặn.
         Nên dùng proxy <b>dân cư (residential)</b>; proxy datacenter thường bị chặn. Để trống = không dùng.
       </p>
+
+      <Field label="YouTube API key (lấy view + ngày + hashtag cả kênh trong vài giây)">
+        <div className="flex gap-2 items-stretch">
+          <input
+            type="text"
+            value={ytKey}
+            onChange={e => { setYtKey(e.target.value); setYtStatus("idle"); setYtError(null); }}
+            onKeyDown={e => { if (e.key === "Enter") void saveAndCheckYtKey(); }}
+            placeholder="Dán key dạng AIzaSy..."
+            className="flex-1 px-3 py-2 rounded-md bg-surface border border-border text-fg placeholder:text-muted font-mono text-xs"
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <button
+            onClick={() => void saveAndCheckYtKey()}
+            disabled={ytStatus === "checking"}
+            className="px-3 py-2 rounded-md bg-surface-2 border border-border text-fg shrink-0 disabled:opacity-50"
+          >
+            {ytStatus === "checking" ? "Đang kiểm tra…" : "Lưu & kiểm tra"}
+          </button>
+          {settings.youtubeApiKey && (
+            <button
+              onClick={() => { setYtKey(""); void update({ youtubeApiKey: null }); setYtStatus("idle"); setYtError(null); }}
+              className="px-3 py-2 rounded-md border border-border text-fg shrink-0"
+              title="Xoá key"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </Field>
+      <div className="text-xs -mt-3 flex items-center gap-2">
+        {ytStatus === "ok" && <span className="text-success font-medium">🟢 Key hoạt động tốt</span>}
+        {ytStatus === "checking" && <span className="text-warning">⏳ Đang kiểm tra…</span>}
+        {ytStatus === "bad" && <span className="text-danger font-medium">🔴 {ytError ?? "Key không hoạt động"}</span>}
+        {ytStatus === "idle" && (
+          <span className="text-muted">
+            Lấy key miễn phí ở <b>console.cloud.google.com</b> → bật "YouTube Data API v3" → tạo API key.
+            Để trống = dùng cách cũ (dò từng video, chậm).
+          </span>
+        )}
+      </div>
 
       <Toggle
         label="Bật PO Token (giảm chặn bot, không cần cookie)"

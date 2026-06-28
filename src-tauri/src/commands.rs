@@ -475,6 +475,13 @@ pub async fn update_settings(
     Ok(next)
 }
 
+/// Kiểm tra YouTube Data API key có dùng được không. Trả Ok(()) → đèn XANH;
+/// Err(thông báo) → đèn ĐỎ kèm lý do (key sai / chưa bật API / hết quota).
+#[tauri::command]
+pub async fn validate_youtube_api_key(key: String) -> AppResult<()> {
+    crate::youtube_api::validate_key(&key).await
+}
+
 // ---------- Filesystem helpers ----------
 
 #[tauri::command]

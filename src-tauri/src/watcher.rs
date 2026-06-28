@@ -228,6 +228,7 @@ fn parse_rss(xml: &str) -> Vec<Fetched> {
                 thumbnail,
                 is_short: false,
                 is_photo: false,
+                hashtags: Vec::new(),
             },
         });
     }

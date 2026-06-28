@@ -191,11 +191,29 @@ pub async fn fetch_channel(
         ));
     }
 
-    // Step 1: enumerate the requested tab(s). For "all" we run /videos +
-    // /shorts in parallel — most channels don't have Streams, so we skip
-    // Streams by default to avoid wasting a slow round-trip on missing tabs.
+    // Đường tắt: nếu là kênh YouTube VÀ người dùng đã nhập API key → dùng
+    // YouTube Data API. Lấy view/thời lượng/ngày/hashtag chính xác cho cả kênh
+    // trong vài giây (thay vì dò yt-dlp từng video 1-2 tiếng). Lỗi API (key sai,
+    // hết quota, link lạ) → rơi xuống đường yt-dlp như cũ, không chặn người dùng.
     let lower = url.to_lowercase();
     let is_youtube = lower.contains("youtube.com");
+    if is_youtube {
+        if let Some(key) = settings
+            .youtube_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+        {
+            match crate::youtube_api::fetch_channel(url, key, limit).await {
+                Ok((info, videos)) => {
+                    return finalize_listing(app, info, videos, settings);
+                }
+                Err(e) => {
+                    eprintln!("YouTube Data API thất bại, quay lại yt-dlp: {e}");
+                }
+            }
+        }
+    }
     let tabs: Vec<&str> = if is_youtube && tab == "all" {
         vec!["videos", "shorts"]
     } else {
@@ -272,6 +290,32 @@ pub async fn fetch_channel(
     // a usable upload date in flat mode, so we skip the slow per-video probe.
     if detailed && !videos.is_empty() {
         videos = enrich_in_parallel(app, videos, settings, my_gen, detailed).await?;
+    }
+
+    Ok((info, videos))
+}
+
+/// Hậu xử lý danh sách lấy từ YouTube Data API: sắp xếp mới-nhất-trước + ẩn
+/// video đã tải (nếu bật "Bỏ qua video đã tải"). API đã có sẵn metadata đầy đủ
+/// nên KHÔNG cần probe chi tiết → đây là toàn bộ phần còn lại trước khi trả về.
+fn finalize_listing(
+    app: &AppHandle,
+    mut info: ChannelInfo,
+    mut videos: Vec<ChannelVideo>,
+    settings: &Settings,
+) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
+    videos.sort_by(|a, b| b.upload_date.cmp(&a.upload_date));
+
+    if settings.skip_downloaded {
+        let archived = load_archive_ids(app);
+        if !archived.is_empty() {
+            let before = videos.len();
+            videos.retain(|v| match extract_video_id(&v.url) {
+                Some(id) => !archived.contains(&id),
+                None => true,
+            });
+            info.hidden_downloaded = Some((before - videos.len()) as u32);
+        }
     }
 
     Ok((info, videos))
@@ -463,6 +507,7 @@ fn parse_tikwm_entry(v: &serde_json::Value) -> Option<ChannelVideo> {
         thumbnail,
         is_short: false,
         is_photo,
+        hashtags: Vec::new(),
     })
 }
 
@@ -937,5 +982,6 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
         thumbnail,
         is_short: false,
         is_photo,
+        hashtags: Vec::new(),
     })
 }

@@ -293,6 +293,23 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   return invoke<Settings>("update_settings", { patch });
 }
 
+/**
+ * Kiểm tra YouTube Data API key. Trả về `{ ok: true }` nếu key chạy được
+ * (đèn xanh), hoặc `{ ok: false, error }` kèm lý do (đèn đỏ).
+ */
+export async function validateYoutubeApiKey(
+  key: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (IS_WEB) return { ok: false, error: "Không khả dụng trên web" };
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    await invoke("validate_youtube_api_key", { key });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 // ── Filesystem helpers ───────────────────────────────────────────────────────
 
 export async function pickFolder(): Promise<string | null> {

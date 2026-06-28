@@ -186,6 +186,12 @@ impl SettingsStore {
             if let Some(v) = patch.minimize_to_tray {
                 s.minimize_to_tray = v;
             }
+            // youtube_api_key: Option<Option<String>> — trim, blank → None.
+            if let Some(opt) = patch.youtube_api_key {
+                s.youtube_api_key = opt
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty());
+            }
             Ok(())
         })
     }
