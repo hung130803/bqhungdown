@@ -5,9 +5,8 @@
 //! Trên Windows/Linux một số môi trường không expose click callback, nên frontend cũng
 //! polling-friendly: queue page tự refresh khi nhận state event.
 
-use crate::events::{NotificationClickedPayload, EV_NOTIFICATION_CLICKED};
 use crate::models::{DownloadItem, Settings};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
 pub fn notify_completed(app: &AppHandle, settings: &Settings, item: &DownloadItem) {
@@ -19,8 +18,11 @@ pub fn notify_completed(app: &AppHandle, settings: &Settings, item: &DownloadIte
         .title(title)
         .body(body)
         .show();
-    // Frontend không có click hook trên mọi nền tảng; vẫn emit để các consumer khác có thể subscribe.
-    let _ = app.emit(EV_NOTIFICATION_CLICKED, NotificationClickedPayload { short_id: item.short_id.clone() });
+    // BUG FIX: do NOT emit EV_NOTIFICATION_CLICKED here. The frontend treats
+    // that event as a real user click and navigates to /queue — emitting it on
+    // every completed download made the app jump to the queue page repeatedly
+    // during a batch. A real notification click isn't wired (OS-dependent), so
+    // we simply don't auto-navigate on completion.
 }
 
 pub fn notify_failed(app: &AppHandle, settings: &Settings, item: &DownloadItem, reason: &str) {
