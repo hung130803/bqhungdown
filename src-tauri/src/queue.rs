@@ -158,10 +158,47 @@ impl QueueManager {
         tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(15)).await;
+                saver.prune_terminal();
                 saver.persist();
             }
         });
         me
+    }
+
+    /// Keep memory bounded for heavy users: drop the oldest finished items from
+    /// the in-memory queue beyond a cap (they remain in History on disk). Only
+    /// terminal items are pruned — active/queued/paused ones are never removed.
+    fn prune_terminal(&self) {
+        const MAX_TERMINAL: usize = 300;
+        let dropped = {
+            let mut map = self.items.write().unwrap();
+            let mut terminal: Vec<(String, i64)> = map
+                .iter()
+                .filter(|(_, it)| {
+                    matches!(
+                        it.state,
+                        DownloadState::Completed
+                            | DownloadState::Failed
+                            | DownloadState::Cancelled
+                            | DownloadState::Skipped
+                    )
+                })
+                .map(|(id, it)| (id.clone(), it.finished_at.map(|t| t.timestamp()).unwrap_or(0)))
+                .collect();
+            if terminal.len() <= MAX_TERMINAL {
+                0
+            } else {
+                terminal.sort_by_key(|(_, ts)| *ts); // oldest first
+                let to_drop = terminal.len() - MAX_TERMINAL;
+                for (id, _) in terminal.into_iter().take(to_drop) {
+                    map.shift_remove(&id);
+                }
+                to_drop
+            }
+        };
+        if dropped > 0 {
+            self.emit_queue_updated();
+        }
     }
 
     /// Write the current queue to disk (atomic: tmp + rename).
@@ -268,7 +305,8 @@ impl QueueManager {
         self.items.write().unwrap().insert(id.clone(), item.clone());
         self.emit_state(&item);
         self.emit_queue_updated();
-        self.persist();
+        // NOTE: don't persist() here — adding a batch of 200 would write the
+        // whole queue 200×. The 15s timer + shutdown cover persistence.
         let me = self.clone();
         tauri::async_runtime::spawn(async move { me.run_loop_for(id).await; });
         Ok(())

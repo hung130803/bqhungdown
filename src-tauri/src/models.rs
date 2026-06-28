@@ -392,6 +392,10 @@ pub struct Settings {
     /// Mặc định bật, để tải nhiều kênh không lẫn lộn.
     #[serde(default = "default_true")]
     pub channel_subfolder: bool,
+    /// Bấm X → thu nhỏ xuống khay + chạy ngầm (để tiếp tục tải) thay vì thoát.
+    /// Mặc định bật. Tắt → bấm X là thoát hẳn.
+    #[serde(default = "default_true")]
+    pub minimize_to_tray: bool,
 }
 
 fn default_cooldown() -> u32 {
@@ -429,6 +433,7 @@ impl Default for Settings {
             po_token_enabled: false,
             rate_limit_cooldown_min: 10,
             channel_subfolder: true,
+            minimize_to_tray: true,
         }
     }
 }
@@ -456,6 +461,7 @@ pub struct SettingsPatch {
     pub po_token_enabled: Option<bool>,
     pub rate_limit_cooldown_min: Option<u32>,
     pub channel_subfolder: Option<bool>,
+    pub minimize_to_tray: Option<bool>,
 }
 
 /// Custom serde deserializer that distinguishes:

@@ -183,6 +183,9 @@ impl SettingsStore {
             if let Some(v) = patch.channel_subfolder {
                 s.channel_subfolder = v;
             }
+            if let Some(v) = patch.minimize_to_tray {
+                s.minimize_to_tray = v;
+            }
             Ok(())
         })
     }

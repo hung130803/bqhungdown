@@ -94,6 +94,12 @@ export function SettingsPage() {
         onChange={v => set("channelSubfolder", v)}
       />
 
+      <Toggle
+        label="Chạy ngầm khi đóng (bấm X xuống khay, vẫn tải tiếp)"
+        checked={settings.minimizeToTray ?? true}
+        onChange={v => set("minimizeToTray", v)}
+      />
+
       <Field label="Bị giới hạn tốc độ → tự tải lại sau (phút)">
         <input
           type="number"

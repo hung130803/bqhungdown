@@ -264,6 +264,8 @@ export interface Settings {
   rateLimitCooldownMin: number;
   /** Tải kênh → tạo thư mục con theo tên kênh. */
   channelSubfolder: boolean;
+  /** Bấm X → chạy ngầm dưới khay thay vì thoát (để tiếp tục tải). */
+  minimizeToTray: boolean;
 }
 
 export type SettingsPatch = Partial<Settings>;

@@ -165,10 +165,69 @@ pub fn run() {
             app.manage(po_proc);
             app.manage(PendingConflicts::default());
 
+            // System tray: lets the app keep running in the background (so it
+            // resumes rate-limited downloads) after the window is closed.
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::TrayIconBuilder;
+                let show_i = MenuItem::with_id(app, "show", "Mở BQHungDown", true, None::<&str>)?;
+                let quit_i = MenuItem::with_id(app, "quit", "Thoát hẳn", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+                let mut builder = TrayIconBuilder::with_id("main-tray");
+                if let Some(icon) = app.default_window_icon() {
+                    builder = builder.icon(icon.clone());
+                }
+                builder
+                    .tooltip("BQHungDown — đang chạy ngầm")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "show" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            if let Some(q) = app.try_state::<Arc<QueueManager>>() {
+                                q.shutdown();
+                            }
+                            app.exit(0);
+                        }
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    })
+                    .build(app)?;
+            }
+
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
+        .on_window_event(|window, event| match event {
+            // Close button: hide to tray (keep running) when enabled.
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                let hide = window
+                    .try_state::<Arc<SettingsStore>>()
+                    .map(|s| s.get().minimize_to_tray)
+                    .unwrap_or(true);
+                if hide {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+            tauri::WindowEvent::Destroyed => {
                 if let Some(queue) = window.try_state::<Arc<QueueManager>>() {
                     queue.shutdown();
                 }
@@ -176,6 +235,7 @@ pub fn run() {
                     crate::po_token::shutdown(&po);
                 }
             }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::validate_url,
