@@ -251,6 +251,13 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             args.push("--http-chunk-size".into());
             args.push("10485760".into()); // 10 MiB / chunk
 
+            // Anti-throttle: YouTube sometimes deliberately throttles a download
+            // to a crawl (~tens of KB/s). If the rate drops below this, yt-dlp
+            // re-extracts fresh URLs and resumes at full speed. Big speed win on
+            // throttled videos, no quality change.
+            args.push("--throttled-rate".into());
+            args.push("100K".into());
+
             // Polite mode — random sleep between requests so we don't trip
             // YouTube/TikTok rate limiting when batch-downloading a channel.
             // Caller turns this on for "Tải kênh" flows.
