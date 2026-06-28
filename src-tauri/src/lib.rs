@@ -95,7 +95,21 @@ pub fn run() {
             // not pass through aria2c's progress, so the UI progress bar stays
             // empty until the file is fully downloaded.
 
-            let queue = QueueManager::new(handle.clone(), settings.clone(), history.clone(), runner.clone());
+            let queue_path = data_dir.join("queue.json");
+            let queue = QueueManager::new(
+                handle.clone(),
+                settings.clone(),
+                history.clone(),
+                runner.clone(),
+                queue_path.clone(),
+            );
+            // Restore a previously saved queue so unfinished downloads resume
+            // automatically after the app is closed/reopened (or crashes).
+            if let Ok(text) = std::fs::read_to_string(&queue_path) {
+                if let Ok(saved) = serde_json::from_str::<Vec<crate::models::DownloadItem>>(&text) {
+                    queue.restore(saved);
+                }
+            }
 
             // Spawn clipboard watcher.
             let watcher = crate::clipboard::ClipboardWatcher::new(handle.clone(), settings.clone());

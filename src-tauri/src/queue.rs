@@ -16,6 +16,7 @@ use crate::ytdlp_runner::{MetaEvent, RunOutcome, YtDlpRunner};
 use chrono::Utc;
 use indexmap::IndexMap;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -127,6 +128,8 @@ pub struct QueueManager {
     history: Arc<HistoryStore>,
     runner: Arc<YtDlpRunner>,
     app: AppHandle,
+    /// Where the queue is persisted so it survives an app restart.
+    queue_path: PathBuf,
 }
 
 impl QueueManager {
@@ -135,9 +138,10 @@ impl QueueManager {
         settings: Arc<SettingsStore>,
         history: Arc<HistoryStore>,
         runner: Arc<YtDlpRunner>,
+        queue_path: PathBuf,
     ) -> Arc<Self> {
         let cap = settings.get().max_concurrency.max(1);
-        Arc::new(Self {
+        let me = Arc::new(Self {
             items: RwLock::new(IndexMap::new()),
             cancel_tokens: Mutex::new(HashMap::new()),
             semaphore: Arc::new(Semaphore::new(cap as usize)),
@@ -146,7 +150,64 @@ impl QueueManager {
             history,
             runner,
             app,
-        })
+            queue_path,
+        });
+        // Periodically save the queue so a crash/power loss doesn't lose more
+        // than a few seconds of progress.
+        let saver = me.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(15)).await;
+                saver.persist();
+            }
+        });
+        me
+    }
+
+    /// Write the current queue to disk (atomic: tmp + rename).
+    pub fn persist(&self) {
+        let snapshot: Vec<DownloadItem> = self.items.read().unwrap().values().cloned().collect();
+        let json = match serde_json::to_string(&snapshot) {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+        let tmp = self.queue_path.with_extension("json.tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, &self.queue_path);
+        }
+    }
+
+    /// Restore a saved queue on startup. Unfinished items (downloading/queued)
+    /// are reset to Queued and resumed; paused/failed are kept for display;
+    /// finished ones are dropped (they're in history + the download-archive).
+    pub fn restore(self: &Arc<Self>, saved: Vec<DownloadItem>) {
+        let mut to_run: Vec<String> = Vec::new();
+        {
+            let mut map = self.items.write().unwrap();
+            for mut it in saved {
+                match it.state {
+                    DownloadState::Completed
+                    | DownloadState::Cancelled
+                    | DownloadState::Skipped => continue,
+                    DownloadState::Downloading | DownloadState::Queued => {
+                        it.state = DownloadState::Queued;
+                        it.bot_retries = 0;
+                        it.attempt = 0;
+                        it.speed_bps = None;
+                        it.eta_sec = None;
+                        it.error_message = None;
+                        to_run.push(it.short_id.clone());
+                    }
+                    DownloadState::Failed | DownloadState::Paused => {}
+                }
+                map.insert(it.short_id.clone(), it);
+            }
+        }
+        self.emit_queue_updated();
+        for id in to_run {
+            let me = self.clone();
+            tauri::async_runtime::spawn(async move { me.run_loop_for(id).await; });
+        }
     }
 
     pub fn list(&self) -> Vec<DownloadItem> {
@@ -155,6 +216,9 @@ impl QueueManager {
 
     /// Cancel mọi download đang chạy/dở và xoá file rác. Được gọi khi đóng app.
     pub fn shutdown(&self) {
+        // Save the queue first (with current states) so reopening resumes the
+        // downloading/queued items.
+        self.persist();
         // Kill all running yt-dlp processes via cancel tokens.
         let tokens: Vec<CancellationToken> = {
             let mut map = self.cancel_tokens.lock().unwrap();
@@ -204,6 +268,7 @@ impl QueueManager {
         self.items.write().unwrap().insert(id.clone(), item.clone());
         self.emit_state(&item);
         self.emit_queue_updated();
+        self.persist();
         let me = self.clone();
         tauri::async_runtime::spawn(async move { me.run_loop_for(id).await; });
         Ok(())
@@ -591,8 +656,12 @@ impl QueueManager {
                 if it.bot_retries < BOT_RETRY_CAP {
                     it.bot_retries += 1;
                     let mins = settings_snapshot.rate_limit_cooldown_min.max(1);
+                    let now = chrono::Local::now();
+                    let retry_at = now + chrono::Duration::minutes(mins as i64);
                     it.error_message = Some(format!(
-                        "Bị giới hạn — tự tải lại sau {mins} phút (lần {})",
+                        "⏳ Bị giới hạn lúc {} — tự tải lại lúc {} (lần {})",
+                        now.format("%H:%M"),
+                        retry_at.format("%H:%M"),
                         it.bot_retries
                     ));
                     it.state = DownloadState::Queued; // show as waiting, not failed
