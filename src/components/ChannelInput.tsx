@@ -5,6 +5,7 @@ import type { ChannelInfo, ChannelVideo } from "@/types/models";
 import { formatDuration } from "@/lib/format";
 import { Thumbnail } from "./Thumbnail";
 import { useChannelStore } from "@/stores/useChannelStore";
+import { useSettingsStore } from "@/stores/useSettingsStore";
 
 /** Detect if a URL is a Douyin user channel link. */
 function isDouyinChannelUrl(url: string): boolean {
@@ -100,6 +101,14 @@ export function ChannelInput({ onSubmit }: Props) {
   /** Số video đã scrape được (Douyin WebView scraper). */
   const [scrapeProgress, setScrapeProgress] = useState(0);
 
+  /** Tên thư mục lưu cho kênh này (mặc định = tên kênh, sửa được). */
+  const channelSubfolder = useSettingsStore((s) => s.settings?.channelSubfolder ?? true);
+  const [folderName, setFolderName] = useState("");
+  const [addedMsg, setAddedMsg] = useState<string | null>(null);
+  useEffect(() => {
+    if (info?.title) setFolderName(info.title);
+  }, [info?.title]);
+
   /** Đồng hồ ms hiện tại — re-render mỗi giây để tính elapsedSec. */
   const [, setNowTick] = useState(0);
   useEffect(() => {
@@ -159,6 +168,7 @@ export function ChannelInput({ onSubmit }: Props) {
     setLoading(true);
     setFetchStartedAt(Date.now());
     setError(null);
+    setAddedMsg(null);
     setScrapeProgress(0);
     resetResult();
 
@@ -481,7 +491,10 @@ export function ChannelInput({ onSubmit }: Props) {
     if (urls.length === 0) return;
     setSubmitting(true);
     try {
-      await Promise.resolve(onSubmit(urls, info?.title || undefined));
+      const folder = channelSubfolder ? (folderName.trim() || undefined) : undefined;
+      await Promise.resolve(onSubmit(urls, folder));
+      const where = folder ? ` → thư mục "${folder}"` : "";
+      setAddedMsg(`✓ Đã thêm ${urls.length} video vào hàng đợi${where}. Dán kênh khác để tải tiếp.`);
       setUrl("");
     } finally {
       setSubmitting(false);
@@ -606,6 +619,12 @@ export function ChannelInput({ onSubmit }: Props) {
         </div>
       )}
 
+      {addedMsg && (
+        <div className="px-3 py-2 rounded-md bg-success/10 border border-success text-success text-sm">
+          {addedMsg}
+        </div>
+      )}
+
       {info && (
         <div className="space-y-3 mt-2">
           <div className="flex items-center gap-3 p-3 rounded-xl bg-surface border border-border">
@@ -625,6 +644,20 @@ export function ChannelInput({ onSubmit }: Props) {
               </div>
             </div>
           </div>
+
+          {channelSubfolder && (
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-muted whitespace-nowrap">📁 Lưu vào thư mục:</span>
+              <input
+                type="text"
+                value={folderName}
+                onChange={(e) => setFolderName(e.target.value)}
+                placeholder="(tên thư mục cho kênh này)"
+                className="flex-1 px-2 py-1.5 rounded-md bg-surface border border-border text-fg"
+                title="Mặc định = tên kênh. Sửa nếu muốn tên khác. Để trống = lưu thẳng vào thư mục gốc."
+              />
+            </label>
+          )}
 
           <div className="flex items-center gap-2 flex-wrap text-sm">
             <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} className="px-2 py-1.5 rounded-md bg-surface border border-border">

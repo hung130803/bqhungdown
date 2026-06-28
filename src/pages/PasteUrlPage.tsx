@@ -109,8 +109,8 @@ export function PasteUrlPage() {
         polite: true,
       },
     });
-    // Jump to the queue page so the user can watch the batch start working.
-    navigate("/queue");
+    // NOTE: intentionally do NOT navigate to /queue here — staying on the
+    // channel tab lets the user add the next channel without being yanked away.
   };
 
   const startPlaylist = async (urls: string[], all: boolean) => {
