@@ -623,7 +623,12 @@ fn scan_dir(
         let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
         if !exts.contains(&ext.as_str()) { continue; }
         // Match if stem contains the sanitized title (or first 30 chars of it).
-        let needle_short = if needle.len() > 30 { &needle[..30] } else { needle };
+        // Use a CHAR boundary, not a byte index — slicing `&needle[..30]` mid
+        // codepoint panics on multibyte titles (Korean/Vietnamese/etc.).
+        let needle_short: &str = match needle.char_indices().nth(30) {
+            Some((i, _)) => &needle[..i],
+            None => needle,
+        };
         if !stem.contains(needle_short) && !stem.starts_with(needle) { continue; }
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
         if size < 100_000 { continue; } // skip tiny fragments

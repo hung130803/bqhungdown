@@ -101,7 +101,11 @@ export async function fetchMetadata(url: string): Promise<VideoMetadata> {
   return invoke<VideoMetadata>("fetch_metadata", { url });
 }
 
-export async function cancelChannelFetch(): Promise<void> {}
+export async function cancelChannelFetch(): Promise<void> {
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("cancel_channel_fetch");
+}
 
 export async function fetchChannelVideos(
   url: string,

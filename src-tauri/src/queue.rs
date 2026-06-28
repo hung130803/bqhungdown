@@ -133,6 +133,8 @@ pub struct QueueManager {
     /// Snapshot of the last channel group removed via `remove_group`, kept so
     /// an accidental "Xóa cả kênh" can be undone.
     last_removed: Mutex<Vec<DownloadItem>>,
+    /// Ensures shutdown() runs once (tray "quit" + window Destroyed both fire it).
+    shutdown_done: std::sync::atomic::AtomicBool,
 }
 
 impl QueueManager {
@@ -155,6 +157,7 @@ impl QueueManager {
             app,
             queue_path,
             last_removed: Mutex::new(Vec::new()),
+            shutdown_done: std::sync::atomic::AtomicBool::new(false),
         });
         // Periodically save the queue so a crash/power loss doesn't lose more
         // than a few seconds of progress.
@@ -368,6 +371,11 @@ impl QueueManager {
 
     /// Cancel mọi download đang chạy/dở và xoá file rác. Được gọi khi đóng app.
     pub fn shutdown(&self) {
+        // Run once — both the tray "Thoát hẳn" and the window Destroyed event
+        // call this; the second call would redundantly re-sweep files.
+        if self.shutdown_done.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         // Save the queue first (with current states) so reopening resumes the
         // downloading/queued items.
         self.persist();
