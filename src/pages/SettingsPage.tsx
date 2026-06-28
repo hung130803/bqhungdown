@@ -13,6 +13,8 @@ export function SettingsPage() {
   // Deno (JS runtime) setup status — polled until ready so the user can see
   // when the video-link decoder is downloaded and active.
   const [deno, setDeno] = useState<string>("unknown");
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanMsg, setCleanMsg] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -44,6 +46,21 @@ export function SettingsPage() {
     if (f) await update({ defaultFolder: f });
   };
 
+  const cleanJunk = async () => {
+    const folder = settings?.defaultFolder;
+    if (cleaning || !folder) return;
+    setCleaning(true);
+    setCleanMsg(null);
+    try {
+      const n = await cmd.cleanJunkFiles(folder);
+      setCleanMsg(`✓ Đã xóa ${n} file rác.`);
+    } catch {
+      setCleanMsg("Lỗi khi dọn.");
+    } finally {
+      setCleaning(false);
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto space-y-5">
       <h2 className="text-xl font-medium text-fg">{t("settings.title")}</h2>
@@ -72,6 +89,23 @@ export function SettingsPage() {
           <button onClick={chooseFolder} className="px-3 py-2 rounded-md bg-surface-2 border border-border text-fg">{t("home.chooseFolder")}</button>
         </div>
       </Field>
+
+      <div className="space-y-1 -mt-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void cleanJunk()}
+            disabled={cleaning || !settings.defaultFolder}
+            className="px-3 py-2 rounded-md bg-surface-2 border border-border text-fg text-sm disabled:opacity-50"
+          >
+            {cleaning ? "Đang dọn…" : "🧹 Dọn file rác trong thư mục tải"}
+          </button>
+          {cleanMsg && <span className="text-xs text-success">{cleanMsg}</span>}
+        </div>
+        <p className="text-xs text-muted">
+          Xóa các file dở dang / 0 byte (icon trắng, không xài được) trong thư mục tải + các thư mục kênh con.
+          Bỏ qua file vừa tải gần đây để không đụng video đang tải.
+        </p>
+      </div>
 
       <Field label={t("settings.theme")}>
         <select value={settings.theme} onChange={e => set("theme", e.target.value as Theme)} className="px-3 py-2 rounded-md bg-surface border border-border text-fg">

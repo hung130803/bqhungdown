@@ -303,6 +303,12 @@ export async function checkFolderWritable(path: string): Promise<boolean> {
   return invoke<boolean>("check_folder_writable", { path });
 }
 
+export async function cleanJunkFiles(folder: string): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("clean_junk_files", { folder });
+}
+
 // ── History ─────────────────────────────────────────────────────────────────
 
 export async function listHistory(input: {

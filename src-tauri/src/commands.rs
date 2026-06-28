@@ -997,6 +997,89 @@ pub async fn check_watched_now(
     Ok(crate::watcher::check_all(&app, store.inner(), queue.inner(), settings.inner(), history.inner()).await)
 }
 
+// ---------- Junk cleanup ----------
+
+/// True for yt-dlp leftover/broken files: `.part`, `.ytdl`, `.frag`, fragment
+/// files like `name.f140.m4a` / `name.f313.webm`, `.temp.` files, and any
+/// 0-byte file. These are the "blank icon" junk left by interrupted downloads.
+fn is_junk_file(name: &str, size: u64) -> bool {
+    let l = name.to_lowercase();
+    if l.ends_with(".part")
+        || l.ends_with(".ytdl")
+        || l.ends_with(".frag")
+        || l.contains(".part-")
+        || l.contains(".temp.")
+    {
+        return true;
+    }
+    // Fragment leftover: a MIDDLE dotted segment shaped like `f<digits>`
+    // (e.g. "title.f140.m4a"). Checking only middle segments avoids deleting a
+    // real file that merely happens to be named "f150.mp4".
+    let segs: Vec<&str> = name.split('.').collect();
+    if segs.len() >= 3 {
+        for seg in &segs[1..segs.len() - 1] {
+            let b = seg.as_bytes();
+            if b.len() >= 2
+                && (b[0] == b'f' || b[0] == b'F')
+                && seg[1..].chars().all(|c| c.is_ascii_digit())
+            {
+                return true;
+            }
+        }
+    }
+    size == 0
+}
+
+fn clean_dir(dir: &std::path::Path, count: &mut u64, depth: u32) {
+    if depth > 6 {
+        return;
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ft = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if ft.is_dir() {
+            clean_dir(&path, count, depth + 1);
+            continue;
+        }
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        // Skip files touched in the last 2 minutes — likely an active download.
+        if let Ok(modified) = meta.modified() {
+            if modified.elapsed().map(|e| e.as_secs() < 120).unwrap_or(false) {
+                continue;
+            }
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if is_junk_file(&name, meta.len()) {
+            if std::fs::remove_file(&path).is_ok() {
+                *count += 1;
+            }
+        }
+    }
+}
+
+/// Recursively delete leftover/broken download files under `folder` (and its
+/// per-channel subfolders). Returns how many were removed.
+#[tauri::command]
+pub fn clean_junk_files(folder: String) -> AppResult<u64> {
+    let root = std::path::PathBuf::from(&folder);
+    if !root.is_dir() {
+        return Ok(0);
+    }
+    let mut count = 0u64;
+    clean_dir(&root, &mut count, 0);
+    Ok(count)
+}
+
 // ---------- Saved bookmarks ----------
 
 #[tauri::command]
