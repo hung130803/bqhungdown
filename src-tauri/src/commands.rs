@@ -408,6 +408,12 @@ pub fn remove_queue_group(folder: String, queue: State<Arc<QueueManager>>) -> Ap
     Ok(queue.remove_group(std::path::Path::new(&folder)))
 }
 
+/// Undo the last "Xóa cả kênh" (restore the removed group). Returns count.
+#[tauri::command]
+pub fn undo_remove_group(queue: State<Arc<QueueManager>>) -> AppResult<usize> {
+    Ok(queue.undo_remove_group())
+}
+
 /// Cheap existence check used by the UI before opening a file. Returns false
 /// for missing/inaccessible paths instead of erroring.
 #[tauri::command]

@@ -254,6 +254,7 @@ pub fn run() {
             commands::list_queue,
             commands::remove_queue_item,
             commands::remove_queue_group,
+            commands::undo_remove_group,
             commands::clean_junk_files,
             commands::path_exists,
             commands::resolve_conflict,

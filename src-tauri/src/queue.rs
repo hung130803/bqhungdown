@@ -130,6 +130,9 @@ pub struct QueueManager {
     app: AppHandle,
     /// Where the queue is persisted so it survives an app restart.
     queue_path: PathBuf,
+    /// Snapshot of the last channel group removed via `remove_group`, kept so
+    /// an accidental "Xóa cả kênh" can be undone.
+    last_removed: Mutex<Vec<DownloadItem>>,
 }
 
 impl QueueManager {
@@ -151,6 +154,7 @@ impl QueueManager {
             runner,
             app,
             queue_path,
+            last_removed: Mutex::new(Vec::new()),
         });
         // Periodically save the queue so a crash/power loss doesn't lose more
         // than a few seconds of progress.
@@ -293,13 +297,16 @@ impl QueueManager {
     /// wipes their leftover partial files, and drops them from the queue.
     /// Returns how many were removed.
     pub fn remove_group(&self, folder: &std::path::Path) -> usize {
-        let ids: Vec<String> = {
+        // Snapshot the group first so the removal can be undone.
+        let snapshot: Vec<DownloadItem> = {
             let map = self.items.read().unwrap();
             map.values()
                 .filter(|it| it.request.save_folder == folder)
-                .map(|it| it.short_id.clone())
+                .cloned()
                 .collect()
         };
+        let ids: Vec<String> = snapshot.iter().map(|it| it.short_id.clone()).collect();
+        *self.last_removed.lock().unwrap() = snapshot;
         // Cancel any active downloads in this group.
         {
             let mut toks = self.cancel_tokens.lock().unwrap();
@@ -324,6 +331,39 @@ impl QueueManager {
             self.persist();
         }
         ids.len()
+    }
+
+    /// Restore the last channel group removed with `remove_group` (undo an
+    /// accidental "Xóa cả kênh"). Re-queues unfinished items. Returns count.
+    pub fn undo_remove_group(self: &Arc<Self>) -> usize {
+        let items: Vec<DownloadItem> = std::mem::take(&mut *self.last_removed.lock().unwrap());
+        let total = items.len();
+        if total == 0 {
+            return 0;
+        }
+        let mut to_run: Vec<String> = Vec::new();
+        {
+            let mut map = self.items.write().unwrap();
+            for mut it in items {
+                if matches!(it.state, DownloadState::Downloading | DownloadState::Queued) {
+                    it.state = DownloadState::Queued;
+                    it.bot_retries = 0;
+                    it.attempt = 0;
+                    it.speed_bps = None;
+                    it.eta_sec = None;
+                    it.error_message = None;
+                    to_run.push(it.short_id.clone());
+                }
+                map.insert(it.short_id.clone(), it);
+            }
+        }
+        self.emit_queue_updated();
+        self.persist();
+        for id in to_run {
+            let me = self.clone();
+            tauri::async_runtime::spawn(async move { me.run_loop_for(id).await; });
+        }
+        total
     }
 
     /// Cancel mọi download đang chạy/dở và xoá file rác. Được gọi khi đóng app.

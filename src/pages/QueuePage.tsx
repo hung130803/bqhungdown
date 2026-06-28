@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useQueueStore } from "@/stores/useQueueStore";
@@ -75,12 +75,25 @@ export function QueuePage() {
     return [...m.entries()].map(([folder, g]) => ({ folder, ...g }));
   }, [items]);
 
+  const [undoLabel, setUndoLabel] = useState<string | null>(null);
+
   const removeGroup = async (folder: string, label: string, count: number) => {
     if (!window.confirm(`Xóa cả kênh "${label}" (${count} mục) khỏi hàng đợi?\nVideo đã tải xong vẫn còn trên máy, chỉ xóa các mục trong danh sách + đang chờ.`)) {
       return;
     }
     try {
       await cmd.removeQueueGroup(folder);
+      setUndoLabel(label);
+      await refresh();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const undoRemove = async () => {
+    try {
+      await cmd.undoRemoveGroup();
+      setUndoLabel(null);
       await refresh();
     } catch {
       /* ignore */
@@ -94,14 +107,32 @@ export function QueuePage() {
     return tb - ta;
   });
 
+  const undoBanner = undoLabel ? (
+    <div className="flex items-center justify-between gap-2 px-3 py-2 mb-2 rounded-md bg-warning/10 border border-warning text-sm">
+      <span className="text-fg">Đã xóa kênh "{undoLabel}" khỏi hàng đợi.</span>
+      <button
+        onClick={() => void undoRemove()}
+        className="px-3 py-1 rounded-md bg-warning text-accent-fg text-xs font-medium shrink-0"
+      >
+        ↩ Hoàn tác
+      </button>
+    </div>
+  ) : null;
+
   if (items.length === 0) {
-    return <p className="text-muted text-center py-12">{t("queue.empty")}</p>;
+    return (
+      <div className="max-w-3xl mx-auto">
+        {undoBanner}
+        <p className="text-muted text-center py-12">{t("queue.empty")}</p>
+      </div>
+    );
   }
 
   return (
     <>
       <ConflictDialog />
       <div className="space-y-2 max-w-3xl mx-auto">
+        {undoBanner}
         {groups.length >= 1 && items.length > 1 && (
           <div className="flex flex-wrap gap-1.5 pb-1">
             <span className="text-xs text-muted self-center mr-1">Xóa cả kênh:</span>

@@ -263,6 +263,12 @@ export async function removeQueueGroup(folder: string): Promise<number> {
   return invoke<number>("remove_queue_group", { folder });
 }
 
+export async function undoRemoveGroup(): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("undo_remove_group");
+}
+
 export async function pathExists(path: string): Promise<boolean> {
   if (IS_WEB) return false;
   const { invoke } = await import("@tauri-apps/api/core");
