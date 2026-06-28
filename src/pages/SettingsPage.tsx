@@ -102,8 +102,8 @@ export function SettingsPage() {
           {cleanMsg && <span className="text-xs text-success">{cleanMsg}</span>}
         </div>
         <p className="text-xs text-muted">
-          Xóa các file dở dang / 0 byte (icon trắng, không xài được) trong thư mục tải + các thư mục kênh con.
-          Bỏ qua file vừa tải gần đây để không đụng video đang tải.
+          App <b>tự động dọn 2 phút/lần</b> các file dở dang / 0 byte (icon trắng, không xài được) — nút này để dọn ngay.
+          <b> Tuyệt đối không xóa video tải xong</b> (còn dùng được) và <b>không đụng video đang tải</b>.
         </p>
       </div>
 

@@ -162,7 +162,44 @@ impl QueueManager {
                 saver.persist();
             }
         });
+        // Auto-clean leftover junk files (blank/broken) in the download folder
+        // every 2 minutes — protecting in-progress downloads. The user never has
+        // to delete them by hand.
+        let cleaner = me.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(120)).await;
+                let folder = cleaner.settings.get().default_folder;
+                if folder.as_os_str().is_empty() {
+                    continue;
+                }
+                let protected = cleaner.protected_prefixes();
+                // Blocking FS walk on a worker thread so the runtime isn't blocked.
+                std::thread::spawn(move || {
+                    let _ = crate::commands::clean_junk_in(&folder, &protected);
+                });
+            }
+        });
         me
+    }
+
+    /// Sanitized title prefixes of videos currently downloading — used to keep
+    /// the junk cleaner from touching an active download's half-written files.
+    pub fn protected_prefixes(&self) -> std::collections::HashSet<String> {
+        self.items
+            .read()
+            .unwrap()
+            .values()
+            .filter(|it| matches!(it.state, DownloadState::Downloading))
+            .map(|it| {
+                crate::filename_resolver::sanitize(&it.title)
+                    .to_lowercase()
+                    .chars()
+                    .take(25)
+                    .collect::<String>()
+            })
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     /// Keep memory bounded for heavy users: drop the oldest finished items from

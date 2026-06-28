@@ -1030,7 +1030,12 @@ fn is_junk_file(name: &str, size: u64) -> bool {
     size == 0
 }
 
-fn clean_dir(dir: &std::path::Path, count: &mut u64, depth: u32) {
+fn clean_dir(
+    dir: &std::path::Path,
+    count: &mut u64,
+    depth: u32,
+    protected: &std::collections::HashSet<String>,
+) {
     if depth > 6 {
         return;
     }
@@ -1045,7 +1050,7 @@ fn clean_dir(dir: &std::path::Path, count: &mut u64, depth: u32) {
             Err(_) => continue,
         };
         if ft.is_dir() {
-            clean_dir(&path, count, depth + 1);
+            clean_dir(&path, count, depth + 1, protected);
             continue;
         }
         let meta = match entry.metadata() {
@@ -1059,25 +1064,38 @@ fn clean_dir(dir: &std::path::Path, count: &mut u64, depth: u32) {
             }
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        if is_junk_file(&name, meta.len()) {
-            if std::fs::remove_file(&path).is_ok() {
-                *count += 1;
-            }
+        if !is_junk_file(&name, meta.len()) {
+            continue;
+        }
+        // Never touch files belonging to a video that's still downloading
+        // (its half-written fragments would corrupt the in-progress merge).
+        let lname = name.to_lowercase();
+        if protected.iter().any(|p| !p.is_empty() && lname.starts_with(p)) {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            *count += 1;
         }
     }
 }
 
-/// Recursively delete leftover/broken download files under `folder` (and its
-/// per-channel subfolders). Returns how many were removed.
-#[tauri::command]
-pub fn clean_junk_files(folder: String) -> AppResult<u64> {
-    let root = std::path::PathBuf::from(&folder);
+/// Recursively delete leftover/broken download files under `root`, skipping any
+/// whose name starts with a `protected` prefix (active downloads). Shared by the
+/// manual command and the queue's automatic cleanup.
+pub(crate) fn clean_junk_in(root: &std::path::Path, protected: &std::collections::HashSet<String>) -> u64 {
     if !root.is_dir() {
-        return Ok(0);
+        return 0;
     }
     let mut count = 0u64;
-    clean_dir(&root, &mut count, 0);
-    Ok(count)
+    clean_dir(root, &mut count, 0, protected);
+    count
+}
+
+/// Recursively delete leftover/broken download files under `folder` (and its
+/// per-channel subfolders), protecting files of currently-downloading videos.
+#[tauri::command]
+pub fn clean_junk_files(folder: String, queue: State<Arc<QueueManager>>) -> AppResult<u64> {
+    Ok(clean_junk_in(std::path::Path::new(&folder), &queue.protected_prefixes()))
 }
 
 // ---------- Saved bookmarks ----------
