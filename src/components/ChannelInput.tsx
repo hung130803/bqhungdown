@@ -15,7 +15,7 @@ function isDouyinChannelUrl(url: string): boolean {
 
 type SortKey = "newest" | "oldest" | "popular" | "longest" | "shortest";
 type LengthFilter = "all" | "short" | "medium" | "long";
-type DateFilter = "all" | "7d" | "30d" | "90d" | "1y" | "custom";
+type DateFilter = "all" | "7d" | "30d" | "90d" | "1y" | "custom" | "year" | "month";
 
 const RUBBER_THRESHOLD = 5;
 const SHORTS_THRESHOLD_SEC = 60;
@@ -93,6 +93,9 @@ export function ChannelInput({ onSubmit }: Props) {
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [customFromDate, setCustomFromDate] = useState<string>("");
   const [customToDate, setCustomToDate] = useState<string>("");
+  // Lọc theo năm / tháng cụ thể (so khớp tiền tố YYYYMMDD — chuẩn, không lệch múi giờ).
+  const [filterYear, setFilterYear] = useState<string>("");
+  const [filterMonth, setFilterMonth] = useState<string>("");
   const [minViewsRaw, setMinViewsRaw] = useState<string>("");
   const [maxViewsRaw, setMaxViewsRaw] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
@@ -231,7 +234,16 @@ export function ChannelInput({ onSubmit }: Props) {
    *  cho long & shorts để bộ lọc apply trên cả 2 cột. */
   const applyFilter = (src: ChannelVideo[]): ChannelVideo[] => {
     let list = src.slice();
-    if (dateFilter !== "all") {
+    if (dateFilter === "year") {
+      // Lọc theo năm: khớp 4 ký tự đầu của uploadDate (YYYYMMDD) — chuẩn, không lệch múi giờ.
+      if (filterYear) list = list.filter((v) => (v.uploadDate ?? "").startsWith(filterYear));
+    } else if (dateFilter === "month") {
+      // Lọc theo tháng cụ thể trong 1 năm: khớp tiền tố YYYYMM.
+      if (filterYear && filterMonth) {
+        const key = filterYear + filterMonth.padStart(2, "0");
+        list = list.filter((v) => (v.uploadDate ?? "").startsWith(key));
+      }
+    } else if (dateFilter !== "all") {
       const now = Date.now();
       let fromMs: number | null = null;
       let toMs: number | null = null;
@@ -283,22 +295,32 @@ export function ChannelInput({ onSubmit }: Props) {
   const longList = useMemo(
     () => (isYoutube ? applyFilter(videos.filter((v) => !isShortVideo(v))) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [videos, sortKey, lengthFilter, dateFilter, customFromDate, customToDate, minViewsRaw, maxViewsRaw, isYoutube],
+    [videos, sortKey, lengthFilter, dateFilter, customFromDate, customToDate, filterYear, filterMonth, minViewsRaw, maxViewsRaw, isYoutube],
   );
   const shortList = useMemo(
     () => (isYoutube ? applyFilter(videos.filter(isShortVideo)) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [videos, sortKey, lengthFilter, dateFilter, customFromDate, customToDate, minViewsRaw, maxViewsRaw, isYoutube],
+    [videos, sortKey, lengthFilter, dateFilter, customFromDate, customToDate, filterYear, filterMonth, minViewsRaw, maxViewsRaw, isYoutube],
   );
   /** Cho non-YouTube: mọi entry chung 1 list. */
   const allList = useMemo(
     () => (isYoutube ? [] : applyFilter(videos)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [videos, sortKey, lengthFilter, dateFilter, customFromDate, customToDate, minViewsRaw, maxViewsRaw, isYoutube],
+    [videos, sortKey, lengthFilter, dateFilter, customFromDate, customToDate, filterYear, filterMonth, minViewsRaw, maxViewsRaw, isYoutube],
   );
   /** Items thuộc tab đang hiện. Cho non-YouTube → luôn dùng allList. */
   const visible = isYoutube ? (resultTab === "long" ? longList : shortList) : allList;
   const selectedCount = visible.filter((v) => !excluded.has(v.url)).length;
+
+  /** Các năm thực sự có video (cho dropdown "Theo năm/tháng"), mới → cũ. */
+  const availableYears = useMemo(() => {
+    const set = new Set<string>();
+    for (const v of videos) {
+      const y = (v.uploadDate ?? "").slice(0, 4);
+      if (y.length === 4) set.add(y);
+    }
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [videos]);
 
   const toggleAll = () => {
     const allInExcluded = visible.every((v) => excluded.has(v.url));
@@ -654,6 +676,12 @@ export function ChannelInput({ onSubmit }: Props) {
             </div>
           </div>
 
+          {info.apiNote && (
+            <div className="px-3 py-2 rounded-md bg-warning/10 border border-warning text-warning text-xs">
+              {info.apiNote}
+            </div>
+          )}
+
           {channelSubfolder && (
             <label className="flex items-center gap-2 text-sm">
               <span className="text-muted whitespace-nowrap">📁 Lưu vào thư mục:</span>
@@ -682,8 +710,26 @@ export function ChannelInput({ onSubmit }: Props) {
               <option value="30d">30 ngày qua</option>
               <option value="90d">3 tháng qua</option>
               <option value="1y">1 năm qua</option>
-              <option value="custom">Tuỳ chọn…</option>
+              <option value="year">Theo năm…</option>
+              <option value="month">Theo tháng…</option>
+              <option value="custom">Khoảng ngày…</option>
             </select>
+            {(dateFilter === "year" || dateFilter === "month") && (
+              <select value={filterYear} onChange={(e) => setFilterYear(e.target.value)} className="px-2 py-1.5 rounded-md bg-surface border border-border" title="Chọn năm">
+                <option value="">— Chọn năm —</option>
+                {availableYears.map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            )}
+            {dateFilter === "month" && (
+              <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="px-2 py-1.5 rounded-md bg-surface border border-border" title="Chọn tháng">
+                <option value="">— Chọn tháng —</option>
+                {Array.from({ length: 12 }, (_, i) => String(i + 1)).map((m) => (
+                  <option key={m} value={m}>Tháng {m}</option>
+                ))}
+              </select>
+            )}
             {dateFilter === "custom" && (
               <>
                 <input type="date" value={customFromDate} onChange={(e) => setCustomFromDate(e.target.value)} className="px-2 py-1.5 rounded-md bg-surface border border-border" title="Từ ngày" />

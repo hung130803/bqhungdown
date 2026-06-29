@@ -16,50 +16,50 @@ export function SettingsPage() {
   const [cleaning, setCleaning] = useState(false);
   const [cleanMsg, setCleanMsg] = useState<string | null>(null);
 
-  // YouTube Data API key — ô nhập + đèn xanh/đỏ báo key chạy được hay không.
-  const [ytKey, setYtKey] = useState<string>("");
-  const [ytStatus, setYtStatus] = useState<"idle" | "checking" | "ok" | "bad">("idle");
-  const [ytError, setYtError] = useState<string | null>(null);
-  // Nạp key đã lưu vào ô + tự kiểm tra 1 lần khi mở trang.
-  useEffect(() => {
-    const saved = settings?.youtubeApiKey ?? "";
-    setYtKey(saved);
-    if (!saved.trim()) {
-      setYtStatus("idle");
-      return;
-    }
-    let alive = true;
-    setYtStatus("checking");
-    void cmd.validateYoutubeApiKey(saved).then(r => {
-      if (!alive) return;
-      setYtStatus(r.ok ? "ok" : "bad");
-      setYtError(r.ok ? null : (r.error ?? null));
-    });
-    return () => { alive = false; };
-    // Chỉ chạy khi key đã lưu đổi (không phải mỗi lần gõ).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings?.youtubeApiKey]);
+  // YouTube Data API — nhiều key, mỗi key có đèn xanh/đỏ. Key hết quota khi
+  // tải sẽ tự nhảy sang key kế; ở đây để người dùng thấy key nào còn/hết.
+  type KeyState = "idle" | "checking" | "ok" | "bad";
+  const ytKeys = settings?.youtubeApiKeys ?? [];
+  const [ytStatuses, setYtStatuses] = useState<Record<number, KeyState>>({});
+  const [ytErrors, setYtErrors] = useState<Record<number, string>>({});
+  const [newKey, setNewKey] = useState<string>("");
+  const ytKeysJoined = ytKeys.join("|");
 
-  const saveAndCheckYtKey = async () => {
-    const key = ytKey.trim();
-    const saved = (settings?.youtubeApiKey ?? "").trim();
-    setYtError(null);
-    if (!key) {
-      if (saved) await update({ youtubeApiKey: null });
-      setYtStatus("idle");
-      return;
-    }
-    if (key !== saved) {
-      // Key mới → lưu lại; effect ở trên tự kiểm tra (xanh/đỏ).
-      await update({ youtubeApiKey: key });
-      return;
-    }
-    // Key không đổi → kiểm tra lại thủ công.
-    setYtStatus("checking");
+  const checkKeyAt = async (index: number, key: string) => {
+    setYtStatuses(s => ({ ...s, [index]: "checking" }));
     const r = await cmd.validateYoutubeApiKey(key);
-    setYtStatus(r.ok ? "ok" : "bad");
-    setYtError(r.ok ? null : (r.error ?? "Key không hoạt động"));
+    setYtStatuses(s => ({ ...s, [index]: r.ok ? "ok" : "bad" }));
+    setYtErrors(e => ({ ...e, [index]: r.ok ? "" : (r.error ?? "Key không hoạt động") }));
   };
+
+  // Khi danh sách key đổi (thêm/xoá/load) → tự kiểm tra lại tất cả 1 lần.
+  useEffect(() => {
+    if (ytKeys.length === 0) return;
+    let alive = true;
+    (async () => {
+      for (let i = 0; i < ytKeys.length; i++) {
+        if (!alive) return;
+        await checkKeyAt(i, ytKeys[i]);
+      }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ytKeysJoined]);
+
+  const addKey = async () => {
+    const k = newKey.trim();
+    if (!k || ytKeys.includes(k)) { setNewKey(""); return; }
+    await update({ youtubeApiKeys: [...ytKeys, k] });
+    setNewKey("");
+  };
+  const removeKeyAt = async (index: number) => {
+    await update({ youtubeApiKeys: ytKeys.filter((_, i) => i !== index) });
+  };
+  const checkAllKeys = async () => {
+    for (let i = 0; i < ytKeys.length; i++) await checkKeyAt(i, ytKeys[i]);
+  };
+  const maskKey = (k: string) =>
+    k.length <= 12 ? k : `${k.slice(0, 8)}…${k.slice(-4)}`;
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -271,47 +271,78 @@ export function SettingsPage() {
         Nên dùng proxy <b>dân cư (residential)</b>; proxy datacenter thường bị chặn. Để trống = không dùng.
       </p>
 
-      <Field label="YouTube API key (lấy view + ngày + hashtag cả kênh trong vài giây)">
-        <div className="flex gap-2 items-stretch">
-          <input
-            type="text"
-            value={ytKey}
-            onChange={e => { setYtKey(e.target.value); setYtStatus("idle"); setYtError(null); }}
-            onKeyDown={e => { if (e.key === "Enter") void saveAndCheckYtKey(); }}
-            placeholder="Dán key dạng AIzaSy..."
-            className="flex-1 px-3 py-2 rounded-md bg-surface border border-border text-fg placeholder:text-muted font-mono text-xs"
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <button
-            onClick={() => void saveAndCheckYtKey()}
-            disabled={ytStatus === "checking"}
-            className="px-3 py-2 rounded-md bg-surface-2 border border-border text-fg shrink-0 disabled:opacity-50"
-          >
-            {ytStatus === "checking" ? "Đang kiểm tra…" : "Lưu & kiểm tra"}
-          </button>
-          {settings.youtubeApiKey && (
+      <Field label="YouTube API key — thêm nhiều key, hết quota tự nhảy key khác">
+        <div className="space-y-2">
+          {/* Danh sách key đã thêm, mỗi key 1 đèn xanh/đỏ */}
+          {ytKeys.map((k, i) => {
+            const st = ytStatuses[i] ?? "idle";
+            return (
+              <div key={`${k}-${i}`} className="flex items-center gap-2 px-3 py-2 rounded-md bg-surface border border-border">
+                <span className="text-sm shrink-0 w-6 text-muted">#{i + 1}</span>
+                <span className="font-mono text-xs text-fg flex-1 truncate" title={k}>{maskKey(k)}</span>
+                <span className="text-xs shrink-0">
+                  {st === "ok" && <span className="text-success font-medium">🟢 OK</span>}
+                  {st === "checking" && <span className="text-warning">⏳…</span>}
+                  {st === "bad" && (
+                    <span className="text-danger font-medium" title={ytErrors[i] ?? ""}>
+                      🔴 {(ytErrors[i] ?? "").includes("hết") || (ytErrors[i] ?? "").includes("quota") ? "Hết quota" : "Lỗi"}
+                    </span>
+                  )}
+                  {st === "idle" && <span className="text-muted">—</span>}
+                </span>
+                <button
+                  onClick={() => void checkKeyAt(i, k)}
+                  className="px-2 py-1 rounded border border-border text-fg text-xs shrink-0"
+                  title="Kiểm tra lại key này"
+                >
+                  Kiểm tra
+                </button>
+                <button
+                  onClick={() => void removeKeyAt(i)}
+                  className="px-2 py-1 rounded border border-border text-fg text-xs shrink-0"
+                  title="Xoá key này"
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })}
+          {/* Ô thêm key mới */}
+          <div className="flex gap-2 items-stretch">
+            <input
+              type="text"
+              value={newKey}
+              onChange={e => setNewKey(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") void addKey(); }}
+              placeholder="Dán key mới dạng AIzaSy... rồi bấm Thêm"
+              className="flex-1 px-3 py-2 rounded-md bg-surface border border-border text-fg placeholder:text-muted font-mono text-xs"
+              spellCheck={false}
+              autoComplete="off"
+            />
             <button
-              onClick={() => { setYtKey(""); void update({ youtubeApiKey: null }); setYtStatus("idle"); setYtError(null); }}
-              className="px-3 py-2 rounded-md border border-border text-fg shrink-0"
-              title="Xoá key"
+              onClick={() => void addKey()}
+              disabled={!newKey.trim()}
+              className="px-3 py-2 rounded-md bg-surface-2 border border-border text-fg shrink-0 disabled:opacity-50"
             >
-              ✕
+              + Thêm key
             </button>
-          )}
+            {ytKeys.length > 0 && (
+              <button
+                onClick={() => void checkAllKeys()}
+                className="px-3 py-2 rounded-md border border-border text-fg shrink-0"
+                title="Kiểm tra lại tất cả key"
+              >
+                Kiểm tra tất cả
+              </button>
+            )}
+          </div>
         </div>
       </Field>
-      <div className="text-xs -mt-3 flex items-center gap-2">
-        {ytStatus === "ok" && <span className="text-success font-medium">🟢 Key hoạt động tốt</span>}
-        {ytStatus === "checking" && <span className="text-warning">⏳ Đang kiểm tra…</span>}
-        {ytStatus === "bad" && <span className="text-danger font-medium">🔴 {ytError ?? "Key không hoạt động"}</span>}
-        {ytStatus === "idle" && (
-          <span className="text-muted">
-            Lấy key miễn phí ở <b>console.cloud.google.com</b> → bật "YouTube Data API v3" → tạo API key.
-            Để trống = dùng cách cũ (dò từng video, chậm).
-          </span>
-        )}
-      </div>
+      <p className="text-xs text-muted -mt-3">
+        Lấy key miễn phí ở <b>console.cloud.google.com</b> → bật "YouTube Data API v3" → tạo API key.
+        Thêm <b>nhiều key</b> để khi 1 key hết 10.000 lượt/ngày, app <b>tự nhảy sang key kế tiếp</b> (key
+        hết sẽ hiện <span className="text-danger">🔴 Hết quota</span>). Để trống = dùng cách cũ (dò từng video, chậm).
+      </p>
 
       <Toggle
         label="Bật PO Token (giảm chặn bot, không cần cookie)"

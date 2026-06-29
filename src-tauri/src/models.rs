@@ -140,6 +140,10 @@ pub struct ChannelInfo {
     /// YouTube channel id (`UC...`) — dùng cho RSS feed kiểm tra nhanh.
     #[serde(default)]
     pub channel_id: Option<String>,
+    /// Ghi chú khi lấy qua YouTube Data API có nhảy key (key hết quota →
+    /// chuyển key khác). UI hiện banner để người dùng biết. `None` = không có.
+    #[serde(default)]
+    pub api_note: Option<String>,
 }
 
 /// Single entry inside a channel listing — what the user picks via checkbox.
@@ -399,10 +403,15 @@ pub struct Settings {
     /// Mặc định bật. Tắt → bấm X là thoát hẳn.
     #[serde(default = "default_true")]
     pub minimize_to_tray: bool,
-    /// YouTube Data API v3 key — khi có, lấy view/thời lượng/ngày/hashtag cả
-    /// kênh trong vài giây (thay vì dò từng video). Rỗng = dùng yt-dlp như cũ.
+    /// (CŨ) 1 YouTube Data API key — giữ lại để chuyển dữ liệu sang
+    /// `youtube_api_keys`. Không dùng trực tiếp nữa.
     #[serde(default)]
     pub youtube_api_key: Option<String>,
+    /// Danh sách YouTube Data API key. Khi có, lấy view/thời lượng/ngày/hashtag
+    /// cả kênh trong vài giây. Nhiều key → key này hết quota tự nhảy sang key
+    /// kế tiếp. Rỗng = dùng yt-dlp như cũ.
+    #[serde(default)]
+    pub youtube_api_keys: Vec<String>,
 }
 
 fn default_cooldown() -> u32 {
@@ -442,6 +451,7 @@ impl Default for Settings {
             channel_subfolder: true,
             minimize_to_tray: true,
             youtube_api_key: None,
+            youtube_api_keys: Vec::new(),
         }
     }
 }
@@ -472,6 +482,7 @@ pub struct SettingsPatch {
     pub minimize_to_tray: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_optional_optional_string")]
     pub youtube_api_key: Option<Option<String>>,
+    pub youtube_api_keys: Option<Vec<String>>,
 }
 
 /// Custom serde deserializer that distinguishes:

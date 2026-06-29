@@ -198,13 +198,14 @@ pub async fn fetch_channel(
     let lower = url.to_lowercase();
     let is_youtube = lower.contains("youtube.com");
     if is_youtube {
-        if let Some(key) = settings
-            .youtube_api_key
-            .as_deref()
-            .map(str::trim)
+        let keys: Vec<String> = settings
+            .youtube_api_keys
+            .iter()
+            .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty())
-        {
-            match crate::youtube_api::fetch_channel(url, key, limit).await {
+            .collect();
+        if !keys.is_empty() {
+            match crate::youtube_api::fetch_channel(url, &keys, limit).await {
                 Ok((info, videos)) => {
                     return finalize_listing(app, info, videos, settings);
                 }
@@ -368,6 +369,7 @@ async fn fetch_douyin_channel(
         extractor: "douyin".into(),
         hidden_downloaded: None,
         channel_id: None,
+        api_note: None,
     };
     let mut videos: Vec<ChannelVideo> = Vec::new();
     let mut cursor: i64 = 0;
@@ -904,6 +906,7 @@ fn parse_channel(source_url: &str, value: Value) -> (ChannelInfo, Vec<ChannelVid
             .and_then(|v| v.as_str())
             .filter(|s| s.starts_with("UC"))
             .map(String::from),
+        api_note: None,
     };
 
     let mut videos = Vec::new();

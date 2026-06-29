@@ -163,6 +163,8 @@ export interface ChannelInfo {
   extractor: string;
   /** Số video bị ẩn vì đã tải trước đó (khi bật "Bỏ qua video đã tải"). */
   hiddenDownloaded?: number | null;
+  /** Ghi chú khi lấy qua YouTube API có nhảy key (key hết quota → đổi key). */
+  apiNote?: string | null;
 }
 
 export interface ChannelVideo {
@@ -268,12 +270,14 @@ export interface Settings {
   channelSubfolder: boolean;
   /** Bấm X → chạy ngầm dưới khay thay vì thoát (để tiếp tục tải). */
   minimizeToTray: boolean;
-  /**
-   * YouTube Data API v3 key. Khi có → "Lấy danh sách kênh" dùng API lấy
-   * view/thời lượng/ngày/hashtag chính xác cho cả kênh trong vài giây
-   * (thay vì dò yt-dlp từng video). `null`/rỗng = dùng yt-dlp như cũ.
-   */
+  /** (CŨ) 1 key — giữ để tương thích; dữ liệu được chuyển sang youtubeApiKeys. */
   youtubeApiKey?: string | null;
+  /**
+   * Danh sách YouTube Data API v3 key. Khi có → "Lấy danh sách kênh" dùng API
+   * lấy view/thời lượng/ngày/hashtag chính xác cho cả kênh trong vài giây.
+   * Nhiều key → key hết quota tự nhảy sang key kế. Rỗng = dùng yt-dlp như cũ.
+   */
+  youtubeApiKeys?: string[];
 }
 
 export type SettingsPatch = Partial<Settings>;

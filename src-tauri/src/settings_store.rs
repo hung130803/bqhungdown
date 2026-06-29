@@ -42,6 +42,7 @@ impl SettingsStore {
                 Ok(text) => match serde_json::from_str::<Settings>(&text) {
                     Ok(mut settings) => {
                         clamp_max_concurrency(&mut settings);
+                        migrate_youtube_keys(&mut settings);
                         let store = Self {
                             inner: RwLock::new(settings),
                             path,
@@ -192,6 +193,10 @@ impl SettingsStore {
                     .map(|k| k.trim().to_string())
                     .filter(|k| !k.is_empty());
             }
+            // youtube_api_keys: danh sách → chuẩn hoá (trim, bỏ rỗng, bỏ trùng).
+            if let Some(keys) = patch.youtube_api_keys {
+                s.youtube_api_keys = normalize_api_keys(keys);
+            }
             Ok(())
         })
     }
@@ -237,6 +242,30 @@ fn clamp_max_concurrency(settings: &mut Settings) {
     } else if settings.max_concurrency > MAX_CONCURRENCY_MAX {
         settings.max_concurrency = MAX_CONCURRENCY_MAX;
     }
+}
+
+/// Chuẩn hoá danh sách API key: trim, bỏ rỗng, bỏ trùng (giữ thứ tự).
+pub(crate) fn normalize_api_keys(keys: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    keys.into_iter()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .filter(|k| seen.insert(k.clone()))
+        .collect()
+}
+
+/// Chuyển dữ liệu key cũ (1 key trong `youtube_api_key`) sang danh sách mới
+/// `youtube_api_keys` để người dùng không mất key đã lưu. Idempotent.
+fn migrate_youtube_keys(settings: &mut Settings) {
+    if settings.youtube_api_keys.is_empty() {
+        if let Some(old) = settings.youtube_api_key.take() {
+            let old = old.trim().to_string();
+            if !old.is_empty() {
+                settings.youtube_api_keys = vec![old];
+            }
+        }
+    }
+    settings.youtube_api_keys = normalize_api_keys(std::mem::take(&mut settings.youtube_api_keys));
 }
 
 fn validate(settings: &Settings) -> AppResult<()> {
@@ -354,6 +383,50 @@ mod tests {
         assert_eq!(on_disk.max_concurrency, 7);
         assert_eq!(on_disk.theme, Theme::Dark);
 
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn migrates_single_youtube_key_to_list() {
+        let path = unique_tmp_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        // File cũ chỉ có 1 key trong `youtube_api_key`.
+        let mut old = Settings::default();
+        old.youtube_api_key = Some("  AIzaOLD  ".to_string());
+        fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+
+        let (store, err) = SettingsStore::load(path.clone());
+        assert!(err.is_none());
+        let s = store.get();
+        assert_eq!(s.youtube_api_keys, vec!["AIzaOLD".to_string()]);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn normalize_keys_trims_dedups_drops_empty() {
+        let out = normalize_api_keys(vec![
+            " k1 ".into(),
+            "".into(),
+            "k2".into(),
+            "k1".into(),
+            "   ".into(),
+        ]);
+        assert_eq!(out, vec!["k1".to_string(), "k2".to_string()]);
+    }
+
+    #[test]
+    fn apply_patch_sets_youtube_api_keys() {
+        let path = unique_tmp_path();
+        let (store, _) = SettingsStore::load(path.clone());
+        let updated = store
+            .apply_patch(SettingsPatch {
+                youtube_api_keys: Some(vec![" a ".into(), "b".into(), "a".into()]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(updated.youtube_api_keys, vec!["a".to_string(), "b".to_string()]);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

@@ -62,27 +62,90 @@ fn friendly_api_error(err: &Value) -> String {
     }
 }
 
-/// Gọi 1 endpoint API, trả JSON đã parse. Bóc lỗi {error:{...}} thành AppError.
-async fn api_get(client: &reqwest::Client, url: &str) -> AppResult<Value> {
+/// True nếu lỗi API là do hết quota / vượt rate-limit → nên nhảy sang key khác.
+fn is_quota_reason(err: &Value) -> bool {
+    let reason = err
+        .get("errors")
+        .and_then(|e| e.get(0))
+        .and_then(|e| e.get("reason"))
+        .and_then(|r| r.as_str())
+        .unwrap_or("");
+    matches!(
+        reason,
+        "quotaExceeded" | "dailyLimitExceeded" | "rateLimitExceeded" | "userRateLimitExceeded"
+    )
+}
+
+/// Bể key xoay vòng: giữ danh sách key + key đang dùng. Khi key hiện tại hết
+/// quota, `advance()` ghi nhận nó "hết" rồi nhảy sang key kế tiếp.
+struct KeyPool<'a> {
+    keys: &'a [String],
+    idx: usize,
+    /// Index các key đã hết quota trong lượt fetch này (để báo lên UI).
+    exhausted: Vec<usize>,
+}
+
+impl<'a> KeyPool<'a> {
+    fn new(keys: &'a [String]) -> Self {
+        KeyPool { keys, idx: 0, exhausted: Vec::new() }
+    }
+
+    /// Key đang dùng. Err khi đã nhảy hết tất cả key (đều hết quota).
+    fn current(&self) -> AppResult<&str> {
+        self.keys.get(self.idx).map(|s| s.as_str()).ok_or_else(|| {
+            AppError::YtDlpFailed(
+                "Tất cả YouTube API key đều đã hết lượt hôm nay. Thêm key mới trong \
+                 Cài đặt, hoặc đợi reset (khoảng 14-15h chiều VN)."
+                    .into(),
+            )
+        })
+    }
+
+    /// Đánh dấu key hiện tại đã hết quota rồi chuyển sang key tiếp theo.
+    fn advance(&mut self) {
+        if !self.exhausted.contains(&self.idx) {
+            self.exhausted.push(self.idx);
+        }
+        self.idx += 1;
+    }
+}
+
+/// Gọi 1 endpoint API (URL CHƯA gắn `key=`), tự gắn key từ `pool`. Nếu key hết
+/// quota → nhảy key kế và thử lại CÙNG request. Bóc lỗi {error:{...}} khác
+/// thành AppError tiếng Việt.
+async fn api_get(
+    client: &reqwest::Client,
+    pool: &mut KeyPool<'_>,
+    url_no_key: &str,
+) -> AppResult<Value> {
+    loop {
+        let key = pool.current()?.to_string();
+        let sep = if url_no_key.contains('?') { '&' } else { '?' };
+        let url = format!("{url_no_key}{sep}key={key}");
+        let body = single_get(client, &url).await?;
+        if let Some(err) = body.get("error") {
+            if is_quota_reason(err) {
+                pool.advance(); // key này hết → thử key kế
+                continue;
+            }
+            return Err(AppError::YtDlpFailed(friendly_api_error(err)));
+        }
+        return Ok(body);
+    }
+}
+
+/// Gửi 1 GET, trả body JSON (kể cả khi body chứa `error`). Chỉ lỗi mạng/parse
+/// mới thành Err ở đây — lỗi API do caller xử lý.
+async fn single_get(client: &reqwest::Client, url: &str) -> AppResult<Value> {
     let resp = client
         .get(url)
         .send()
         .await
         .map_err(|e| AppError::YtDlpFailed(format!("Lỗi mạng khi gọi API: {e}")))?;
     let status = resp.status();
-    let body: Value = resp.json().await.map_err(|e| {
+    resp.json().await.map_err(|e| {
         AppError::YtDlpFailed(format!("Không đọc được phản hồi API (HTTP {status}): {e}"))
-    })?;
-    if let Some(err) = body.get("error") {
-        return Err(AppError::YtDlpFailed(friendly_api_error(err)));
-    }
-    if !status.is_success() {
-        return Err(AppError::YtDlpFailed(format!(
-            "YouTube API trả lỗi HTTP {}",
-            status.as_u16()
-        )));
-    }
-    Ok(body)
+    })
 }
 
 /// Kiểm tra key có dùng được không. Ok(()) = xanh, Err(msg) = đỏ + lý do.
@@ -95,7 +158,10 @@ pub async fn validate_key(key: &str) -> AppResult<()> {
     let client = build_client()?;
     // dQw4w9WgXcQ là 1 video công khai luôn tồn tại → phép thử rẻ + ổn định.
     let url = format!("{API_BASE}/videos?part=id&id=dQw4w9WgXcQ&key={key}");
-    let body = api_get(&client, &url).await?;
+    let body = single_get(&client, &url).await?;
+    if let Some(err) = body.get("error") {
+        return Err(AppError::YtDlpFailed(friendly_api_error(err)));
+    }
     if body.get("items").and_then(|i| i.as_array()).is_some() {
         Ok(())
     } else {
@@ -181,7 +247,6 @@ fn published_to_date(published: &str) -> Option<String> {
 }
 
 struct Resolved {
-    channel_id: String,
     uploads_playlist: String,
     info: ChannelInfo,
 }
@@ -190,7 +255,7 @@ struct Resolved {
 /// Hỗ trợ /channel/UC..., /@handle, /user/name, /c/custom (custom dùng search).
 async fn resolve_channel(
     client: &reqwest::Client,
-    key: &str,
+    pool: &mut KeyPool<'_>,
     url: &str,
 ) -> AppResult<Resolved> {
     let lower = url.to_lowercase();
@@ -221,7 +286,7 @@ async fn resolve_channel(
             .split(|c| c == '/' || c == '?' || c == '&' || c == '#')
             .next()
             .unwrap_or("");
-        let cid = search_channel_id(client, key, name).await?;
+        let cid = search_channel_id(client, pool, name).await?;
         format!("id={cid}")
     } else {
         return Err(AppError::YtDlpFailed(
@@ -229,10 +294,8 @@ async fn resolve_channel(
         ));
     };
 
-    let url = format!(
-        "{API_BASE}/channels?part=snippet,contentDetails,statistics&{lookup}&key={key}"
-    );
-    let body = api_get(client, &url).await?;
+    let url = format!("{API_BASE}/channels?part=snippet,contentDetails,statistics&{lookup}");
+    let body = api_get(client, pool, &url).await?;
     let item = body
         .get("items")
         .and_then(|i| i.as_array())
@@ -274,10 +337,10 @@ async fn resolve_channel(
         extractor: "youtube:api".into(),
         hidden_downloaded: None,
         channel_id: Some(channel_id.clone()),
+        api_note: None,
     };
 
     Ok(Resolved {
-        channel_id,
         uploads_playlist,
         info,
     })
@@ -286,13 +349,12 @@ async fn resolve_channel(
 /// Resolve custom (/c/) URL → channelId qua search.list (tốn 100 quota).
 async fn search_channel_id(
     client: &reqwest::Client,
-    key: &str,
+    pool: &mut KeyPool<'_>,
     query: &str,
 ) -> AppResult<String> {
     let q = urlencoding(query);
-    let url =
-        format!("{API_BASE}/search?part=snippet&type=channel&maxResults=1&q={q}&key={key}");
-    let body = api_get(client, &url).await?;
+    let url = format!("{API_BASE}/search?part=snippet&type=channel&maxResults=1&q={q}");
+    let body = api_get(client, pool, &url).await?;
     body.pointer("/items/0/id/channelId")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
@@ -316,7 +378,7 @@ fn urlencoding(s: &str) -> String {
 /// Lấy toàn bộ (đến `cap`) video id trong playlist uploads, mới nhất trước.
 async fn list_upload_ids(
     client: &reqwest::Client,
-    key: &str,
+    pool: &mut KeyPool<'_>,
     uploads_playlist: &str,
     cap: u32,
 ) -> AppResult<Vec<String>> {
@@ -328,9 +390,9 @@ async fn list_upload_ids(
             .map(|t| format!("&pageToken={t}"))
             .unwrap_or_default();
         let url = format!(
-            "{API_BASE}/playlistItems?part=contentDetails&maxResults=50&playlistId={uploads_playlist}{token_param}&key={key}"
+            "{API_BASE}/playlistItems?part=contentDetails&maxResults=50&playlistId={uploads_playlist}{token_param}"
         );
-        let body = api_get(client, &url).await?;
+        let body = api_get(client, pool, &url).await?;
         if let Some(items) = body.get("items").and_then(|i| i.as_array()) {
             for it in items {
                 if let Some(id) = it
@@ -356,16 +418,16 @@ async fn list_upload_ids(
 /// Lấy metadata chi tiết cho danh sách id (chia lô 50), trả map id → video.
 async fn fetch_video_details(
     client: &reqwest::Client,
-    key: &str,
+    pool: &mut KeyPool<'_>,
     ids: &[String],
 ) -> AppResult<std::collections::HashMap<String, ChannelVideo>> {
     let mut map = std::collections::HashMap::new();
     for chunk in ids.chunks(50) {
         let id_param = chunk.join(",");
         let url = format!(
-            "{API_BASE}/videos?part=snippet,statistics,contentDetails&id={id_param}&key={key}"
+            "{API_BASE}/videos?part=snippet,statistics,contentDetails&id={id_param}"
         );
-        let body = api_get(client, &url).await?;
+        let body = api_get(client, pool, &url).await?;
         let items = match body.get("items").and_then(|i| i.as_array()) {
             Some(a) => a,
             None => continue,
@@ -427,24 +489,42 @@ async fn fetch_video_details(
 
 /// Lấy danh sách + metadata chính xác của cả kênh. `limit = 0` → tất cả (đến
 /// HARD_CAP). Giữ thứ tự mới-nhất-trước từ playlist uploads.
+///
+/// `keys` là danh sách API key: dùng key đầu, key nào hết quota giữa chừng tự
+/// nhảy sang key kế tiếp. `info.api_note` ghi lại nếu có nhảy key (để báo UI).
 pub async fn fetch_channel(
     url: &str,
-    key: &str,
+    keys: &[String],
     limit: u32,
 ) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
-    let key = key.trim();
-    if key.is_empty() {
+    let keys: Vec<String> = keys
+        .iter()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .collect();
+    if keys.is_empty() {
         return Err(AppError::YtDlpFailed("Chưa nhập YouTube API key.".into()));
     }
     let client = build_client()?;
+    let mut pool = KeyPool::new(&keys);
 
-    let resolved = resolve_channel(&client, key, url).await?;
+    let resolved = resolve_channel(&client, &mut pool, url).await?;
     let cap = if limit == 0 { HARD_CAP } else { limit.min(HARD_CAP) };
-    let ids = list_upload_ids(&client, key, &resolved.uploads_playlist, cap).await?;
+    let ids = list_upload_ids(&client, &mut pool, &resolved.uploads_playlist, cap).await?;
+
+    let mut info = resolved.info;
+    // `statistics.videoCount` của Google hay sai (thường KHÔNG tính Shorts, lại
+    // bị trễ) → dùng số video THỰC SỰ liệt kê được từ playlist uploads để
+    // "bài trên kênh" khớp với danh sách hiển thị. Đây là sửa lỗi "số lượng lệch".
+    info.video_count = Some(ids.len() as u32);
+    info.api_note = build_api_note(&pool);
+
     if ids.is_empty() {
-        return Ok((resolved.info, Vec::new()));
+        return Ok((info, Vec::new()));
     }
-    let mut details = fetch_video_details(&client, key, &ids).await?;
+    let mut details = fetch_video_details(&client, &mut pool, &ids).await?;
+    // Cập nhật lại note vì việc nhảy key có thể xảy ra trong lúc lấy chi tiết.
+    info.api_note = build_api_note(&pool);
 
     // Giữ đúng thứ tự id (mới nhất trước) khi videos.list trả về xáo trộn.
     let mut videos: Vec<ChannelVideo> = Vec::with_capacity(ids.len());
@@ -454,8 +534,20 @@ pub async fn fetch_channel(
         }
     }
 
-    let _ = resolved.channel_id; // đã nhét vào info.channel_id
-    Ok((resolved.info, videos))
+    Ok((info, videos))
+}
+
+/// Soạn câu thông báo nhảy key (nếu có) cho UI. None khi không có key nào hết.
+fn build_api_note(pool: &KeyPool<'_>) -> Option<String> {
+    if pool.exhausted.is_empty() {
+        return None;
+    }
+    let dead: Vec<String> = pool.exhausted.iter().map(|i| format!("#{}", i + 1)).collect();
+    Some(format!(
+        "⚠️ API key {} đã hết lượt hôm nay → đã tự chuyển sang key #{}.",
+        dead.join(", "),
+        pool.idx + 1
+    ))
 }
 
 #[cfg(test)]
@@ -496,5 +588,60 @@ mod tests {
     fn urlencodes_spaces_and_unicode() {
         assert_eq!(urlencoding("a b"), "a%20b");
         assert_eq!(urlencoding("Reup-2024_x"), "Reup-2024_x");
+    }
+
+    #[test]
+    fn keypool_advances_and_records_exhausted() {
+        let keys = vec!["k1".to_string(), "k2".to_string(), "k3".to_string()];
+        let mut pool = KeyPool::new(&keys);
+        assert_eq!(pool.current().unwrap(), "k1");
+        pool.advance(); // k1 hết
+        assert_eq!(pool.current().unwrap(), "k2");
+        pool.advance(); // k2 hết
+        assert_eq!(pool.current().unwrap(), "k3");
+        assert_eq!(pool.exhausted, vec![0, 1]);
+    }
+
+    #[test]
+    fn keypool_errors_when_all_exhausted() {
+        let keys = vec!["only".to_string()];
+        let mut pool = KeyPool::new(&keys);
+        pool.advance(); // key duy nhất hết → không còn key
+        assert!(pool.current().is_err());
+    }
+
+    #[test]
+    fn keypool_advance_idempotent_on_same_index() {
+        // Gọi advance khi đã hết key không nhân đôi index trong `exhausted`.
+        let keys = vec!["k1".to_string(), "k2".to_string()];
+        let mut pool = KeyPool::new(&keys);
+        pool.advance();
+        pool.advance(); // idx=2, ghi nhận index 1
+        assert_eq!(pool.exhausted, vec![0, 1]);
+    }
+
+    #[test]
+    fn api_note_none_when_no_failover() {
+        let keys = vec!["k1".to_string()];
+        let pool = KeyPool::new(&keys);
+        assert!(build_api_note(&pool).is_none());
+    }
+
+    #[test]
+    fn api_note_reports_dead_key_and_current() {
+        let keys = vec!["k1".to_string(), "k2".to_string()];
+        let mut pool = KeyPool::new(&keys);
+        pool.advance(); // k1 hết → đang dùng k2 (idx 1)
+        let note = build_api_note(&pool).unwrap();
+        assert!(note.contains("#1"));
+        assert!(note.contains("#2"));
+    }
+
+    #[test]
+    fn quota_reason_detection() {
+        let quota = serde_json::json!({"errors":[{"reason":"quotaExceeded"}]});
+        let invalid = serde_json::json!({"errors":[{"reason":"keyInvalid"}]});
+        assert!(is_quota_reason(&quota));
+        assert!(!is_quota_reason(&invalid));
     }
 }
