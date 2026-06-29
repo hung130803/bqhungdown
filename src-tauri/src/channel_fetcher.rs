@@ -174,6 +174,7 @@ pub async fn fetch_channel(
     detailed: bool,
     tab: &str,
     settings: &Settings,
+    force_refresh: bool,
 ) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
     let my_gen = FETCH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -205,7 +206,26 @@ pub async fn fetch_channel(
             .filter(|k| !k.is_empty())
             .collect();
         if !keys.is_empty() {
-            match crate::youtube_api::fetch_channel(url, &keys, limit).await {
+            // Cache theo kênh — CHỈ dùng cho lần "lấy cả kênh" (limit == 0) từ UI.
+            // Watcher gọi với limit nhỏ (CHECK_LIMIT) nên KHÔNG đụng cache, tránh
+            // ghi đè cache đầy đủ bằng danh sách bị cắt ngắn.
+            let cache = if limit == 0 {
+                app.path()
+                    .app_data_dir()
+                    .ok()
+                    .map(|d| crate::channel_cache::ChannelCache::new(d.join("channel_cache")))
+            } else {
+                None
+            };
+            match crate::youtube_api::fetch_channel(
+                url,
+                &keys,
+                limit,
+                cache.as_ref(),
+                force_refresh,
+            )
+            .await
+            {
                 Ok((info, videos)) => {
                     return finalize_listing(app, info, videos, settings);
                 }

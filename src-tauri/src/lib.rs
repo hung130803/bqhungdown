@@ -19,6 +19,7 @@ pub mod douyin_scraper;
 pub mod clipboard;
 pub mod channel_fetcher;
 pub mod youtube_api;
+pub mod channel_cache;
 pub mod ytdlp_runner;
 pub mod ytdlp_update;
 pub mod watchlist_store;

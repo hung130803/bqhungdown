@@ -92,6 +92,7 @@ pub async fn fetch_channel_videos(
     limit: Option<u32>,
     detailed: Option<bool>,
     tab: Option<String>,
+    force_refresh: Option<bool>,
     app: AppHandle,
     settings: State<'_, Arc<SettingsStore>>,
 ) -> AppResult<ChannelFetchResult> {
@@ -99,8 +100,9 @@ pub async fn fetch_channel_videos(
     let cap = limit.unwrap_or(0).min(5000);
     let det = detailed.unwrap_or(false);
     let tab_s = tab.unwrap_or_else(|| "videos".into());
+    let force = force_refresh.unwrap_or(false);
     let (info, videos) = crate::channel_fetcher::fetch_channel(
-        &app, &url, cap, det, &tab_s, &s,
+        &app, &url, cap, det, &tab_s, &s, force,
     ).await?;
     Ok(ChannelFetchResult { info, videos })
 }

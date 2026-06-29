@@ -166,7 +166,7 @@ export function ChannelInput({ onSubmit }: Props) {
     el: null,
   });
 
-  const handleFetch = async () => {
+  const handleFetch = async (forceRefresh = false) => {
     if (!url.trim()) return;
     setLoading(true);
     setFetchStartedAt(Date.now());
@@ -206,7 +206,7 @@ export function ChannelInput({ onSubmit }: Props) {
       }
 
       // ── YouTube / TikTok / other: use yt-dlp via Rust backend ───────────
-      const r = await cmd.fetchChannelVideos(trimmed, 0, detailed, "all");
+      const r = await cmd.fetchChannelVideos(trimmed, 0, detailed, "all", forceRefresh);
       setResult(r.info, r.videos);
     } catch (e) {
       const msg = formatErr(e);
@@ -616,13 +616,25 @@ export function ChannelInput({ onSubmit }: Props) {
               : `Huỷ (${elapsedSec}s)`}
           </button>
         ) : (
-          <button
-            onClick={() => void handleFetch()}
-            disabled={!url.trim()}
-            className="px-3 py-2 rounded-md bg-surface-2 border border-border text-fg text-sm disabled:opacity-50"
-          >
-            Lấy danh sách
-          </button>
+          <>
+            <button
+              onClick={() => void handleFetch(false)}
+              disabled={!url.trim()}
+              className="px-3 py-2 rounded-md bg-surface-2 border border-border text-fg text-sm disabled:opacity-50"
+            >
+              Lấy danh sách
+            </button>
+            {info && (
+              <button
+                onClick={() => void handleFetch(true)}
+                disabled={!url.trim()}
+                className="px-3 py-2 rounded-md border border-border text-fg text-sm disabled:opacity-50"
+                title="Bỏ qua bộ nhớ đệm, lấy lại toàn bộ để có view mới nhất (tốn quota như lần đầu)"
+              >
+                🔄 Làm mới toàn bộ
+              </button>
+            )}
+          </>
         )}
       </div>
       <label className="inline-flex items-center gap-2 text-xs text-muted">

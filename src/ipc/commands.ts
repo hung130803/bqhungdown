@@ -112,12 +112,13 @@ export async function fetchChannelVideos(
   limit: number = 0,
   detailed: boolean = false,
   tab: "all" | "videos" | "shorts" | "streams" = "videos",
+  forceRefresh: boolean = false,
 ): Promise<ChannelFetchResult> {
   if (IS_WEB) {
     throw new Error("Tính năng kênh chưa hỗ trợ trên web. Dùng app desktop.");
   }
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<ChannelFetchResult>("fetch_channel_videos", { url, limit, detailed, tab });
+  return invoke<ChannelFetchResult>("fetch_channel_videos", { url, limit, detailed, tab, forceRefresh });
 }
 
 // ── Enqueue ──────────────────────────────────────────────────────────────────

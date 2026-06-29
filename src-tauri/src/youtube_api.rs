@@ -12,12 +12,18 @@
 //! kênh/ngày.
 
 use crate::error::{AppError, AppResult};
+use crate::channel_cache::ChannelCache;
 use crate::models::{ChannelInfo, ChannelVideo};
 use serde_json::Value;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 const API_BASE: &str = "https://www.googleapis.com/youtube/v3";
+/// Số lô videos.list chạy song song khi lấy chi tiết. 8 lô × 50 = 400 video
+/// "bay" cùng lúc — nhanh mà vẫn dưới ngưỡng rate-limit/phút của API.
+const DETAIL_CONCURRENCY: usize = 8;
 /// Trần an toàn số video lấy về khi người dùng chọn "tất cả" (limit = 0) —
 /// khớp với hành vi cũ của app, tránh kênh khổng lồ kéo vô tận.
 const HARD_CAP: u32 = 5000;
@@ -78,21 +84,22 @@ fn is_quota_reason(err: &Value) -> bool {
 
 /// Bể key xoay vòng: giữ danh sách key + key đang dùng. Khi key hiện tại hết
 /// quota, `advance()` ghi nhận nó "hết" rồi nhảy sang key kế tiếp.
-struct KeyPool<'a> {
-    keys: &'a [String],
+struct KeyPool {
+    keys: Vec<String>,
     idx: usize,
     /// Index các key đã hết quota trong lượt fetch này (để báo lên UI).
     exhausted: Vec<usize>,
 }
 
-impl<'a> KeyPool<'a> {
-    fn new(keys: &'a [String]) -> Self {
+impl KeyPool {
+    fn new(keys: Vec<String>) -> Self {
         KeyPool { keys, idx: 0, exhausted: Vec::new() }
     }
 
-    /// Key đang dùng. Err khi đã nhảy hết tất cả key (đều hết quota).
-    fn current(&self) -> AppResult<&str> {
-        self.keys.get(self.idx).map(|s| s.as_str()).ok_or_else(|| {
+    /// Key đang dùng (bản sao, để nhả lock trước khi gọi mạng). Err khi đã
+    /// nhảy hết tất cả key (đều hết quota).
+    fn current(&self) -> AppResult<String> {
+        self.keys.get(self.idx).cloned().ok_or_else(|| {
             AppError::YtDlpFailed(
                 "Tất cả YouTube API key đều đã hết lượt hôm nay. Thêm key mới trong \
                  Cài đặt, hoặc đợi reset (khoảng 14-15h chiều VN)."
@@ -115,17 +122,27 @@ impl<'a> KeyPool<'a> {
 /// thành AppError tiếng Việt.
 async fn api_get(
     client: &reqwest::Client,
-    pool: &mut KeyPool<'_>,
+    pool: &Arc<Mutex<KeyPool>>,
     url_no_key: &str,
 ) -> AppResult<Value> {
     loop {
-        let key = pool.current()?.to_string();
+        // Đọc key hiện tại + index của nó, rồi NHẢ lock trước khi gọi mạng để
+        // các lô song song khác không bị chặn.
+        let (key, my_idx) = {
+            let p = pool.lock().await;
+            (p.current()?, p.idx)
+        };
         let sep = if url_no_key.contains('?') { '&' } else { '?' };
         let url = format!("{url_no_key}{sep}key={key}");
         let body = single_get(client, &url).await?;
         if let Some(err) = body.get("error") {
             if is_quota_reason(err) {
-                pool.advance(); // key này hết → thử key kế
+                // Key này hết quota. Chỉ advance nếu chưa có lô song song nào
+                // advance trước (idx vẫn bằng idx lúc ta đọc) → tránh nhảy lố.
+                let mut p = pool.lock().await;
+                if p.idx == my_idx {
+                    p.advance();
+                }
                 continue;
             }
             return Err(AppError::YtDlpFailed(friendly_api_error(err)));
@@ -255,7 +272,7 @@ struct Resolved {
 /// Hỗ trợ /channel/UC..., /@handle, /user/name, /c/custom (custom dùng search).
 async fn resolve_channel(
     client: &reqwest::Client,
-    pool: &mut KeyPool<'_>,
+    pool: &Arc<Mutex<KeyPool>>,
     url: &str,
 ) -> AppResult<Resolved> {
     let lower = url.to_lowercase();
@@ -349,7 +366,7 @@ async fn resolve_channel(
 /// Resolve custom (/c/) URL → channelId qua search.list (tốn 100 quota).
 async fn search_channel_id(
     client: &reqwest::Client,
-    pool: &mut KeyPool<'_>,
+    pool: &Arc<Mutex<KeyPool>>,
     query: &str,
 ) -> AppResult<String> {
     let q = urlencoding(query);
@@ -378,11 +395,15 @@ fn urlencoding(s: &str) -> String {
 /// Lấy toàn bộ (đến `cap`) video id trong playlist uploads, mới nhất trước.
 async fn list_upload_ids(
     client: &reqwest::Client,
-    pool: &mut KeyPool<'_>,
+    pool: &Arc<Mutex<KeyPool>>,
     uploads_playlist: &str,
     cap: u32,
-) -> AppResult<Vec<String>> {
+    // Khi Some: dừng sớm ngay khi gặp 1 id đã có trong tập này (incremental).
+    // Trả về (ids mới, có_gặp_id_đã_cache).
+    stop_at_cached: Option<&HashSet<String>>,
+) -> AppResult<(Vec<String>, bool)> {
     let mut ids: Vec<String> = Vec::new();
+    let mut hit_cached = false;
     let mut page_token: Option<String> = None;
     loop {
         let token_param = page_token
@@ -399,11 +420,19 @@ async fn list_upload_ids(
                     .pointer("/contentDetails/videoId")
                     .and_then(|v| v.as_str())
                 {
+                    // Incremental: uploads xếp mới→cũ, nên gặp id đã cache nghĩa
+                    // là từ đây trở đi đều đã có → dừng, chỉ giữ phần mới.
+                    if let Some(cached) = stop_at_cached {
+                        if cached.contains(id) {
+                            hit_cached = true;
+                            break;
+                        }
+                    }
                     ids.push(id.to_string());
                 }
             }
         }
-        if ids.len() as u32 >= cap {
+        if hit_cached || ids.len() as u32 >= cap {
             ids.truncate(cap as usize);
             break;
         }
@@ -412,90 +441,156 @@ async fn list_upload_ids(
             None => break,
         }
     }
-    Ok(ids)
+    Ok((ids, hit_cached))
 }
 
-/// Lấy metadata chi tiết cho danh sách id (chia lô 50), trả map id → video.
+/// Parse 1 item trong videos.list → (id, ChannelVideo). None nếu thiếu id.
+fn parse_video_item(it: &Value) -> Option<(String, ChannelVideo)> {
+    let id = it.get("id").and_then(|v| v.as_str())?.to_string();
+    let title = it
+        .pointer("/snippet/title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let description = it
+        .pointer("/snippet/description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let upload_date = it
+        .pointer("/snippet/publishedAt")
+        .and_then(|v| v.as_str())
+        .and_then(published_to_date);
+    let view_count = it
+        .pointer("/statistics/viewCount")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<u64>().ok());
+    let duration_sec = it
+        .pointer("/contentDetails/duration")
+        .and_then(|v| v.as_str())
+        .and_then(parse_iso8601_duration);
+    let thumbnail = it
+        .pointer("/snippet/thumbnails/medium/url")
+        .or_else(|| it.pointer("/snippet/thumbnails/default/url"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let hashtags = extract_hashtags(&title, description);
+    // YouTube Data API không gắn cờ Shorts; dùng heuristic thời lượng ngắn
+    // (≤ 60s) như phần còn lại của app.
+    let is_short = duration_sec.map(|d| d <= 60).unwrap_or(false);
+    Some((
+        id.clone(),
+        ChannelVideo {
+            url: format!("https://www.youtube.com/watch?v={id}"),
+            title,
+            duration_sec,
+            view_count,
+            upload_date,
+            thumbnail,
+            is_photo: false,
+            is_short,
+            hashtags,
+        },
+    ))
+}
+
+/// Lấy chi tiết cho 1 lô (≤ 50 id) → danh sách (id, video).
+async fn fetch_detail_chunk(
+    client: &reqwest::Client,
+    pool: &Arc<Mutex<KeyPool>>,
+    chunk: &[String],
+) -> AppResult<Vec<(String, ChannelVideo)>> {
+    let id_param = chunk.join(",");
+    let url =
+        format!("{API_BASE}/videos?part=snippet,statistics,contentDetails&id={id_param}");
+    let body = api_get(client, pool, &url).await?;
+    let items = match body.get("items").and_then(|i| i.as_array()) {
+        Some(a) => a,
+        None => return Ok(Vec::new()),
+    };
+    Ok(items.iter().filter_map(parse_video_item).collect())
+}
+
+/// Lấy metadata chi tiết cho danh sách id, CHẠY SONG SONG nhiều lô (mỗi lô 50)
+/// để nhanh hơn ~vài lần. Trả map id → video.
 async fn fetch_video_details(
     client: &reqwest::Client,
-    pool: &mut KeyPool<'_>,
+    pool: &Arc<Mutex<KeyPool>>,
     ids: &[String],
 ) -> AppResult<std::collections::HashMap<String, ChannelVideo>> {
-    let mut map = std::collections::HashMap::new();
-    for chunk in ids.chunks(50) {
-        let id_param = chunk.join(",");
-        let url = format!(
-            "{API_BASE}/videos?part=snippet,statistics,contentDetails&id={id_param}"
-        );
-        let body = api_get(client, pool, &url).await?;
-        let items = match body.get("items").and_then(|i| i.as_array()) {
-            Some(a) => a,
-            None => continue,
-        };
-        for it in items {
-            let id = match it.get("id").and_then(|v| v.as_str()) {
-                Some(s) => s.to_string(),
-                None => continue,
-            };
-            let title = it
-                .pointer("/snippet/title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let description = it
-                .pointer("/snippet/description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let upload_date = it
-                .pointer("/snippet/publishedAt")
-                .and_then(|v| v.as_str())
-                .and_then(published_to_date);
-            let view_count = it
-                .pointer("/statistics/viewCount")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<u64>().ok());
-            let duration_sec = it
-                .pointer("/contentDetails/duration")
-                .and_then(|v| v.as_str())
-                .and_then(parse_iso8601_duration);
-            let thumbnail = it
-                .pointer("/snippet/thumbnails/medium/url")
-                .or_else(|| it.pointer("/snippet/thumbnails/default/url"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let hashtags = extract_hashtags(&title, description);
-            // YouTube Data API không gắn cờ Shorts; dùng heuristic thời lượng
-            // ngắn (≤ 60s) như phần còn lại của app.
-            let is_short = duration_sec.map(|d| d <= 60).unwrap_or(false);
+    use tokio::task::JoinSet;
 
-            map.insert(
-                id.clone(),
-                ChannelVideo {
-                    url: format!("https://www.youtube.com/watch?v={id}"),
-                    title,
-                    duration_sec,
-                    view_count,
-                    upload_date,
-                    thumbnail,
-                    is_photo: false,
-                    is_short,
-                    hashtags,
-                },
-            );
+    let chunks: Vec<Vec<String>> = ids.chunks(50).map(|c| c.to_vec()).collect();
+    let mut map = std::collections::HashMap::new();
+    let mut iter = chunks.into_iter();
+    let mut set: JoinSet<AppResult<Vec<(String, ChannelVideo)>>> = JoinSet::new();
+
+    // Mồi tối đa DETAIL_CONCURRENCY lô chạy cùng lúc.
+    for _ in 0..DETAIL_CONCURRENCY {
+        if let Some(chunk) = iter.next() {
+            let client = client.clone();
+            let pool = pool.clone();
+            set.spawn(async move { fetch_detail_chunk(&client, &pool, &chunk).await });
+        }
+    }
+    while let Some(joined) = set.join_next().await {
+        // Có slot trống → mồi tiếp 1 lô để giữ ống đầy.
+        if let Some(chunk) = iter.next() {
+            let client = client.clone();
+            let pool = pool.clone();
+            set.spawn(async move { fetch_detail_chunk(&client, &pool, &chunk).await });
+        }
+        match joined {
+            Ok(Ok(items)) => {
+                for (id, v) in items {
+                    map.insert(id, v);
+                }
+            }
+            // Lỗi API thật (vd hết sạch key) → huỷ phần còn lại + báo lên trên
+            // để channel_fetcher quay về yt-dlp.
+            Ok(Err(e)) => {
+                set.abort_all();
+                return Err(e);
+            }
+            // Task panic → bỏ qua lô đó (hiếm), không làm sập cả lượt.
+            Err(_) => {}
         }
     }
     Ok(map)
 }
 
+/// Gộp video mới (newest-first) lên trước video đã cache (cũng newest-first),
+/// bỏ trùng theo url, cắt còn `cap`. Kết quả vẫn theo thứ tự mới → cũ.
+fn merge_incremental(
+    new_videos: Vec<ChannelVideo>,
+    cached: Vec<ChannelVideo>,
+    cap: usize,
+) -> Vec<ChannelVideo> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<ChannelVideo> = Vec::with_capacity(new_videos.len() + cached.len());
+    for v in new_videos.into_iter().chain(cached.into_iter()) {
+        if seen.insert(v.url.clone()) {
+            out.push(v);
+            if out.len() >= cap {
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// Lấy danh sách + metadata chính xác của cả kênh. `limit = 0` → tất cả (đến
 /// HARD_CAP). Giữ thứ tự mới-nhất-trước từ playlist uploads.
 ///
-/// `keys` là danh sách API key: dùng key đầu, key nào hết quota giữa chừng tự
-/// nhảy sang key kế tiếp. `info.api_note` ghi lại nếu có nhảy key (để báo UI).
+/// `keys`: nhiều API key — key nào hết quota giữa chừng tự nhảy sang key kế.
+/// `cache`: nếu Some và KHÔNG `force_refresh` → chỉ lấy video MỚI so với lần
+/// trước (tiết kiệm quota + nhanh). `force_refresh = true` → lấy lại toàn bộ
+/// (view mới nhất). `info.api_note` báo nếu có nhảy key / có dùng cache.
 pub async fn fetch_channel(
     url: &str,
     keys: &[String],
     limit: u32,
+    cache: Option<&ChannelCache>,
+    force_refresh: bool,
 ) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
     let keys: Vec<String> = keys
         .iter()
@@ -506,39 +601,98 @@ pub async fn fetch_channel(
         return Err(AppError::YtDlpFailed("Chưa nhập YouTube API key.".into()));
     }
     let client = build_client()?;
-    let mut pool = KeyPool::new(&keys);
+    let pool = Arc::new(Mutex::new(KeyPool::new(keys)));
 
-    let resolved = resolve_channel(&client, &mut pool, url).await?;
-    let cap = if limit == 0 { HARD_CAP } else { limit.min(HARD_CAP) };
-    let ids = list_upload_ids(&client, &mut pool, &resolved.uploads_playlist, cap).await?;
+    let resolved = resolve_channel(&client, &pool, url).await?;
+    let channel_id = resolved.info.channel_id.clone().unwrap_or_default();
+    let cap_u32 = if limit == 0 { HARD_CAP } else { limit.min(HARD_CAP) };
+    let cap = cap_u32 as usize;
+
+    // Bộ nhớ đệm: chỉ dùng khi không ép làm mới + có channel_id hợp lệ.
+    let cached: Option<Vec<ChannelVideo>> = if force_refresh || channel_id.is_empty() {
+        None
+    } else {
+        cache.and_then(|c| c.load(&channel_id))
+    };
 
     let mut info = resolved.info;
-    // `statistics.videoCount` của Google hay sai (thường KHÔNG tính Shorts, lại
-    // bị trễ) → dùng số video THỰC SỰ liệt kê được từ playlist uploads để
-    // "bài trên kênh" khớp với danh sách hiển thị. Đây là sửa lỗi "số lượng lệch".
-    info.video_count = Some(ids.len() as u32);
-    info.api_note = build_api_note(&pool);
+    let mut used_cache_note: Option<String> = None;
 
-    if ids.is_empty() {
-        return Ok((info, Vec::new()));
-    }
-    let mut details = fetch_video_details(&client, &mut pool, &ids).await?;
-    // Cập nhật lại note vì việc nhảy key có thể xảy ra trong lúc lấy chi tiết.
-    info.api_note = build_api_note(&pool);
+    let videos: Vec<ChannelVideo> = if let Some(cached_videos) = cached {
+        // ----- Incremental: chỉ lấy video mới hơn cái mới nhất đã cache -----
+        let cached_ids: HashSet<String> = cached_videos
+            .iter()
+            .filter_map(|v| crate::channel_fetcher::extract_video_id(&v.url))
+            .collect();
+        let (new_ids, _hit) =
+            list_upload_ids(&client, &pool, &resolved.uploads_playlist, cap_u32, Some(&cached_ids))
+                .await?;
+        let new_count = new_ids.len();
+        let new_videos = if new_ids.is_empty() {
+            Vec::new()
+        } else {
+            let mut details = fetch_video_details(&client, &pool, &new_ids).await?;
+            order_by_ids(&new_ids, &mut details)
+        };
+        used_cache_note = Some(if new_count == 0 {
+            "♻️ Dùng bộ nhớ đệm — kênh không có video mới (gần như 0 quota).".to_string()
+        } else {
+            format!("♻️ Dùng bộ nhớ đệm — chỉ lấy thêm {new_count} video mới (tiết kiệm quota).")
+        });
+        merge_incremental(new_videos, cached_videos, cap)
+    } else {
+        // ----- Lấy toàn bộ (lần đầu hoặc force_refresh) -----
+        let (ids, _) =
+            list_upload_ids(&client, &pool, &resolved.uploads_playlist, cap_u32, None).await?;
+        if ids.is_empty() {
+            Vec::new()
+        } else {
+            let mut details = fetch_video_details(&client, &pool, &ids).await?;
+            order_by_ids(&ids, &mut details)
+        }
+    };
 
-    // Giữ đúng thứ tự id (mới nhất trước) khi videos.list trả về xáo trộn.
-    let mut videos: Vec<ChannelVideo> = Vec::with_capacity(ids.len());
-    for id in &ids {
-        if let Some(v) = details.remove(id) {
-            videos.push(v);
+    // `statistics.videoCount` của Google hay sai (bỏ Shorts, bị trễ) → dùng số
+    // video THỰC SỰ có để "bài trên kênh" khớp danh sách. (Sửa "số lượng lệch".)
+    info.video_count = Some(videos.len() as u32);
+
+    // Ghi cache (toàn bộ danh sách sau khi gộp) cho lần sau.
+    if let Some(c) = cache {
+        if !channel_id.is_empty() {
+            c.save(&channel_id, &videos);
         }
     }
+
+    // Note: gộp thông báo nhảy key + dùng cache (nếu có).
+    let failover_note = {
+        let p = pool.lock().await;
+        build_api_note(&p)
+    };
+    info.api_note = match (failover_note, used_cache_note) {
+        (Some(a), Some(b)) => Some(format!("{b}\n{a}")),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
+    };
 
     Ok((info, videos))
 }
 
+/// Sắp xếp video theo đúng thứ tự `ids` (mới→cũ), bỏ id không có chi tiết.
+fn order_by_ids(
+    ids: &[String],
+    details: &mut std::collections::HashMap<String, ChannelVideo>,
+) -> Vec<ChannelVideo> {
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(v) = details.remove(id) {
+            out.push(v);
+        }
+    }
+    out
+}
+
 /// Soạn câu thông báo nhảy key (nếu có) cho UI. None khi không có key nào hết.
-fn build_api_note(pool: &KeyPool<'_>) -> Option<String> {
+fn build_api_note(pool: &KeyPool) -> Option<String> {
     if pool.exhausted.is_empty() {
         return None;
     }
@@ -592,8 +746,7 @@ mod tests {
 
     #[test]
     fn keypool_advances_and_records_exhausted() {
-        let keys = vec!["k1".to_string(), "k2".to_string(), "k3".to_string()];
-        let mut pool = KeyPool::new(&keys);
+        let mut pool = KeyPool::new(vec!["k1".into(), "k2".into(), "k3".into()]);
         assert_eq!(pool.current().unwrap(), "k1");
         pool.advance(); // k1 hết
         assert_eq!(pool.current().unwrap(), "k2");
@@ -604,8 +757,7 @@ mod tests {
 
     #[test]
     fn keypool_errors_when_all_exhausted() {
-        let keys = vec!["only".to_string()];
-        let mut pool = KeyPool::new(&keys);
+        let mut pool = KeyPool::new(vec!["only".into()]);
         pool.advance(); // key duy nhất hết → không còn key
         assert!(pool.current().is_err());
     }
@@ -613,8 +765,7 @@ mod tests {
     #[test]
     fn keypool_advance_idempotent_on_same_index() {
         // Gọi advance khi đã hết key không nhân đôi index trong `exhausted`.
-        let keys = vec!["k1".to_string(), "k2".to_string()];
-        let mut pool = KeyPool::new(&keys);
+        let mut pool = KeyPool::new(vec!["k1".into(), "k2".into()]);
         pool.advance();
         pool.advance(); // idx=2, ghi nhận index 1
         assert_eq!(pool.exhausted, vec![0, 1]);
@@ -622,15 +773,13 @@ mod tests {
 
     #[test]
     fn api_note_none_when_no_failover() {
-        let keys = vec!["k1".to_string()];
-        let pool = KeyPool::new(&keys);
+        let pool = KeyPool::new(vec!["k1".into()]);
         assert!(build_api_note(&pool).is_none());
     }
 
     #[test]
     fn api_note_reports_dead_key_and_current() {
-        let keys = vec!["k1".to_string(), "k2".to_string()];
-        let mut pool = KeyPool::new(&keys);
+        let mut pool = KeyPool::new(vec!["k1".into(), "k2".into()]);
         pool.advance(); // k1 hết → đang dùng k2 (idx 1)
         let note = build_api_note(&pool).unwrap();
         assert!(note.contains("#1"));
@@ -643,5 +792,39 @@ mod tests {
         let invalid = serde_json::json!({"errors":[{"reason":"keyInvalid"}]});
         assert!(is_quota_reason(&quota));
         assert!(!is_quota_reason(&invalid));
+    }
+
+    fn tvid(id: &str) -> ChannelVideo {
+        ChannelVideo {
+            url: format!("https://www.youtube.com/watch?v={id}"),
+            title: id.into(),
+            duration_sec: Some(10),
+            view_count: Some(1),
+            upload_date: Some("20240101".into()),
+            thumbnail: None,
+            is_photo: false,
+            is_short: false,
+            hashtags: vec![],
+        }
+    }
+
+    #[test]
+    fn merge_incremental_prepends_new_dedups_caps() {
+        // new = [n1, n2] (mới nhất), cached = [n2(trùng), c1, c2]
+        let new = vec![tvid("n1"), tvid("n2")];
+        let cached = vec![tvid("n2"), tvid("c1"), tvid("c2")];
+        let out = merge_incremental(new, cached, 100);
+        let ids: Vec<&str> = out.iter().map(|v| v.title.as_str()).collect();
+        assert_eq!(ids, vec!["n1", "n2", "c1", "c2"]); // bỏ trùng n2, mới lên đầu
+    }
+
+    #[test]
+    fn merge_incremental_respects_cap() {
+        let new = vec![tvid("n1")];
+        let cached = vec![tvid("c1"), tvid("c2"), tvid("c3")];
+        let out = merge_incremental(new, cached, 2);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].title, "n1");
+        assert_eq!(out[1].title, "c1");
     }
 }

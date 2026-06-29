@@ -73,7 +73,7 @@ pub async fn check_channel(
     // yt-dlp path: baseline, non-YouTube, or RSS unavailable.
     let settings = settings_store.get();
     let tab = if channel.tab.is_empty() { "all".to_string() } else { channel.tab.clone() };
-    match crate::channel_fetcher::fetch_channel(app, &channel.url, CHECK_LIMIT, false, &tab, &settings).await {
+    match crate::channel_fetcher::fetch_channel(app, &channel.url, CHECK_LIMIT, false, &tab, &settings, false).await {
         Ok((info, videos)) => {
             let fetched: Vec<Fetched> = videos
                 .into_iter()
