@@ -43,6 +43,7 @@ impl SettingsStore {
                     Ok(mut settings) => {
                         clamp_max_concurrency(&mut settings);
                         migrate_youtube_keys(&mut settings);
+                        migrate_po_token_default(&mut settings);
                         let store = Self {
                             inner: RwLock::new(settings),
                             path,
@@ -268,6 +269,17 @@ fn migrate_youtube_keys(settings: &mut Settings) {
     settings.youtube_api_keys = normalize_api_keys(std::mem::take(&mut settings.youtube_api_keys));
 }
 
+/// Migration một lần: file settings cũ (tạo từ thời PO token mặc định TẮT)
+/// lưu sẵn `poTokenEnabled: false` dù user chưa từng đụng vào — bật lại đúng
+/// 1 lần vì thiếu PO token là nguồn 403 YouTube số 1. Sau lần này, user tắt
+/// thủ công thì flag `po_token_migrated` (đã true) giữ nguyên lựa chọn đó.
+fn migrate_po_token_default(settings: &mut Settings) {
+    if !settings.po_token_migrated {
+        settings.po_token_enabled = true;
+        settings.po_token_migrated = true;
+    }
+}
+
 fn validate(settings: &Settings) -> AppResult<()> {
     if !(MAX_CONCURRENCY_MIN..=MAX_CONCURRENCY_MAX).contains(&settings.max_concurrency) {
         return Err(AppError::InvalidSetting {
@@ -355,6 +367,32 @@ mod tests {
         let (store, err) = SettingsStore::load(path.clone());
         assert!(err.is_none());
         assert_eq!(store.get().max_concurrency, MAX_CONCURRENCY_MAX);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn migrates_old_po_token_off_to_on_once() {
+        let path = unique_tmp_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        // File cũ: chưa có flag migrated, PO token đang tắt kiểu mặc định cũ.
+        let mut old = Settings::default();
+        old.po_token_enabled = false;
+        old.po_token_migrated = false;
+        fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+
+        let (store, err) = SettingsStore::load(path.clone());
+        assert!(err.is_none());
+        assert!(store.get().po_token_enabled, "migration phải bật PO token");
+        assert!(store.get().po_token_migrated);
+
+        // User chủ động tắt sau migration → được tôn trọng ở lần load sau.
+        let mut off = store.get();
+        off.po_token_enabled = false;
+        fs::write(&path, serde_json::to_string(&off).unwrap()).unwrap();
+        let (store2, _) = SettingsStore::load(path.clone());
+        assert!(!store2.get().po_token_enabled);
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }

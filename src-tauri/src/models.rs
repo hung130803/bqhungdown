@@ -387,10 +387,17 @@ pub struct Settings {
     /// chặn IP. Nên dùng proxy DÂN CƯ (residential), proxy datacenter hay bị chặn.
     #[serde(default)]
     pub proxies: Vec<String>,
-    /// Bật PO Token provider (bgutil) — giảm chặn bot YouTube mà không cần
-    /// cookie. App tự tải + chạy server token ngầm. Mặc định tắt (opt-in).
-    #[serde(default)]
+    /// Bật PO Token provider (bgutil) — YouTube giờ bắt buộc PO token cho hầu
+    /// hết client; thiếu nó là nguồn 403 Forbidden số 1. App tự tải + chạy
+    /// server token ngầm (best-effort). Mặc định BẬT; ai đã chủ động tắt
+    /// trong settings cũ thì vẫn giữ tắt.
+    #[serde(default = "default_true")]
     pub po_token_enabled: bool,
+    /// Migration một lần: settings tạo từ thời PO token mặc định TẮT sẽ được
+    /// tự bật lại đúng 1 lần (fix 403 hàng loạt giữa 2026). Sau đó user tắt
+    /// thủ công thì được tôn trọng vĩnh viễn. File mới luôn `true`.
+    #[serde(default)]
+    pub po_token_migrated: bool,
     /// Khi bị YouTube giới hạn tốc độ / chặn bot, đợi bao nhiêu phút rồi tự tải
     /// lại (thay vì bỏ cuộc). Clamp `1..=120`. Mặc định 10.
     #[serde(default = "default_cooldown")]
@@ -446,7 +453,8 @@ impl Default for Settings {
             skip_downloaded: true,
             watch_interval_min: 60,
             proxies: Vec::new(),
-            po_token_enabled: false,
+            po_token_enabled: true,
+            po_token_migrated: true,
             rate_limit_cooldown_min: 10,
             channel_subfolder: true,
             minimize_to_tray: true,

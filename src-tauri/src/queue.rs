@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 
@@ -805,7 +805,24 @@ impl QueueManager {
         // How many times to keep retrying a rate-limited item (each after a long
         // cooldown). 30 × 10 min ≈ 5h — generous so big batches finish unattended.
         const BOT_RETRY_CAP: u8 = 30;
-        let is_bot = crate::error::is_bot_error(&reason);
+        // 403 trên YouTube (sau khi runner đã thử client dự phòng) = IP/phiên
+        // đang bị YouTube đánh dấu, hoặc yt-dlp chưa có fix cho player mới —
+        // xử như bot wall: cooldown rồi retry (proxy xoay + yt-dlp có thể đã
+        // tự update nightly trong lúc chờ) thay vì fail cứng.
+        let is_forbidden_yt = crate::error::is_forbidden_error(&reason) && {
+            let map = self.items.read().unwrap();
+            map.get(&id)
+                .map(|it| crate::args_builder::is_youtube(&it.request.url))
+                .unwrap_or(false)
+        };
+        let is_bot = crate::error::is_bot_error(&reason) || is_forbidden_yt;
+        if is_bot {
+            // YouTube vá kiểu chặn mới ở yt-dlp nightly trong vài giờ-vài ngày
+            // → ép check update ngay (throttle 1h) để lần retry chạy binary mới.
+            if let Ok(dd) = self.app.path().app_data_dir() {
+                crate::ytdlp_update::spawn_forced_update(self.app.clone(), dd);
+            }
+        }
         // Decide retry vs fail under a short-lived guard.
         let (should_retry, delay) = {
             let mut map = self.items.write().unwrap();

@@ -66,6 +66,17 @@ pub fn is_bot_error(msg: &str) -> bool {
         || l.contains("rate limit")
 }
 
+/// True when the media CDN rejected the download URL itself (HTTP 403).
+/// On YouTube this means the extracted googlevideo URL was refused: missing/
+/// invalid PO token for the chosen client, IP mismatch between extraction and
+/// download, or a player change the current yt-dlp doesn't handle yet. The fix
+/// is re-extracting with other player clients + conservative networking (and a
+/// fresh proxy if configured) — NOT waiting, and NOT giving up immediately.
+pub fn is_forbidden_error(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    l.contains("http error 403") || l.contains("403 forbidden") || l.contains("error 403:")
+}
+
 /// True when yt-dlp extracted the video but couldn't produce a downloadable
 /// format ("Requested format is not available" / no formats). On YouTube this
 /// is usually the SABR rollout hiding direct URLs on the default client — we

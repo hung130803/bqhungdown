@@ -16,6 +16,12 @@ const FORCE_GENERIC_EXTRACTORS: &[&str] = &[
     "viralhog",
 ];
 
+/// True for any YouTube URL (watch/shorts/live/music/youtu.be).
+pub fn is_youtube(url: &str) -> bool {
+    let l = url.to_lowercase();
+    l.contains("youtube.com") || l.contains("youtu.be")
+}
+
 fn should_force_generic(url: &str) -> bool {
     let extractor = match crate::url_validator::resolve_extractor(url) {
         Some(e) => e,
@@ -120,6 +126,11 @@ pub enum BuildMode {
         /// `(N)` suffix when collision detected). When `None`, args_builder
         /// uses the default `%(title)s.%(ext)s` template.
         output_stem: Option<String>,
+        /// Retry sau lỗi 403 / "format not available": kéo format từ thêm
+        /// player client (tv/mweb/web_safari) + networking dè dặt (ít
+        /// connection, không aria2c) — googlevideo 403 hàng loạt khi thấy
+        /// pattern tải song song hung hãn mà không có PO token hợp lệ.
+        safe_retry: bool,
     },
 }
 
@@ -138,10 +149,22 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
     args.push("--socket-timeout".into());
     args.push("30".into());
 
-    // User-agent để bỏ qua bot detection.
-    // Dùng default của yt-dlp (thay đổi theo phiên bản, khó bị block hơn).
-    args.push("--user-agent".into());
-    args.push("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36".into());
+    // IPv4 only. googlevideo URL bị khoá theo IP lúc extract; máy dual-stack
+    // có thể extract qua IPv6 rồi tải qua IPv4 (happy-eyeballs) → 403 giữa
+    // chừng. Ép -4 cho cả extract + download đi cùng một đường.
+    args.push("-4".into());
+
+    let yt = is_youtube(&req.url);
+
+    // User-agent: CHỈ set cho site ngoài YouTube. Với YouTube, yt-dlp tự gửi
+    // UA khớp với từng player client (web/tv/mweb…) — ép một UA Chrome cứng
+    // làm lệch fingerprint (UA nói Chrome X, innertube context nói khác) và là
+    // một nguyên nhân 403/bot-check kinh điển. UA cứng cũng lỗi thời dần theo
+    // thời gian, càng dễ bị đánh dấu bot.
+    if !yt {
+        args.push("--user-agent".into());
+        args.push("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36".into());
+    }
 
     // Site-specific request headers. Critical for Douyin CDN URLs: when we
     // resolve `https://www.douyin.com/...` to `https://...aweme.snssdk.com/...`
@@ -196,7 +219,14 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             args.push(req.url.clone());
             return args;
         }
-        BuildMode::Download { resume, force_generic: _, output_stem } => {
+        BuildMode::Download { resume, force_generic: _, output_stem, safe_retry } => {
+            // Retry sau 403/format-error trên YouTube: default client bị SABR
+            // giấu URL hoặc googlevideo từ chối URL đã extract → kéo format từ
+            // các client còn phục vụ URL tải trực tiếp.
+            if safe_retry && yt {
+                args.push("--extractor-args".into());
+                args.push("youtube:player_client=default,tv,mweb,web_safari".into());
+            }
             // Output template & path. When the caller pre-resolved a stem
             // (collision-safe `<title> (N)`), we use that literal stem so
             // yt-dlp writes to the unique filename. Otherwise fall back to
@@ -244,12 +274,20 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             // -N 32 + http-chunk-size lớn = nhiều stream + ít overhead per chunk.
             // YouTube CDN cho phép tới ~32 connection per IP, vượt qua sẽ bị
             // throttle. 32 là sweet spot.
-            args.push("-N".into());
-            args.push("32".into());
-            // Bigger HTTP chunk → giảm số request, mỗi request lấy được nhiều
-            // hơn → tốc độ ổn định hơn (thay vì lúc nhanh lúc chậm do TCP slow-start).
-            args.push("--http-chunk-size".into());
-            args.push("10485760".into()); // 10 MiB / chunk
+            // Riêng lần retry sau 403: hạ xuống -N 4, bỏ chunk-size — pattern
+            // tải song song dồn dập trên URL thiếu PO token là chính thứ làm
+            // googlevideo trả 403 tiếp.
+            if safe_retry {
+                args.push("-N".into());
+                args.push("4".into());
+            } else {
+                args.push("-N".into());
+                args.push("32".into());
+                // Bigger HTTP chunk → giảm số request, mỗi request lấy được nhiều
+                // hơn → tốc độ ổn định hơn (thay vì lúc nhanh lúc chậm do TCP slow-start).
+                args.push("--http-chunk-size".into());
+                args.push("10485760".into()); // 10 MiB / chunk
+            }
 
             // NOTE: removed `--throttled-rate` — on a rate-limited IP it makes
             // yt-dlp re-extract URLs in a loop (download stuck at 0 B) instead
@@ -268,7 +306,9 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
 
             // Aria2c — true multi-stream accelerator. Khi user bật ở Settings,
             // dùng -x 32 -s 32 split=32 cho tốc độ max.
-            if req.use_aria2c {
+            // Bỏ qua ở lần safe_retry: aria2c gửi UA/header riêng và không
+            // refresh được URL hết hạn — nguồn 403 nổi tiếng trên googlevideo.
+            if req.use_aria2c && !safe_retry {
                 args.push("--downloader".into());
                 let aria_bin = crate::sidecar_detect::aria2c_path()
                     .map(|p| p.to_string_lossy().to_string())
@@ -404,7 +444,7 @@ mod tests {
     #[test]
     fn video_best_default() {
         let s = Settings::default();
-        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None });
+        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
         let joined = args.join(" ");
         assert!(joined.contains("-f bv*+ba/b"));
         assert!(joined.contains("-N 32"));
@@ -416,7 +456,7 @@ mod tests {
     fn audio_mode_emits_extract_audio() {
         let mut r = req();
         r.mode = DownloadMode::Audio;
-        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None });
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
         let joined = args.join(" ");
         assert!(joined.contains("-x --audio-format mp3 --audio-quality 0"));
     }
@@ -425,10 +465,49 @@ mod tests {
     fn aria2c_when_enabled() {
         let mut r = req();
         r.use_aria2c = true;
-        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None });
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
         let joined = args.join(" ");
         assert!(joined.contains("--downloader aria2c"));
         assert!(joined.contains("aria2c:-x 32 -s 32 -k 1M"));
+    }
+
+    #[test]
+    fn safe_retry_uses_fallback_clients_and_conservative_networking() {
+        let mut r = req();
+        r.use_aria2c = true;
+        let args = build(
+            &r,
+            &Settings::default(),
+            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: true },
+        );
+        let joined = args.join(" ");
+        assert!(joined.contains("youtube:player_client=default,tv,mweb,web_safari"));
+        assert!(joined.contains("-N 4"));
+        assert!(!joined.contains("--http-chunk-size"));
+        assert!(!joined.contains("--downloader")); // aria2c bị bỏ qua khi safe_retry
+    }
+
+    #[test]
+    fn youtube_never_gets_hardcoded_user_agent() {
+        let args = build(
+            &req(),
+            &Settings::default(),
+            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false },
+        );
+        assert!(!args.contains(&"--user-agent".to_string()));
+        assert!(args.contains(&"-4".to_string()));
+    }
+
+    #[test]
+    fn non_youtube_keeps_user_agent() {
+        let mut r = req();
+        r.url = "https://www.bilibili.com/video/BV1xx411c7mD".into();
+        let args = build(
+            &r,
+            &Settings::default(),
+            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false },
+        );
+        assert!(args.contains(&"--user-agent".to_string()));
     }
 
     #[test]
@@ -453,7 +532,7 @@ mod tests {
     #[test]
     fn resume_appends_continue() {
         let r = req();
-        let args = build(&r, &Settings::default(), BuildMode::Download { resume: true, force_generic: false, output_stem: None });
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: true, force_generic: false, output_stem: None, safe_retry: false });
         assert!(args.contains(&"--continue".to_string()));
     }
 }

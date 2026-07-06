@@ -136,11 +136,15 @@ impl YtDlpRunner {
             "--dump-single-json".into(),
             "--flat-playlist".into(),
             "--encoding".into(), "utf-8".into(),
-            "--user-agent".into(),
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36".into(),
             "-4".into(),
             "--socket-timeout".into(), "30".into(),
         ];
+        // UA cứng chỉ cho site ngoài YouTube — với YouTube, yt-dlp tự gửi UA
+        // khớp từng player client; ép UA lệch fingerprint là nguồn 403/bot-check.
+        if !args_builder::is_youtube(url) {
+            args.push("--user-agent".into());
+            args.push("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36".into());
+        }
         // Cookies từ trình duyệt — bắt buộc cho Douyin / Bilibili / IG private /
         // YouTube age-gated. File cookies.txt ưu tiên hơn browser (AppBound
         // encryption issue). Caller retries without cookies on DPAPI failure.
@@ -247,9 +251,15 @@ impl YtDlpRunner {
                     .run_once(item, &no_cookies, resume, false, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
                     .await;
             }
-            // "Requested format is not available" (YouTube SABR hiding URLs) —
-            // retry pulling formats from extra clients (tv/mweb) that serve them.
-            if crate::error::is_format_error(reason) && !cancel.is_cancelled() {
+            // "Requested format is not available" (YouTube SABR hiding URLs)
+            // hoặc HTTP 403 (googlevideo từ chối URL đã extract — thiếu PO
+            // token / lệch IP / player đổi) — retry kéo format từ client khác
+            // (tv/mweb/web_safari) + networking dè dặt; proxy cũng tự xoay
+            // sang con kế tiếp vì args được build lại.
+            if (crate::error::is_format_error(reason)
+                || crate::error::is_forbidden_error(reason))
+                && !cancel.is_cancelled()
+            {
                 return self
                     .run_once(item, settings, resume, false, true, cancel, progress_tx, meta_tx, output_stem)
                     .await;
@@ -298,21 +308,13 @@ impl YtDlpRunner {
             _ => settings,
         };
 
+        // safe_retry (= force_clients): args_builder thêm player client dự
+        // phòng cho YouTube + hạ -N, bỏ aria2c — combo chống 403.
         let mut args = args_builder::build(
             &item.request,
             settings,
-            BuildMode::Download { resume, force_generic, output_stem },
+            BuildMode::Download { resume, force_generic, output_stem, safe_retry: force_clients },
         );
-        // Format-failure retry: pull formats from extra YouTube clients (tv/mweb
-        // still serve direct download URLs when the default client returns only
-        // SABR/withheld formats → "Requested format is not available").
-        if force_clients {
-            let l = item.request.url.to_lowercase();
-            if l.contains("youtube.com") || l.contains("youtu.be") {
-                args.push("--extractor-args".into());
-                args.push("youtube:player_client=default,tv,mweb,web_safari".into());
-            }
-        }
         // "Bỏ qua video đã tải": record finished downloads in an archive file and
         // skip anything already listed. yt-dlp accepts options after the URL, so
         // appending here is fine. Only YouTube/most extractors expose a stable id;

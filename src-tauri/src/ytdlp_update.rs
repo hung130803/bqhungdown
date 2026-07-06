@@ -23,6 +23,9 @@ use tauri_plugin_shell::ShellExt;
 
 /// Don't check more than once every 12 hours.
 const MIN_INTERVAL_SECS: u64 = 12 * 60 * 60;
+/// Forced check (triggered by a 403/bot failure) — still throttled, but much
+/// tighter, so one broken batch triggers at most one update per hour.
+const FORCED_MIN_INTERVAL_SECS: u64 = 60 * 60;
 /// Give the self-update its own ceiling so a hung network call can't linger.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -37,21 +40,32 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// True when we haven't checked within `MIN_INTERVAL_SECS`.
-fn should_check(stamp: &Path) -> bool {
+/// True when we haven't checked within `min_interval` seconds.
+fn should_check(stamp: &Path, min_interval: u64) -> bool {
     let last = std::fs::read_to_string(stamp)
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .unwrap_or(0);
-    now_secs().saturating_sub(last) >= MIN_INTERVAL_SECS
+    now_secs().saturating_sub(last) >= min_interval
 }
 
 /// Kick off a throttled background yt-dlp self-update. Never blocks the caller;
 /// any failure is logged and ignored (the existing binary keeps working).
 pub fn spawn_update_check(app: AppHandle, data_dir: PathBuf) {
+    spawn_update_check_inner(app, data_dir, MIN_INTERVAL_SECS)
+}
+
+/// Update ngay khi phát hiện YouTube chặn (403 / bot wall): đa số các đợt vỡ
+/// hàng loạt được yt-dlp vá trong vài giờ-vài ngày, nên item đang chờ cooldown
+/// sẽ retry bằng binary MỚI thay vì fail lại y hệt. Throttle 1h/lần.
+pub fn spawn_forced_update(app: AppHandle, data_dir: PathBuf) {
+    spawn_update_check_inner(app, data_dir, FORCED_MIN_INTERVAL_SECS)
+}
+
+fn spawn_update_check_inner(app: AppHandle, data_dir: PathBuf, min_interval: u64) {
     tauri::async_runtime::spawn(async move {
         let stamp = stamp_path(&data_dir);
-        if !should_check(&stamp) {
+        if !should_check(&stamp, min_interval) {
             return;
         }
         // Stamp up-front so a crash mid-update doesn't make us retry every launch.
@@ -66,15 +80,17 @@ pub fn spawn_update_check(app: AppHandle, data_dir: PathBuf) {
     });
 }
 
-/// Run `yt-dlp --update-to stable` and return the last meaningful output line.
+/// Run `yt-dlp --update-to nightly` and return the last meaningful output line.
 async fn run_update(app: &AppHandle) -> Result<String, String> {
     let cmd = app
         .shell()
         .sidecar("yt-dlp")
         .map_err(|e| e.to_string())?
-        // `--update-to stable` pulls the latest stable release; if already
-        // current, yt-dlp simply reports "yt-dlp is up to date" and exits 0.
-        .args(["--update-to", "stable", "--no-warnings"]);
+        // Kênh `nightly` (khuyến nghị chính thức của yt-dlp cho người dùng
+        // thường): các fix YouTube 403/anti-bot lên nightly sớm hơn stable
+        // nhiều ngày → thời gian "tool chết" sau mỗi đợt YouTube đổi player
+        // ngắn đi đáng kể. Nếu đã mới nhất, yt-dlp báo "up to date", exit 0.
+        .args(["--update-to", "nightly", "--no-warnings"]);
 
     let (mut rx, _child) = cmd.spawn().map_err(|e| e.to_string())?;
     let mut out = String::new();
