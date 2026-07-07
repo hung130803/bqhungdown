@@ -62,6 +62,21 @@ pub fn spawn_forced_update(app: AppHandle, data_dir: PathBuf) {
     spawn_update_check_inner(app, data_dir, FORCED_MIN_INTERVAL_SECS)
 }
 
+/// Chạy update NGAY và chờ kết quả — cho nút "Sửa lỗi tải" user bấm tay.
+/// Bỏ qua mọi throttle (user chủ động bấm = muốn chạy thật), nhưng vẫn ghi
+/// stamp để các check nền sau đó không chạy lại vô ích. Trả về dòng kết quả
+/// từ yt-dlp (vd "Updated yt-dlp to nightly@..." / "yt-dlp is up to date").
+pub async fn run_update_now(app: &AppHandle, data_dir: Option<PathBuf>) -> Result<String, String> {
+    if let Some(dd) = &data_dir {
+        let _ = std::fs::create_dir_all(dd);
+        let _ = std::fs::write(stamp_path(dd), now_secs().to_string());
+    }
+    match tokio::time::timeout(UPDATE_TIMEOUT, run_update(app)).await {
+        Ok(r) => r,
+        Err(_) => Err(format!("hết thời gian chờ ({}s)", UPDATE_TIMEOUT.as_secs())),
+    }
+}
+
 fn spawn_update_check_inner(app: AppHandle, data_dir: PathBuf, min_interval: u64) {
     tauri::async_runtime::spawn(async move {
         let stamp = stamp_path(&data_dir);

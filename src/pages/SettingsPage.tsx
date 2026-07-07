@@ -16,6 +16,24 @@ export function SettingsPage() {
   const [cleaning, setCleaning] = useState(false);
   const [cleanMsg, setCleanMsg] = useState<string | null>(null);
 
+  // Nút "Sửa lỗi tải ngay" — chạy quy trình tự phục hồi (update yt-dlp nightly
+  // + Deno + PO token) và hiện kết quả ngay dưới nút.
+  const [fixing, setFixing] = useState(false);
+  const [fixMsg, setFixMsg] = useState<string | null>(null);
+  const fixNow = async () => {
+    if (fixing) return;
+    setFixing(true);
+    setFixMsg(null);
+    try {
+      const msg = await cmd.fixDownloadEngine();
+      setFixMsg(`✓ Xong!\n${msg}`);
+    } catch (e) {
+      setFixMsg(`Lỗi khi sửa: ${String(e)}`);
+    } finally {
+      setFixing(false);
+    }
+  };
+
   // YouTube Data API — nhiều key, mỗi key có đèn xanh/đỏ. Key hết quota khi
   // tải sẽ tự nhảy sang key kế; ở đây để người dùng thấy key nào còn/hết.
   type KeyState = "idle" | "checking" | "ok" | "bad";
@@ -343,6 +361,32 @@ export function SettingsPage() {
         Thêm <b>nhiều key</b> để khi 1 key hết 10.000 lượt/ngày, app <b>tự nhảy sang key kế tiếp</b> (key
         hết sẽ hiện <span className="text-danger">🔴 Hết quota</span>). Để trống = dùng cách cũ (dò từng video, chậm).
       </p>
+
+      {/* ── Nút cứu hộ: YouTube đổi luật → bấm 1 nút là tự vá ─────────────── */}
+      <div className="rounded-lg border border-border bg-surface p-4 space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-fg">🛠️ Tải bị lỗi / bị chặn?</div>
+            <div className="text-xs text-muted">
+              Bấm nút này là app tự vá: cập nhật bộ tải yt-dlp bản mới nhất (nightly),
+              kiểm tra bộ giải mã Deno và khởi động lại gói chống bot (PO token).
+              Fix được ~90% trường hợp YouTube vừa "đổi luật". Mất khoảng 10–30 giây.
+            </div>
+          </div>
+          <button
+            onClick={() => void fixNow()}
+            disabled={fixing}
+            className="px-4 py-2 rounded-md bg-accent text-accent-fg text-sm font-medium shrink-0 disabled:opacity-60"
+          >
+            {fixing ? "⏳ Đang sửa…" : "Sửa lỗi tải ngay"}
+          </button>
+        </div>
+        {fixMsg && (
+          <pre className="text-xs whitespace-pre-wrap font-sans text-muted border-t border-border pt-2 m-0">
+            {fixMsg}
+          </pre>
+        )}
+      </div>
 
       <Toggle
         label="Bật PO Token (giảm chặn bot, không cần cookie)"

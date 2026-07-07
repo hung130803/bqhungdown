@@ -451,6 +451,15 @@ export async function retryDeno(): Promise<void> {
   return invoke<void>("retry_deno");
 }
 
+// ── Nút "Sửa lỗi tải ngay" ────────────────────────────────────────────────────
+// Chạy ngay quy trình tự phục hồi: update yt-dlp nightly + Deno + PO token.
+// Trả về thông báo kết quả (nhiều dòng) để hiện cho user.
+export async function fixDownloadEngine(): Promise<string> {
+  if (IS_WEB) return "unavailable";
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("fix_download_engine");
+}
+
 // ── Saved bookmarks ───────────────────────────────────────────────────────────
 
 export async function listBookmarks(): Promise<Bookmark[]> {

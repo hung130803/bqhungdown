@@ -1179,6 +1179,55 @@ pub fn retry_deno() -> AppResult<()> {
     Ok(())
 }
 
+// ---------- Nút "Sửa lỗi tải ngay" ----------
+
+/// Chạy NGAY toàn bộ quy trình tự phục hồi mà app vẫn làm ngầm — cho nút
+/// "Sửa lỗi tải" ở Settings, mỗi khi YouTube đổi luật user chỉ cần bấm 1 nút:
+///   1. Update yt-dlp kênh nightly (bỏ qua throttle 12h) — fix ~90% trường hợp.
+///   2. Đảm bảo Deno nằm cạnh yt-dlp (giải challenge JS của YouTube).
+///   3. Cài lại plugin PO token + khởi động lại provider (nếu đang bật).
+/// Trả về thông báo kết quả để hiện trực tiếp cho user.
+#[tauri::command]
+pub async fn fix_download_engine(
+    app: AppHandle,
+    settings: State<'_, Arc<SettingsStore>>,
+) -> AppResult<String> {
+    let data_dir = app.path().app_data_dir().ok();
+
+    // 1) yt-dlp nightly — bước quan trọng nhất, chờ kết quả thật.
+    let update_msg = match crate::ytdlp_update::run_update_now(&app, data_dir.clone()).await {
+        Ok(m) => m,
+        Err(e) => format!("không cập nhật được ({e})"),
+    };
+
+    let yt_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|x| x.to_path_buf()));
+
+    // 2) Deno — best-effort chạy nền; ô trạng thái Deno sẵn có trong UI sẽ
+    //    tự chuyển "downloading" → "ready".
+    crate::js_runtime::ensure(yt_dir.clone());
+
+    // 3) PO token: cài lại plugin + restart provider để chắc chắn đang sống
+    //    (enable() tự kill tiến trình cũ trước khi spawn cái mới).
+    let po_note = if settings.get().po_token_enabled {
+        let po_arc = app
+            .state::<Arc<crate::po_token::ProviderProcess>>()
+            .inner()
+            .clone();
+        if let Some(dd) = data_dir {
+            crate::po_token::enable(app.clone(), dd, yt_dir, po_arc);
+            "đã khởi động lại"
+        } else {
+            "không tìm thấy thư mục dữ liệu"
+        }
+    } else {
+        "đang tắt trong Cài đặt"
+    };
+
+    Ok(format!("yt-dlp: {update_msg}\nPO token: {po_note}"))
+}
+
 // ---------- Bootstrap ----------
 
 #[tauri::command]

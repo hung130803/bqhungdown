@@ -282,6 +282,7 @@ pub fn run() {
             commands::set_clipboard_watcher,
             commands::deno_status,
             commands::retry_deno,
+            commands::fix_download_engine,
             commands::list_bookmarks,
             commands::add_bookmark,
             commands::remove_bookmark,
