@@ -56,6 +56,11 @@ pub type AppResult<T> = Result<T, AppError>;
 /// proxy (if configured) and backing off longer before retrying.
 pub fn is_bot_error(msg: &str) -> bool {
     let l = msg.to_lowercase();
+    // "Sign in to confirm your AGE" = video giới hạn tuổi (cần cookie), KHÔNG
+    // phải bot wall — retry/cooldown không bao giờ giúp, đừng nhầm.
+    if l.contains("confirm your age") {
+        return false;
+    }
     l.contains("sign in to confirm")
         || l.contains("not a bot")
         || l.contains("confirm you")
@@ -102,8 +107,155 @@ pub fn is_cookie_decrypt_error(msg: &str) -> bool {
         || (l.contains("cookie") && l.contains("decrypt"))
 }
 
+/// Dịch lỗi thô của yt-dlp (tiếng Anh, khó hiểu) thành thông báo tiếng Việt
+/// RÕ RÀNG + kèm hướng dẫn user phải làm gì tiếp. Dòng chi tiết kỹ thuật gốc
+/// được giữ ở cuối (cỡ chữ nhỏ trong UI) để còn chẩn đoán từ xa được.
+///
+/// Nguyên tắc viết thông báo: câu đầu nói CHUYỆN GÌ xảy ra, câu sau nói
+/// LÀM GÌ để sửa — ưu tiên trỏ về nút "Sửa lỗi tải ngay" trong Cài đặt vì nút
+/// đó tự vá được ~90% trường hợp YouTube đổi luật.
+pub fn friendly_reason(raw: &str) -> String {
+    let l = raw.to_lowercase();
+
+    let hint = if is_forbidden_error(raw) || is_bot_error(raw) {
+        "🚫 YouTube đang chặn tải (đã tự thử lại nhiều lần không thành). \
+         Cách sửa: mở Cài đặt → bấm nút \"Sửa lỗi tải ngay\" → đợi xong rồi bấm Thử lại. \
+         Nếu vẫn lỗi: YouTube vừa đổi luật, đợi vài giờ – 1 ngày rồi bấm lại nút đó \
+         (bản vá tự về); tải số lượng lớn thì thêm proxy trong Cài đặt."
+    } else if l.contains("private video") {
+        "🔒 Video ở chế độ riêng tư — chỉ tải được nếu thêm cookie của tài khoản có quyền xem \
+         (Cài đặt → Cookie)."
+    } else if l.contains("members-only") || l.contains("join this channel") {
+        "🔒 Video chỉ dành cho hội viên của kênh — cần cookie của tài khoản đã đăng ký hội viên \
+         (Cài đặt → Cookie)."
+    } else if l.contains("confirm your age") || l.contains("age-restricted") || l.contains("age restricted") {
+        "🔞 Video giới hạn tuổi — thêm cookie của tài khoản đã đăng nhập (Cài đặt → Cookie) rồi thử lại."
+    } else if l.contains("not available in your country") || l.contains("geo restricted") || l.contains("geo-restricted") {
+        "🌍 Video bị chặn ở quốc gia của bạn — cần proxy/VPN nước khác rồi thử lại."
+    } else if l.contains("video unavailable") || l.contains("this video is not available")
+        || l.contains("has been removed") || l.contains("account associated with this video has been terminated")
+    {
+        "❌ Video không tồn tại — đã bị xoá, bị ẩn hoặc link sai. Kiểm tra lại link trên trình duyệt."
+    } else if l.contains("is not a valid url") || l.contains("unsupported url") || l.contains("no suitable extractor") {
+        "❌ Link này app chưa hỗ trợ hoặc link sai. Thử mở link trên trình duyệt xem có video thật không."
+    } else if is_format_error(raw) {
+        "⚠️ Không lấy được định dạng video (YouTube vừa đổi cách phát). \
+         Cách sửa: mở Cài đặt → bấm \"Sửa lỗi tải ngay\" → rồi bấm Thử lại."
+    } else if is_cookie_decrypt_error(raw) {
+        "🍪 Không đọc được cookie từ trình duyệt (Chrome/Edge mã hoá kiểu mới). \
+         Cách sửa: xuất file cookies.txt (từ cửa sổ ẩn danh) rồi chọn file đó trong Cài đặt → Cookie."
+    } else if l.contains("no space left") || l.contains("not enough space") || l.contains("disk full") {
+        "💾 Ổ đĩa đầy — dọn bớt dung lượng hoặc đổi thư mục lưu trong Cài đặt."
+    } else if l.contains("permission denied") || l.contains("access is denied") {
+        "🔐 Không có quyền ghi vào thư mục lưu — đổi thư mục lưu trong Cài đặt (tránh ổ C:\\ gốc / Program Files)."
+    } else if l.contains("[watchdog]") {
+        "🐌 Tải bị treo quá lâu nên app đã dừng để thử lại. Bấm Thử lại; nếu lặp lại nhiều lần, \
+         mở Cài đặt → bấm \"Sửa lỗi tải ngay\" hoặc kiểm tra mạng."
+    } else if l.contains("getaddrinfo") || l.contains("timed out") || l.contains("timeout")
+        || l.contains("unable to connect") || l.contains("connection reset") || l.contains("connection refused")
+        || l.contains("network is unreachable") || l.contains("ssl")
+    {
+        "📡 Lỗi mạng — kiểm tra Internet (hoặc proxy nếu có bật) rồi bấm Thử lại."
+    } else {
+        "⚠️ Tải thất bại. Cách sửa nhanh: mở Cài đặt → bấm \"Sửa lỗi tải ngay\" → bấm Thử lại. \
+         Vẫn lỗi thì gửi dòng chi tiết bên dưới cho người hỗ trợ."
+    };
+
+    // Giữ nguyên dòng lỗi gốc (rút gọn) để chẩn đoán — user gửi ảnh chụp là đủ thông tin.
+    let detail: String = raw.chars().take(220).collect();
+    format!("{hint}\n(Chi tiết kỹ thuật: {detail})")
+}
+
 impl From<std::io::Error> for AppError {
     fn from(err: std::io::Error) -> Self { AppError::Io(err.to_string()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Mẫu lỗi thô lấy từ yt-dlp thật — mỗi cái phải ra đúng thông báo hướng dẫn.
+
+    #[test]
+    fn friendly_403_points_to_fix_button() {
+        let m = friendly_reason("(exit 1) ERROR: unable to download video data: HTTP Error 403: Forbidden");
+        assert!(m.contains("Sửa lỗi tải ngay"), "403 phải trỏ về nút sửa lỗi: {m}");
+        assert!(m.contains("Chi tiết kỹ thuật"));
+        assert!(m.contains("403"), "phải giữ chi tiết gốc");
+    }
+
+    #[test]
+    fn friendly_bot_wall_points_to_fix_button() {
+        let m = friendly_reason("ERROR: [youtube] abc: Sign in to confirm you're not a bot.");
+        assert!(m.contains("Sửa lỗi tải ngay"));
+    }
+
+    #[test]
+    fn friendly_age_restricted_says_cookie_not_bot() {
+        let raw = "ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate for some users.";
+        assert!(!is_bot_error(raw), "giới hạn tuổi không phải bot wall");
+        let m = friendly_reason(raw);
+        assert!(m.contains("Cookie"), "giới hạn tuổi phải chỉ về cookie: {m}");
+    }
+
+    #[test]
+    fn friendly_private_and_members_only() {
+        assert!(friendly_reason("ERROR: [youtube] x: Private video. Sign in if you've been granted access to this video").contains("riêng tư"));
+        assert!(friendly_reason("ERROR: [youtube] x: Join this channel to get access to members-only content").contains("hội viên"));
+    }
+
+    #[test]
+    fn friendly_unavailable_and_unsupported() {
+        assert!(friendly_reason("ERROR: [youtube] x: Video unavailable").contains("không tồn tại"));
+        assert!(friendly_reason("ERROR: Unsupported URL: https://example.com/abc").contains("chưa hỗ trợ"));
+    }
+
+    #[test]
+    fn friendly_format_error_points_to_fix_button() {
+        let m = friendly_reason("ERROR: [youtube] x: Requested format is not available.");
+        assert!(m.contains("Sửa lỗi tải ngay"));
+    }
+
+    #[test]
+    fn friendly_network_and_disk() {
+        assert!(friendly_reason("ERROR: Unable to download webpage: <urlopen error [Errno 11001] getaddrinfo failed>").contains("Lỗi mạng"));
+        assert!(friendly_reason("OSError: [Errno 28] No space left on device").contains("đầy"));
+        assert!(friendly_reason("PermissionError: [WinError 5] Access is denied").contains("quyền ghi"));
+    }
+
+    #[test]
+    fn friendly_cookie_decrypt() {
+        let m = friendly_reason("ERROR: Failed to decrypt with DPAPI. See https://github.com/yt-dlp/yt-dlp/issues/10927");
+        assert!(m.contains("cookies.txt"));
+    }
+
+    #[test]
+    fn friendly_watchdog_stall() {
+        let m = friendly_reason("[watchdog] no activity for 90s, killed yt-dlp");
+        assert!(m.contains("treo"));
+    }
+
+    #[test]
+    fn friendly_unknown_error_has_default_guidance_and_detail() {
+        let m = friendly_reason("ERROR: something totally new and weird 12345");
+        assert!(m.contains("Sửa lỗi tải ngay"));
+        assert!(m.contains("something totally new"), "chi tiết gốc phải được giữ: {m}");
+    }
+
+    #[test]
+    fn friendly_detail_is_truncated() {
+        let long = format!("ERROR: xyz {}", "a".repeat(500));
+        let m = friendly_reason(&long);
+        assert!(m.len() < 700, "chi tiết phải được cắt ngắn, len = {}", m.len());
+    }
+
+    #[test]
+    fn forbidden_error_detection() {
+        assert!(is_forbidden_error("HTTP Error 403: Forbidden"));
+        assert!(is_forbidden_error("(exit 1) ERROR: ... HTTP Error 403: Forbidden"));
+        assert!(!is_forbidden_error("HTTP Error 404: Not Found"));
+        assert!(!is_forbidden_error("Sign in to confirm you're not a bot"));
+    }
 }
 impl From<serde_json::Error> for AppError {
     fn from(err: serde_json::Error) -> Self { AppError::Other(format!("JSON: {err}")) }

@@ -262,7 +262,9 @@ export function QueueRow({ item }: { item: DownloadItem }) {
           </a>
 
           {item.errorMessage && (
-            <div className="text-xs text-danger break-words">{item.errorMessage}</div>
+            // whitespace-pre-line: thông báo lỗi giờ gồm dòng hướng dẫn + dòng
+            // "(Chi tiết kỹ thuật: ...)" — cần xuống dòng đúng chỗ cho dễ đọc.
+            <div className="text-xs text-danger break-words whitespace-pre-line">{item.errorMessage}</div>
           )}
 
           {/* Actions */}

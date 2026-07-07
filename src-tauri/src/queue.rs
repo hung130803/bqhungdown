@@ -816,6 +816,9 @@ impl QueueManager {
                 .unwrap_or(false)
         };
         let is_bot = crate::error::is_bot_error(&reason) || is_forbidden_yt;
+        // Thông báo user-facing: tiếng Việt rõ ràng + hướng dẫn làm gì tiếp
+        // (raw reason giữ lại ở dòng "Chi tiết kỹ thuật" để chẩn đoán).
+        let friendly = crate::error::friendly_reason(&reason);
         if is_bot {
             // YouTube vá kiểu chặn mới ở yt-dlp nightly trong vài giờ-vài ngày
             // → ép check update ngay (throttle 1h) để lần retry chạy binary mới.
@@ -837,7 +840,8 @@ impl QueueManager {
                     let now = chrono::Local::now();
                     let retry_at = now + chrono::Duration::minutes(mins as i64);
                     it.error_message = Some(format!(
-                        "⏳ Bị giới hạn lúc {} — tự tải lại lúc {} (lần {})",
+                        "⏳ YouTube đang giới hạn (lúc {}) — app sẽ TỰ tải lại lúc {} (lần {}). \
+                         Không cần làm gì; muốn nhanh hơn thì mở Cài đặt → bấm \"Sửa lỗi tải ngay\".",
                         now.format("%H:%M"),
                         retry_at.format("%H:%M"),
                         it.bot_retries
@@ -849,13 +853,13 @@ impl QueueManager {
                     self.emit_queue_updated();
                     (true, Duration::from_secs(mins as u64 * 60))
                 } else {
-                    it.error_message = Some(reason.clone());
+                    it.error_message = Some(friendly.clone());
                     (false, Duration::default())
                 }
             } else {
                 let delay = next_retry_delay(it.attempt);
                 it.attempt += 1;
-                it.error_message = Some(reason.clone());
+                it.error_message = Some(friendly.clone());
                 (delay.is_some(), delay.unwrap_or_default())
             }
         };
@@ -890,12 +894,12 @@ impl QueueManager {
                 self.emit_queue_updated();
                 let _ = self.app.emit(EV_DOWNLOAD_FAILED, FailedEventPayload {
                     short_id: it.short_id.clone(),
-                    reason: reason.clone(),
+                    reason: friendly.clone(),
                 });
                 // Không lưu Failed vào History — chỉ lưu các mục đã tải xong
                 // thực sự. Mục Failed vẫn hiện trong "Đang tải" để user thấy
                 // lý do và Retry; chỉ khi cancel/refresh queue mới biến mất.
-                notification::notify_failed(&self.app, &settings_snapshot, &it, &reason);
+                notification::notify_failed(&self.app, &settings_snapshot, &it, &friendly);
             }
         }
     }

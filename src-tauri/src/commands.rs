@@ -1195,9 +1195,19 @@ pub async fn fix_download_engine(
     let data_dir = app.path().app_data_dir().ok();
 
     // 1) yt-dlp nightly — bước quan trọng nhất, chờ kết quả thật.
+    //    Dịch output tiếng Anh của yt-dlp thành thông báo user hiểu được.
     let update_msg = match crate::ytdlp_update::run_update_now(&app, data_dir.clone()).await {
-        Ok(m) => m,
-        Err(e) => format!("không cập nhật được ({e})"),
+        Ok(m) => {
+            let l = m.to_lowercase();
+            if l.contains("up to date") {
+                format!("✅ Bộ tải đã là bản mới nhất — nếu vẫn lỗi, YouTube vừa đổi luật mà bản vá chưa ra; thử lại nút này sau vài giờ. ({m})")
+            } else if l.contains("updated yt-dlp to") {
+                format!("✅ Đã cập nhật bộ tải lên bản mới — bấm Thử lại ở video bị lỗi. ({m})")
+            } else {
+                m
+            }
+        }
+        Err(e) => format!("⚠️ Không cập nhật được — kiểm tra mạng rồi bấm lại. ({e})"),
     };
 
     let yt_dir = std::env::current_exe()
