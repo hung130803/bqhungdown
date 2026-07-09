@@ -119,9 +119,9 @@ pub fn friendly_reason(raw: &str) -> String {
 
     let hint = if is_forbidden_error(raw) || is_bot_error(raw) {
         "🚫 YouTube đang chặn tải (đã tự thử lại nhiều lần không thành). \
-         Cách sửa: mở Cài đặt → bấm nút \"Sửa lỗi tải ngay\" → đợi xong rồi bấm Thử lại. \
-         Nếu vẫn lỗi: YouTube vừa đổi luật, đợi vài giờ – 1 ngày rồi bấm lại nút đó \
-         (bản vá tự về); tải số lượng lớn thì thêm proxy trong Cài đặt."
+         Cách sửa theo thứ tự: 1) mở Cài đặt → bấm \"Sửa lỗi tải ngay\" → Thử lại; \
+         2) thêm cookie (Cài đặt → Cookie — xuất file cookies.txt từ cửa sổ ẩn danh); \
+         3) đợi vài giờ cho IP hết bị đánh dấu, hoặc thêm proxy nếu tải số lượng lớn."
     } else if l.contains("private video") {
         "🔒 Video ở chế độ riêng tư — chỉ tải được nếu thêm cookie của tài khoản có quyền xem \
          (Cài đặt → Cookie)."

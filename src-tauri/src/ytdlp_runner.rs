@@ -106,7 +106,7 @@ impl YtDlpRunner {
             Some("viralhog" | "9gag" | "imgur" | "gfycat" | "redgifs" | "coub" | "tumblr" | "newgrounds")
         );
 
-        match self.fetch_metadata_inner(url_for_dlp, force_generic_first, settings).await {
+        match self.fetch_metadata_inner(url_for_dlp, force_generic_first, false, settings).await {
             Ok(md) => Ok(md),
             // Browser cookies couldn't be decrypted (DPAPI) — retry without them.
             Err(AppError::YtDlpFailed(ref msg))
@@ -114,12 +114,23 @@ impl YtDlpRunner {
                     && crate::error::is_cookie_decrypt_error(msg) =>
             {
                 let no_cookies = args_builder::settings_without_cookies(settings);
-                self.fetch_metadata_inner(url_for_dlp, force_generic_first, &no_cookies).await
+                self.fetch_metadata_inner(url_for_dlp, force_generic_first, false, &no_cookies).await
+            }
+            // YouTube anti-bot / 403 khi lấy metadata — thử lại bằng client
+            // dự phòng (mweb + PO token thường xuyên qua được), giống hệt
+            // cơ chế của run_download.
+            Err(AppError::YtDlpFailed(ref msg))
+                if args_builder::is_youtube(url_for_dlp)
+                    && (crate::error::is_bot_error(msg)
+                        || crate::error::is_forbidden_error(msg)
+                        || crate::error::is_format_error(msg)) =>
+            {
+                self.fetch_metadata_inner(url_for_dlp, force_generic_first, true, settings).await
             }
             Err(AppError::YtDlpFailed(msg)) if !force_generic_first && is_unsupported_url(&msg) => {
                 // yt-dlp doesn't have a handler for this site; retry with generic
                 // extractor — it scans the HTML for `<video>` / og:video.
-                self.fetch_metadata_inner(url_for_dlp, true, settings).await
+                self.fetch_metadata_inner(url_for_dlp, true, false, settings).await
             }
             Err(e) => Err(e),
         }
@@ -129,6 +140,7 @@ impl YtDlpRunner {
         &self,
         url: &str,
         force_generic: bool,
+        fallback_clients: bool,
         settings: &Settings,
     ) -> AppResult<VideoMetadata> {
         let mut args: Vec<String> = vec![
@@ -152,6 +164,12 @@ impl YtDlpRunner {
         args_builder::push_proxy_args(&mut args, settings);
         if force_generic {
             args.push("--force-generic-extractor".into());
+        }
+        // Retry sau bot/403: kéo metadata qua client dự phòng — mweb có PO
+        // token vẫn sống khi client mặc định bị chặn theo IP.
+        if fallback_clients {
+            args.push("--extractor-args".into());
+            args.push("youtube:player_client=default,tv,mweb,web_safari".into());
         }
         args.push(url.to_string());
         let _ = args_builder::BuildMode::FetchMetadata; // keep reference
@@ -230,14 +248,16 @@ impl YtDlpRunner {
             .await?;
 
         if let RunOutcome::Failed { reason } = &outcome {
-            // YouTube anti-bot / 429 — if proxies are configured, retry once so
-            // run_once rebuilds args and rotates to the next proxy (fresh IP).
-            if !settings.proxies.is_empty()
-                && crate::error::is_bot_error(reason)
-                && !cancel.is_cancelled()
-            {
+            // YouTube anti-bot ("Sign in to confirm…" / 429): client mặc định
+            // bị chặn theo IP, nhưng client dự phòng (nhất là mweb + PO token
+            // từ bgutil) thường vẫn XUYÊN QUA được ngay — kiểm chứng thực tế
+            // 2026-07 trên IP đang bị flag: default chết, mweb tải full speed.
+            // → retry ngay với safe_retry (đổi client + networking dè dặt),
+            // proxy (nếu có) cũng tự xoay vì args được build lại. Chỉ khi lần
+            // này cũng fail mới rơi xuống cooldown của queue.
+            if crate::error::is_bot_error(reason) && !cancel.is_cancelled() {
                 return self
-                    .run_once(item, settings, resume, false, false, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
+                    .run_once(item, settings, resume, false, true, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
                     .await;
             }
             // Browser cookies couldn't be decrypted (DPAPI) — retry without them.
