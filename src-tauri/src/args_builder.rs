@@ -345,9 +345,20 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
                         // Best quality available với audio đảm bảo. yt-dlp tự pick.
                         args.push("-f".into());
                         args.push("bv*+ba/b".into());
-                        args.push("-S".into());
-                        args.push("res,fps,vcodec:h264,acodec:m4a,tbr".into());
                     }
+                    // Sort thứ tự chọn stream — áp cho CẢ 2 nhánh trên (nhánh
+                    // format_id vẫn cần nó để chọn ĐÚNG track audio đem ghép):
+                    //   lang      → ƯU TIÊN TIẾNG GỐC của video. YouTube giờ tự
+                    //               lồng tiếng AI sang nhiều thứ tiếng; thiếu
+                    //               'lang' thì bestaudio so bitrate và hay vớ
+                    //               phải bản lồng tiếng nước ngoài.
+                    //   quality   → track YouTube tự đánh giá tốt hơn khi cùng tiếng.
+                    //   acodec:m4a→ âm thanh AAC để ghép vào mp4 phát được mọi
+                    //               máy. Opus nhét trong mp4 bị CÂM trên nhiều
+                    //               player Windows/TV — chính là lỗi "video mất
+                    //               tiếng" dù file có audio thật.
+                    args.push("-S".into());
+                    args.push("lang,quality,res,fps,vcodec:h264,acodec:m4a,tbr".into());
                     args.push("--merge-output-format".into());
                     args.push("mp4".into());
                 }
@@ -469,6 +480,31 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("--downloader aria2c"));
         assert!(joined.contains("aria2c:-x 32 -s 32 -k 1M"));
+    }
+
+    #[test]
+    fn video_sort_prefers_original_lang_and_m4a_in_both_branches() {
+        const SORT: &str = "lang,quality,res,fps,vcodec:h264,acodec:m4a,tbr";
+        // Nhánh mặc định ("Tốt nhất")
+        let args = build(
+            &req(),
+            &Settings::default(),
+            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false },
+        );
+        let j = args.join(" ");
+        assert!(j.contains(&format!("-S {SORT}")), "nhánh mặc định thiếu sort: {j}");
+        // Nhánh user tự chọn chất lượng — TRƯỚC ĐÂY thiếu -S nên bestaudio vớ
+        // bản lồng tiếng nước ngoài / opus-câm-trong-mp4.
+        let mut r = req();
+        r.format_id = Some("137".into());
+        let args = build(
+            &r,
+            &Settings::default(),
+            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false },
+        );
+        let j = args.join(" ");
+        assert!(j.contains("137+bestaudio/best"));
+        assert!(j.contains(&format!("-S {SORT}")), "nhánh format_id thiếu sort: {j}");
     }
 
     #[test]
