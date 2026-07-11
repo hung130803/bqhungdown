@@ -390,6 +390,13 @@ pub fn retry_download(
     queue.retry(&short_id)
 }
 
+/// Nút "Thử lại tất cả video lỗi": re-queue mọi mục Failed một phát.
+/// Trả về số mục đã đưa lại vào hàng đợi.
+#[tauri::command]
+pub fn retry_all_failed(queue: State<Arc<QueueManager>>) -> AppResult<u32> {
+    Ok(queue.retry_all_failed() as u32)
+}
+
 #[tauri::command]
 pub fn list_queue(queue: State<Arc<QueueManager>>) -> AppResult<Vec<DownloadItem>> {
     Ok(queue.list())

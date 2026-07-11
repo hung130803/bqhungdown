@@ -60,6 +60,24 @@ export function QueuePage() {
   }, [focus, items.length]);
 
   const terminalCount = items.filter((i) => TERMINAL.includes(i.state)).length;
+  const failedCount = items.filter((i) => i.state === "failed").length;
+
+  // Nút "Thử lại tất cả video lỗi" — kịch bản: tải cả kênh dính lỗi hàng loạt
+  // (thiếu cookie / bị chặn tạm), user sửa nguyên nhân xong chỉ cần 1 nút
+  // thay vì bấm Thử lại từng video.
+  const [retryingAll, setRetryingAll] = useState(false);
+  const retryAll = async () => {
+    if (retryingAll) return;
+    setRetryingAll(true);
+    try {
+      await cmd.retryAllFailed();
+      await refresh();
+    } catch {
+      /* ignore — refresh dưới finally vẫn cập nhật UI */
+    } finally {
+      setRetryingAll(false);
+    }
+  };
 
   // Group by save folder so a whole channel can be dropped at once.
   const groups = useMemo(() => {
@@ -148,14 +166,26 @@ export function QueuePage() {
             ))}
           </div>
         )}
-        {terminalCount > 0 && (
-          <div className="flex justify-end">
-            <button
-              onClick={clearTerminal}
-              className="px-3 py-1.5 text-xs rounded-md border border-border hover:bg-surface-2 text-muted"
-            >
-              Xoá {terminalCount} mục đã xong khỏi danh sách
-            </button>
+        {(terminalCount > 0 || failedCount > 0) && (
+          <div className="flex justify-end gap-2 flex-wrap">
+            {failedCount > 0 && (
+              <button
+                onClick={() => void retryAll()}
+                disabled={retryingAll}
+                className="px-3 py-1.5 text-xs rounded-md bg-accent text-accent-fg font-medium disabled:opacity-60"
+                title="Đưa toàn bộ video lỗi vào tải lại — dùng sau khi đã sửa nguyên nhân (thêm cookie, bấm Sửa lỗi tải ngay...)"
+              >
+                {retryingAll ? "⏳ Đang đưa vào hàng đợi…" : `🔄 Thử lại ${failedCount} video lỗi`}
+              </button>
+            )}
+            {terminalCount > 0 && (
+              <button
+                onClick={clearTerminal}
+                className="px-3 py-1.5 text-xs rounded-md border border-border hover:bg-surface-2 text-muted"
+              >
+                Xoá {terminalCount} mục đã xong khỏi danh sách
+              </button>
+            )}
           </div>
         )}
         {sortedItems.map((item) => (

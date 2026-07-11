@@ -238,6 +238,14 @@ export async function cancelDownload(shortId: string): Promise<void> {
   return invoke<void>("cancel_download", { shortId });
 }
 
+// Thử lại TẤT CẢ mục lỗi một phát (sau khi thêm cookie / hết bị chặn).
+// Trả về số video được đưa lại vào hàng đợi.
+export async function retryAllFailed(): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("retry_all_failed");
+}
+
 export async function retryDownload(shortId: string): Promise<DownloadItem> {
   if (IS_WEB) throw new Error("Retry chưa hỗ trợ trên web.");
   const { invoke } = await import("@tauri-apps/api/core");

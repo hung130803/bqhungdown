@@ -488,6 +488,33 @@ impl QueueManager {
         Ok(item)
     }
 
+    /// Thử lại HÀNG LOẠT mọi mục đang Failed — cho nút "Thử lại tất cả video
+    /// lỗi" (kịch bản thật: tải cả kênh mấy trăm video dính lỗi hàng loạt vì
+    /// thiếu cookie/bị chặn tạm; user thêm cookie xong chỉ cần 1 nút thay vì
+    /// bấm tay từng video). Trả về số mục đã re-queue. Mục nào retry lỗi
+    /// (state đổi giữa chừng…) thì bỏ qua, không làm hỏng cả loạt.
+    /// Semaphore concurrency vẫn giữ nhịp — re-queue 300 mục cũng chỉ chạy
+    /// đồng thời đúng số luồng đã cấu hình.
+    pub fn retry_all_failed(self: &Arc<Self>) -> usize {
+        let ids: Vec<String> = {
+            let map = self.items.read().unwrap();
+            map.iter()
+                .filter(|(_, it)| matches!(it.state, DownloadState::Failed))
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        let mut n = 0;
+        for id in &ids {
+            if self.retry(id).is_ok() {
+                n += 1;
+            }
+        }
+        if n > 0 {
+            self.emit_queue_updated();
+        }
+        n
+    }
+
     pub async fn set_concurrency(self: &Arc<Self>, n: u8) {
         let n = n.clamp(1, 100);
         let mut cap = self.current_cap.lock().unwrap();
