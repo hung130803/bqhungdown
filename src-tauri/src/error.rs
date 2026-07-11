@@ -61,7 +61,8 @@ pub fn is_bot_error(msg: &str) -> bool {
     if l.contains("confirm your age") {
         return false;
     }
-    l.contains("sign in to confirm")
+    l.contains(SOFT_BLOCK_MARKER)
+        || l.contains("sign in to confirm")
         || l.contains("not a bot")
         || l.contains("confirm you")
         || l.contains("http error 429")
@@ -80,6 +81,20 @@ pub fn is_bot_error(msg: &str) -> bool {
 pub fn is_forbidden_error(msg: &str) -> bool {
     let l = msg.to_lowercase();
     l.contains("http error 403") || l.contains("403 forbidden") || l.contains("error 403:")
+}
+
+/// Marker gắn vào đầu `reason` khi yt-dlp báo "Video unavailable" nhưng app
+/// kiểm chứng được video THẬT RA vẫn sống (qua oembed) — tức YouTube đang
+/// soft-block IP (hay gặp khi tải cả kênh dồn dập). `is_bot_error` nhận marker
+/// này → queue cooldown rồi TỰ tải lại thay vì bỏ cuộc với thông báo sai
+/// "video đã bị xoá".
+pub const SOFT_BLOCK_MARKER: &str = "[bi-chan-tam-thoi]";
+
+/// True khi yt-dlp nói video không tồn tại. CẢNH GIÁC: khi bị soft-block,
+/// YouTube trả đúng câu này cho video vẫn sống — caller phải kiểm chứng
+/// (oembed) trước khi tin.
+pub fn is_unavailable_error(msg: &str) -> bool {
+    msg.to_lowercase().contains("video unavailable")
 }
 
 /// True when yt-dlp extracted the video but couldn't produce a downloadable
@@ -247,6 +262,24 @@ mod tests {
         let long = format!("ERROR: xyz {}", "a".repeat(500));
         let m = friendly_reason(&long);
         assert!(m.len() < 700, "chi tiết phải được cắt ngắn, len = {}", m.len());
+    }
+
+    #[test]
+    fn unavailable_detection() {
+        assert!(is_unavailable_error("(exit 1) ERROR: [youtube] 2kWaMLjMzXA: Video unavailable"));
+        assert!(!is_unavailable_error("HTTP Error 403: Forbidden"));
+    }
+
+    #[test]
+    fn soft_block_marker_treated_as_bot_not_deleted_video() {
+        // "Video unavailable" nhưng oembed xác nhận video còn sống → runner gắn
+        // marker → phải được xử như bot wall (cooldown + tự tải lại), và thông
+        // báo KHÔNG được nói "video đã bị xoá".
+        let reason = format!("{SOFT_BLOCK_MARKER} (exit 1) ERROR: [youtube] abc: Video unavailable");
+        assert!(is_bot_error(&reason), "soft-block phải được coi là bot error");
+        let m = friendly_reason(&reason);
+        assert!(m.contains("Sửa lỗi tải ngay"), "phải ra thông báo chặn tạm: {m}");
+        assert!(!m.contains("không tồn tại"), "không được báo nhầm video bị xoá: {m}");
     }
 
     #[test]

@@ -284,6 +284,33 @@ impl YtDlpRunner {
                     .run_once(item, settings, resume, false, true, cancel, progress_tx, meta_tx, output_stem)
                     .await;
             }
+            // "Video unavailable" trên YouTube: khi tải cả kênh dồn dập,
+            // YouTube soft-block IP bằng cách NÓI DỐI là video không tồn tại
+            // (kiểm chứng thực tế 2026-07: cùng video, lúc batch báo
+            // unavailable, thử riêng lẻ thì sống nguyên). Quy trình:
+            //   1. Thử lại bằng client dự phòng (mweb/tv) — nhiều khi qua luôn.
+            //   2. Vẫn "unavailable" → hỏi oembed (endpoint công khai, không
+            //      bị bot-gate): video còn sống → gắn SOFT_BLOCK_MARKER để
+            //      queue cooldown rồi TỰ tải lại; chết thật → fail hẳn với
+            //      thông báo "video đã bị xoá" (lúc này mới đúng).
+            if crate::error::is_unavailable_error(reason)
+                && args_builder::is_youtube(&item.request.url)
+                && !cancel.is_cancelled()
+            {
+                let second = self
+                    .run_once(item, settings, resume, false, true, cancel.clone(), progress_tx.clone(), meta_tx.clone(), output_stem.clone())
+                    .await?;
+                if let RunOutcome::Failed { reason: r2 } = &second {
+                    if crate::error::is_unavailable_error(r2)
+                        && youtube_video_exists(&item.request.url).await
+                    {
+                        return Ok(RunOutcome::Failed {
+                            reason: format!("{} {r2}", crate::error::SOFT_BLOCK_MARKER),
+                        });
+                    }
+                }
+                return Ok(second);
+            }
             // Auto-retry with `--force-generic-extractor` when yt-dlp says it
             // can't handle the site — works for viralhog and any other
             // "self-hosted MP4" page that exposes the URL in HTML <video>.
@@ -478,6 +505,29 @@ impl YtDlpRunner {
                 Ok(RunOutcome::Failed { reason: format!("(exit {code}) {last}") })
             }
         }
+    }
+}
+
+/// Video YouTube còn sống thật không? Hỏi oembed — endpoint công khai, nhẹ,
+/// KHÔNG bị anti-bot gate như trang watch: 200 = video tồn tại (đang bị
+/// soft-block thôi); 4xx = đã xoá/riêng tư thật. Lỗi mạng → coi như không
+/// xác nhận được (trả false, giữ nguyên thông báo unavailable).
+async fn youtube_video_exists(url: &str) -> bool {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    match client
+        .get("https://www.youtube.com/oembed")
+        .query(&[("url", url), ("format", "json")])
+        .send()
+        .await
+    {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
     }
 }
 
