@@ -304,8 +304,16 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
                 args.push("2".into());
             }
 
-            // Aria2c — true multi-stream accelerator. Khi user bật ở Settings,
-            // dùng -x 32 -s 32 split=32 cho tốc độ max.
+            // Aria2c — vũ khí tốc độ chính cho YouTube: tải https thường của
+            // yt-dlp là MỘT luồng duy nhất (-N chỉ tác dụng với video chia
+            // mảnh), nên khi YouTube bóp từng kết nối (~2MB/s lúc IP nóng)
+            // là chịu chết. aria2c xé file thành 16 khúc / 16 kết nối song
+            // song — đo thực tế 2026-07: ~30MB/s vs ~9MB/s một luồng.
+            //
+            // LƯU Ý SỐNG CÒN: aria2c chỉ cho phép TỐI ĐA -x 16 kết nối/server.
+            // Trước đây truyền -x 32 → aria2c chết ngay exit 28 ("Possible
+            // Values: 1-16") → tính năng này CHƯA TỪNG chạy được.
+            //
             // Bỏ qua ở lần safe_retry: aria2c gửi UA/header riêng và không
             // refresh được URL hết hạn — nguồn 403 nổi tiếng trên googlevideo.
             if req.use_aria2c && !safe_retry {
@@ -316,8 +324,7 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
                 args.push(aria_bin);
                 args.push("--downloader-args".into());
                 args.push(
-                    "aria2c:-x 32 -s 32 -k 1M --max-connection-per-server=32 \
---split=32 --min-split-size=1M --piece-length=1M --lowest-speed-limit=1K \
+                    "aria2c:-x 16 -s 16 -k 1M --min-split-size=1M --lowest-speed-limit=1K \
 --console-log-level=notice --summary-interval=1 --enable-color=false"
                         .into(),
                 );
@@ -479,7 +486,9 @@ mod tests {
         let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
         let joined = args.join(" ");
         assert!(joined.contains("--downloader aria2c"));
-        assert!(joined.contains("aria2c:-x 32 -s 32 -k 1M"));
+        // aria2c chỉ nhận -x tối đa 16 — truyền 32 là chết ngay exit 28.
+        assert!(joined.contains("aria2c:-x 16 -s 16 -k 1M"));
+        assert!(!joined.contains("-x 32"));
     }
 
     #[test]

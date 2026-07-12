@@ -360,6 +360,11 @@ pub struct Settings {
     pub clipboard_watcher: bool,
     pub notifications: bool,
     pub aria2c_enabled: bool,
+    /// Migration một lần: bật aria2c cho settings cũ (tạo từ thời mặc định
+    /// tắt + args lỗi -x 32 làm aria2c chưa từng chạy). Sau lần bật này,
+    /// user tắt thủ công thì được tôn trọng. File mới luôn `true`.
+    #[serde(default)]
+    pub aria2c_migrated: bool,
     /// Khi != None, yt-dlp được chạy với `--cookies-from-browser <name>`.
     /// Cần cho các site chặn bot mạnh: Douyin, Bilibili, các site châu Á, hay
     /// video YouTube giới hạn tuổi. None = không gửi cookies (mặc định).
@@ -447,7 +452,8 @@ impl Default for Settings {
             language: Language::Vi,
             clipboard_watcher: true,
             notifications: true,
-            aria2c_enabled: false,
+            aria2c_enabled: true,
+            aria2c_migrated: true,
             cookies_browser: None,
             cookies_file: None,
             skip_downloaded: true,

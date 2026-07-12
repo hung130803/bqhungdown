@@ -67,7 +67,7 @@
     "language": "Language",
     "clipboardWatcher": "Auto-detect links from clipboard",
     "notifications": "Show system notifications",
-    "aria2cEnabled": "aria2c boost (3-5x faster, but no detailed progress)",
+    "aria2cEnabled": "aria2c boost — 16 parallel connections, keeps speed high even when YouTube throttles (recommended ON)",
     "skipDownloaded": "Skip already-downloaded videos (no duplicates)",
     "skipDownloadedHint": "When re-fetching a channel, automatically skip videos already downloaded. Only counts videos downloaded after enabling this.",
     "cookiesBrowser": "Use cookies from browser",

@@ -44,6 +44,7 @@ impl SettingsStore {
                         clamp_max_concurrency(&mut settings);
                         migrate_youtube_keys(&mut settings);
                         migrate_po_token_default(&mut settings);
+                        migrate_aria2c_default(&mut settings);
                         let store = Self {
                             inner: RwLock::new(settings),
                             path,
@@ -280,6 +281,18 @@ fn migrate_po_token_default(settings: &mut Settings) {
     }
 }
 
+/// Migration một lần: bật aria2c (tải 16 kết nối song song) cho settings cũ.
+/// Trước đây tính năng này (a) mặc định tắt và (b) có bug -x 32 làm aria2c
+/// chết ngay khi bật — giờ đã sửa, bật lên là cách duy nhất giữ tốc độ cao
+/// khi YouTube bóp băng thông từng kết nối. User tắt thủ công sau đó thì
+/// `aria2c_migrated` (đã true) giữ nguyên lựa chọn.
+fn migrate_aria2c_default(settings: &mut Settings) {
+    if !settings.aria2c_migrated {
+        settings.aria2c_enabled = true;
+        settings.aria2c_migrated = true;
+    }
+}
+
 fn validate(settings: &Settings) -> AppResult<()> {
     if !(MAX_CONCURRENCY_MIN..=MAX_CONCURRENCY_MAX).contains(&settings.max_concurrency) {
         return Err(AppError::InvalidSetting {
@@ -393,6 +406,30 @@ mod tests {
         fs::write(&path, serde_json::to_string(&off).unwrap()).unwrap();
         let (store2, _) = SettingsStore::load(path.clone());
         assert!(!store2.get().po_token_enabled);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn migrates_old_aria2c_off_to_on_once() {
+        let path = unique_tmp_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        let mut old = Settings::default();
+        old.aria2c_enabled = false;
+        old.aria2c_migrated = false;
+        fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+
+        let (store, err) = SettingsStore::load(path.clone());
+        assert!(err.is_none());
+        assert!(store.get().aria2c_enabled, "migration phải bật aria2c");
+
+        // User chủ động tắt sau migration → được tôn trọng.
+        let mut off = store.get();
+        off.aria2c_enabled = false;
+        fs::write(&path, serde_json::to_string(&off).unwrap()).unwrap();
+        let (store2, _) = SettingsStore::load(path.clone());
+        assert!(!store2.get().aria2c_enabled);
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }

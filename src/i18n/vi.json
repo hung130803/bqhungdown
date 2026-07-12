@@ -67,7 +67,7 @@
     "language": "Ngôn ngữ",
     "clipboardWatcher": "Tự động phát hiện liên kết từ clipboard",
     "notifications": "Hiện thông báo hệ thống",
-    "aria2cEnabled": "Tăng tốc aria2c (nhanh hơn 3-5x, nhưng không hiện tiến độ chi tiết)",
+    "aria2cEnabled": "Tăng tốc aria2c — 16 kết nối song song, giữ tốc độ cao kể cả khi YouTube bóp băng thông (nên BẬT)",
     "skipDownloaded": "Bỏ qua video đã tải (không tải trùng)",
     "skipDownloadedHint": "Khi tải lại 1 kênh, tự bỏ qua video đã tải xong trước đó. Chỉ tính các video tải từ lúc bật trở đi.",
     "cookiesBrowser": "Lấy cookies từ trình duyệt",
