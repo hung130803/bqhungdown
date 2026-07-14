@@ -69,29 +69,33 @@ struct WbiCtx {
     cookie: Option<String>,
 }
 
-/// Lấy buvid3 + wbi keys → mixin key. `now_ms` chỉ để tránh phụ thuộc thời
-/// gian trong test; production truyền thời gian thật.
+/// Lấy bộ cookie ĐẦY ĐỦ (buvid3 + buvid4 qua spi API) + wbi keys → mixin key.
+/// buvid4 giúp qua risk-control tốt hơn buvid3 đơn lẻ. Cache lại để tái dùng
+/// cho mọi trang (không xin lại mỗi lần).
 async fn init_ctx() -> Option<WbiCtx> {
     let bare = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .user_agent(UA)
         .build()
         .ok()?;
-    // buvid3 để qua risk-control (giống ttwid của douyin).
-    let cookie = match bare.get("https://www.bilibili.com/").send().await {
-        Ok(resp) => {
-            let mut c = None;
-            for v in resp.headers().get_all(reqwest::header::SET_COOKIE).iter() {
-                if let Ok(s) = v.to_str() {
-                    if let Some(rest) = s.strip_prefix("buvid3=") {
-                        if let Some(val) = rest.split(';').next() {
-                            c = Some(format!("buvid3={val}"));
-                        }
-                    }
+    // spi API cấp cả buvid3 + buvid4 (đủ hơn scrape trang chủ chỉ có buvid3).
+    let cookie = match bare
+        .get("https://api.bilibili.com/x/frontend/finger/spi")
+        .send()
+        .await
+    {
+        Ok(resp) => match resp.json::<Value>().await {
+            Ok(j) => {
+                let b3 = j.pointer("/data/b_3").and_then(|v| v.as_str());
+                let b4 = j.pointer("/data/b_4").and_then(|v| v.as_str());
+                match (b3, b4) {
+                    (Some(b3), Some(b4)) => Some(format!("buvid3={b3}; buvid4={b4}")),
+                    (Some(b3), None) => Some(format!("buvid3={b3}")),
+                    _ => None,
                 }
             }
-            c
-        }
+            Err(_) => None,
+        },
         Err(_) => None,
     };
 
@@ -138,8 +142,12 @@ async fn fetch_page(
     ps: u32,
     now_secs: i64,
 ) -> Option<(Vec<ChannelVideo>, bool)> {
-    const MAX_RETRY: usize = 6;
+    // Risk-control (-352/412) của Bilibili rất hay xảy ra ngẫu nhiên; server
+    // tự nhả sau vài giây. Thử nhiều lần với nghỉ ngắn → tỉ lệ đậu cao.
+    const MAX_RETRY: usize = 10;
     for attempt in 0..MAX_RETRY {
+        // dm_img_* = tham số chống-crawler trình duyệt thật gửi kèm; giúp
+        // giảm -352. Giá trị tĩnh hợp lệ là đủ (server không kiểm nội dung).
         let params = vec![
             ("mid".into(), mid.to_string()),
             ("pn".into(), pn.to_string()),
@@ -147,20 +155,25 @@ async fn fetch_page(
             ("order".into(), "pubdate".into()),
             ("platform".into(), "web".into()),
             ("web_location".into(), "1550101".into()),
+            ("dm_img_list".into(), "[]".into()),
+            ("dm_img_str".into(), "V2ViR0wgMS4wIChPcGVuR0wgRVMgMi4wIENocm9taXVtKQ".into()),
+            ("dm_cover_img_str".into(), "QU5HTEUgKEludGVsLCBJbnRlbChSKSBVSEQgR3JhcGhpY3M".into()),
+            ("dm_img_inter".into(), r#"{"ds":[],"wh":[0,0,0],"of":[0,0,0]}"#.into()),
         ];
         let qs = wbi_sign(params, &ctx.mixin_key, now_secs + attempt as i64);
         let url = format!("https://api.bilibili.com/x/space/wbi/arc/search?{qs}");
         let mut req = ctx
             .client
             .get(&url)
-            .header("Referer", format!("https://space.bilibili.com/{mid}"));
+            .header("Referer", format!("https://space.bilibili.com/{mid}"))
+            .header("Origin", "https://space.bilibili.com");
         if let Some(c) = &ctx.cookie {
             req = req.header("Cookie", c);
         }
         let body = match req.send().await {
             Ok(r) => r.text().await.unwrap_or_default(),
             Err(_) => {
-                tokio::time::sleep(Duration::from_millis(1200)).await;
+                tokio::time::sleep(Duration::from_millis(700)).await;
                 continue;
             }
         };
@@ -168,14 +181,14 @@ async fn fetch_page(
             Ok(v) => v,
             Err(_) => {
                 // 412 trả HTML challenge → không parse được → thử lại.
-                tokio::time::sleep(Duration::from_millis(1200)).await;
+                tokio::time::sleep(Duration::from_millis(700)).await;
                 continue;
             }
         };
         let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
         if code != 0 {
             // -352/-412/-799… risk-control tạm thời → nghỉ rồi thử lại.
-            tokio::time::sleep(Duration::from_millis(1200)).await;
+            tokio::time::sleep(Duration::from_millis(700)).await;
             continue;
         }
         let vlist = json
@@ -277,7 +290,17 @@ pub async fn fetch_space(
     let mut seen = std::collections::HashSet::new();
     let mut pn = 1u32;
     loop {
-        let (videos, has_more) = fetch_page(&ctx, &mid, pn, PS, now_secs).await?;
+        let (videos, has_more) = match fetch_page(&ctx, &mid, pn, PS, now_secs).await {
+            Some(r) => r,
+            None => {
+                // Trang 1 fail hẳn (sau 10 lần) → trả None để fetch_channel
+                // rơi xuống yt-dlp flat. Trang sau fail → giữ những gì đã lấy.
+                if pn == 1 {
+                    return None;
+                }
+                break;
+            }
+        };
         if videos.is_empty() {
             break;
         }
