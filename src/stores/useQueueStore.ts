@@ -45,6 +45,7 @@ interface QueueState {
   resume: (id: string) => Promise<void>;
   cancel: (id: string) => Promise<void>;
   retry: (id: string) => Promise<void>;
+  forceDownload: (id: string) => Promise<void>;
 }
 
 export const useQueueStore = create<QueueState>()((set, get) => ({
@@ -163,6 +164,24 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
     }));
     try {
       await cmd.retryDownload(id);
+    } catch {
+      set((s) => ({
+        items: s.items.map((i) => (i.shortId === id ? { ...i, state: prev.state } : i)),
+      }));
+    }
+  },
+
+  /** Nút "Vẫn tải video này" trên mục Bỏ qua — tải bất chấp danh sách đã-tải. */
+  forceDownload: async (id) => {
+    const prev = get().items.find((i) => i.shortId === id);
+    if (!prev) return;
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.shortId === id ? { ...i, state: "queued", errorMessage: null } : i,
+      ),
+    }));
+    try {
+      await cmd.forceDownload(id);
     } catch {
       set((s) => ({
         items: s.items.map((i) => (i.shortId === id ? { ...i, state: prev.state } : i)),

@@ -69,7 +69,7 @@
     "notifications": "Show system notifications",
     "aria2cEnabled": "aria2c boost — 16 parallel connections, keeps speed high even when YouTube throttles (recommended ON)",
     "skipDownloaded": "Skip already-downloaded videos (no duplicates)",
-    "skipDownloadedHint": "When re-fetching a channel, automatically skip videos already downloaded. Only counts videos downloaded after enabling this.",
+    "skipDownloadedHint": "When re-fetching a channel, previously downloaded videos are hidden from the picker and show as \"Skipped\" in the queue. To re-download a skipped video, press \"⬇ Download anyway\" on that row. Turn this off to always download everything.",
     "cookiesBrowser": "Use cookies from browser",
     "cookiesNone": "Off (default)",
     "cookiesHint": "Enable for Douyin / Bilibili / private Instagram / age-restricted YouTube. The chosen browser must be logged in or have visited the site.",

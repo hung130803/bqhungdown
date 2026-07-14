@@ -281,6 +281,11 @@ pub struct DownloadRequest {
     /// downloads.
     #[serde(default)]
     pub polite: bool,
+    /// Nút "Vẫn tải video này" trên mục Bỏ qua: chạy download KHÔNG kèm
+    /// `--download-archive` để yt-dlp không né video đã có trong danh sách
+    /// đã-tải. File cũ còn trên máy thì tự thêm ` (1)` chứ không ghi đè.
+    #[serde(default)]
+    pub force_redownload: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

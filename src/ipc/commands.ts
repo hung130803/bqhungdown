@@ -246,6 +246,13 @@ export async function retryAllFailed(): Promise<number> {
   return invoke<number>("retry_all_failed");
 }
 
+// Nút "Vẫn tải video này" trên mục Bỏ qua — tải bất chấp danh sách đã-tải.
+export async function forceDownload(shortId: string): Promise<DownloadItem> {
+  if (IS_WEB) return Promise.reject("unavailable");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<DownloadItem>("force_download", { shortId });
+}
+
 export async function retryDownload(shortId: string): Promise<DownloadItem> {
   if (IS_WEB) throw new Error("Retry chưa hỗ trợ trên web.");
   const { invoke } = await import("@tauri-apps/api/core");

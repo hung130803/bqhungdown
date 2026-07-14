@@ -51,6 +51,7 @@ export function QueueRow({ item }: { item: DownloadItem }) {
   const resume = useQueueStore((s) => s.resume);
   const cancel = useQueueStore((s) => s.cancel);
   const retry = useQueueStore((s) => s.retry);
+  const forceDownload = useQueueStore((s) => s.forceDownload);
   const removeLocal = useQueueStore((s) => s.remove);
 
   const stateLabel = t(`queue.states.${item.state}`);
@@ -287,6 +288,17 @@ export function QueueRow({ item }: { item: DownloadItem }) {
             {(item.state === "failed" || item.state === "cancelled") && (
               <button onClick={() => void retry(item.shortId)} className="px-2.5 py-1 text-xs rounded-md border border-border hover:bg-surface-2">
                 {t("queue.retry")}
+              </button>
+            )}
+            {item.state === "skipped" && (
+              // Video bị bỏ qua vì đã có trong danh sách đã-tải — nút này tải
+              // bất chấp (file cũ còn trên máy thì bản mới tự thêm " (1)").
+              <button
+                onClick={() => void forceDownload(item.shortId)}
+                className="px-2.5 py-1 text-xs rounded-md bg-accent text-accent-fg hover:opacity-90"
+                title="Video này bị bỏ qua vì từng tải rồi — bấm để tải lại bất chấp"
+              >
+                ⬇ Vẫn tải video này
               </button>
             )}
             {item.state === "completed" && (

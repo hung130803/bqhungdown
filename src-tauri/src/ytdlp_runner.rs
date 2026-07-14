@@ -366,7 +366,9 @@ impl YtDlpRunner {
         // skip anything already listed. yt-dlp accepts options after the URL, so
         // appending here is fine. Only YouTube/most extractors expose a stable id;
         // ones that don't simply never match and download normally.
-        if settings.skip_downloaded {
+        // force_redownload (nút "Vẫn tải video này" trên mục Bỏ qua): bỏ hẳn
+        // --download-archive cho riêng lần chạy này để yt-dlp không né.
+        if settings.skip_downloaded && !item.request.force_redownload {
             if let Some(archive) = &self.archive_path {
                 args.push("--download-archive".into());
                 args.push(archive.to_string_lossy().to_string());

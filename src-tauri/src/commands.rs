@@ -178,6 +178,7 @@ pub(crate) fn build_request(url: String, options: DownloadOptions, settings: &Se
         use_aria2c: settings.aria2c_enabled,
         playlist_all: options.playlist_all.unwrap_or(false),
         polite: options.polite.unwrap_or(false),
+        force_redownload: false,
     }
 }
 
@@ -395,6 +396,15 @@ pub fn retry_download(
 #[tauri::command]
 pub fn retry_all_failed(queue: State<Arc<QueueManager>>) -> AppResult<u32> {
     Ok(queue.retry_all_failed() as u32)
+}
+
+/// Nút "Vẫn tải video này" trên mục Bỏ qua — tải bất chấp danh sách đã-tải.
+#[tauri::command]
+pub fn force_download(
+    short_id: String,
+    queue: State<Arc<QueueManager>>,
+) -> AppResult<DownloadItem> {
+    queue.force_download(&short_id)
 }
 
 #[tauri::command]

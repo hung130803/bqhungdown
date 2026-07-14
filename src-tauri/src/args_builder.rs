@@ -444,6 +444,7 @@ mod tests {
             use_aria2c: false,
             playlist_all: false,
             polite: false,
+            force_redownload: false,
         }
     }
 

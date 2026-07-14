@@ -34,7 +34,9 @@ pub fn transition(state: DownloadState, event: QueueEvent) -> AppResult<Download
         (Downloading, Complete) => Completed,
         (Downloading, Fail) => Failed,
         (Queued | Downloading | Paused, Cancel) => Cancelled,
-        (Failed | Cancelled, Retry) => Queued,
+        // Skipped cũng retry được — nút "Vẫn tải video này" trên mục Bỏ qua
+        // (force_redownload bỏ --download-archive nên yt-dlp không né nữa).
+        (Failed | Cancelled | Skipped, Retry) => Queued,
         (Queued | Downloading, Skip) => Skipped,
         _ => {
             return Err(AppError::IllegalTransition {
@@ -486,6 +488,19 @@ impl QueueManager {
         let me = self.clone();
         tauri::async_runtime::spawn(async move { me.run_loop_for(id_owned).await; });
         Ok(item)
+    }
+
+    /// Nút "Vẫn tải video này" trên mục Bỏ qua: bật cờ force_redownload (bỏ
+    /// kiểm tra danh-sách-đã-tải cho riêng mục này) rồi chạy lại như Retry.
+    /// File cũ còn trên máy sẽ được giữ nguyên — bản mới tự thêm ` (1)`.
+    pub fn force_download(self: &Arc<Self>, id: &str) -> AppResult<DownloadItem> {
+        {
+            let mut map = self.items.write().unwrap();
+            if let Some(item) = map.get_mut(id) {
+                item.request.force_redownload = true;
+            }
+        }
+        self.retry(id)
     }
 
     /// Thử lại HÀNG LOẠT mọi mục đang Failed — cho nút "Thử lại tất cả video
@@ -969,13 +984,16 @@ mod tests {
         assert_eq!(transition(Downloading, Fail).unwrap(), Failed);
         assert_eq!(transition(Failed, Retry).unwrap(), Queued);
         assert_eq!(transition(Cancelled, Retry).unwrap(), Queued);
+        // Nút "Vẫn tải video này" cần retry được từ Skipped.
+        assert_eq!(transition(Skipped, Retry).unwrap(), Queued);
         assert_eq!(transition(Queued, Cancel).unwrap(), Cancelled);
     }
 
     #[test]
     fn illegal_transitions() {
         assert!(transition(Completed, Pause).is_err());
-        assert!(transition(Skipped, Retry).is_err());
+        assert!(transition(Completed, Retry).is_err());
+        assert!(transition(Skipped, Pause).is_err());
     }
 
     #[test]

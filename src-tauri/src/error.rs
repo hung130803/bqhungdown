@@ -145,6 +145,12 @@ pub fn friendly_reason(raw: &str) -> String {
          (Cài đặt → Cookie)."
     } else if l.contains("confirm your age") || l.contains("age-restricted") || l.contains("age restricted") {
         "🔞 Video giới hạn tuổi — thêm cookie của tài khoản đã đăng nhập (Cài đặt → Cookie) rồi thử lại."
+    } else if l.contains("live event will begin") || l.contains("premieres in") || l.contains("premiere will begin") {
+        "⏰ Video này là buổi phát trực tiếp / công chiếu CHƯA diễn ra — chưa có gì để tải. \
+         Đợi phát xong rồi bấm Thử lại."
+    } else if l.contains("drm protected") || l.contains("drm-protected") {
+        "🔐 Video có khoá bản quyền DRM (phim/nội dung trả phí) — YouTube không cho tải loại này, \
+         không phải lỗi của app."
     } else if l.contains("not available in your country") || l.contains("geo restricted") || l.contains("geo-restricted") {
         "🌍 Video bị chặn ở quốc gia của bạn — cần proxy/VPN nước khác rồi thử lại."
     } else if l.contains("video unavailable") || l.contains("this video is not available")
@@ -262,6 +268,13 @@ mod tests {
         let long = format!("ERROR: xyz {}", "a".repeat(500));
         let m = friendly_reason(&long);
         assert!(m.len() < 700, "chi tiết phải được cắt ngắn, len = {}", m.len());
+    }
+
+    #[test]
+    fn friendly_premiere_and_drm() {
+        assert!(friendly_reason("ERROR: [youtube] x: This live event will begin in 3 hours").contains("CHƯA diễn ra"));
+        assert!(friendly_reason("ERROR: [youtube] x: Premieres in 2 hours").contains("CHƯA diễn ra"));
+        assert!(friendly_reason("ERROR: [youtube] x: This video is DRM protected").contains("DRM"));
     }
 
     #[test]
