@@ -483,6 +483,7 @@ pub async fn scrape_douyin_channel(
     if proxy.is_some() {
         attempts.push(proxy.clone());
     }
+    let mut api_err: Option<String> = None;
     for (i, px) in attempts.iter().enumerate() {
         match fetch_channel_api(&app, &sec_uid, px).await {
             Ok(posts) if !posts.is_empty() => {
@@ -492,8 +493,16 @@ pub async fn scrape_douyin_channel(
                 );
                 return Ok(posts);
             }
-            Ok(_) => eprintln!("[douyin] lần {i} (proxy={}) rỗng", px.is_some()),
-            Err(e) => eprintln!("[douyin] lần {i} (proxy={}) lỗi: {e:?}", px.is_some()),
+            Ok(_) => {
+                eprintln!("[douyin] lần {i} (proxy={}) rỗng", px.is_some());
+                api_err.get_or_insert_with(|| {
+                    "Douyin trả về rỗng (kênh riêng tư/không có video, hoặc bị chặn tạm)".into()
+                });
+            }
+            Err(e) => {
+                eprintln!("[douyin] lần {i} (proxy={}) lỗi: {e:?}", px.is_some());
+                api_err = Some(format!("{e}"));
+            }
         }
     }
 
@@ -510,12 +519,24 @@ pub async fn scrape_douyin_channel(
         "https://api.tikwm.com/api/",
     ];
 
-    let posts = fetch_all_pages(&client, &endpoints, &user_url, &sec_uid).await?;
-
-    let _ = app.emit(
-        "bqd-douyin-scraper-progress",
-        serde_json::json!({ "count": posts.len() }),
-    );
-
-    Ok(posts)
+    match fetch_all_pages(&client, &endpoints, &user_url, &sec_uid).await {
+        Ok(posts) if !posts.is_empty() => {
+            let _ = app.emit(
+                "bqd-douyin-scraper-progress",
+                serde_json::json!({ "count": posts.len() }),
+            );
+            Ok(posts)
+        }
+        // Cả API chính lẫn tikwm đều thất bại → báo LỖI THẬT của đường chính
+        // (đường chính mới là cái quan trọng), kèm sec_uid để chẩn đoán.
+        _ => Err(AppError::Other(format!(
+            "Không lấy được video của kênh Douyin này.\n\
+             Nguyên nhân (từ API chính): {}\n\
+             sec_uid: {}\n\
+             Thử: kiểm tra link kênh (dạng douyin.com/user/…), thử lại sau vài phút, \
+             hoặc kênh có thể riêng tư/trống.",
+            api_err.unwrap_or_else(|| "không rõ".into()),
+            &sec_uid[..sec_uid.len().min(24)],
+        ))),
+    }
 }
