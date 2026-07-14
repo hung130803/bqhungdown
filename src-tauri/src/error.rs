@@ -148,10 +148,18 @@ pub fn friendly_reason(raw: &str) -> String {
     } else if l.contains("live event will begin") || l.contains("premieres in") || l.contains("premiere will begin") {
         "⏰ Video này là buổi phát trực tiếp / công chiếu CHƯA diễn ra — chưa có gì để tải. \
          Đợi phát xong rồi bấm Thử lại."
-    } else if l.contains("412") && (l.contains("precondition") || l.contains("bilibili") || l.contains("biliintl")) {
+    } else if l.contains("biliintl") && l.contains("412") {
+        // bilibili.tv (Bstation): playurl nằm sau tường lửa chống bot (412.js
+        // challenge) — không vượt được bằng header/proxy đơn thuần. Cần cookie
+        // của tài khoản ĐÃ ĐĂNG NHẬP bilibili.tv + proxy nước ngoài.
+        "🅱️ Bilibili.tv chặn tải bằng tường lửa chống bot (lỗi 412). Đây là rào cản mạnh, \
+         cần cả 2 thứ: (1) proxy/VPN nước ngoài (Nhật/Singapore) trong Cài đặt; \
+         (2) cookie của tài khoản ĐÃ ĐĂNG NHẬP bilibili.tv — mở bilibili.tv trên trình duyệt, \
+         đăng nhập, xuất file cookies.txt rồi chọn trong Cài đặt → Cookie. \
+         Mẹo: nội dung này thường cũng có trên bilibili.com (không bị tường lửa này)."
+    } else if l.contains("412") && (l.contains("precondition") || l.contains("bilibili")) {
         "🅱️ Bilibili tạm chặn request (lỗi 412). App đã tự thêm header chống chặn — \
-         hãy bấm Thử lại 1-2 lần. Nếu vẫn lỗi: đợi vài phút rồi thử, hoặc thêm proxy \
-         (Cài đặt) vì Bilibili hay chặn theo IP/khu vực."
+         bấm Thử lại 1-2 lần. Vẫn lỗi thì đợi vài phút, hoặc thêm proxy (Cài đặt)."
     } else if l.contains("drm protected") || l.contains("drm-protected") {
         "🔐 Video có khoá bản quyền DRM (phim/nội dung trả phí) — YouTube không cho tải loại này, \
          không phải lỗi của app."
@@ -323,8 +331,12 @@ mod tests {
     fn friendly_bilibili_412() {
         let m = friendly_reason("(exit 1) ERROR: [BiliIntl] 23336253: Unable to download video formats: HTTP Error 412: Precondition Failed");
         assert!(m.contains("412"), "phải nhận diện 412: {m}");
-        assert!(m.contains("Thử lại"), "phải bảo thử lại: {m}");
+        assert!(m.contains("cookie") || m.contains("Cookie"), "bilibili.tv 412 phải hướng dẫn cookie: {m}");
         assert!(!m.contains("Sửa lỗi tải ngay"), "không nhầm sang lỗi bot: {m}");
+
+        // bilibili.com 412 (không phải BiliIntl) → thông báo nhẹ hơn.
+        let m2 = friendly_reason("ERROR: [BiliBili] BV1xx: HTTP Error 412: Precondition Failed");
+        assert!(m2.contains("Thử lại"), "bilibili.com 412 bảo thử lại: {m2}");
     }
 
     #[test]

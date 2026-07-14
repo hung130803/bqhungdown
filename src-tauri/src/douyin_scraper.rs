@@ -23,14 +23,17 @@ fn extract_sec_uid(url: &str) -> Option<String> {
     Some(re.captures(url)?.get(1)?.as_str().to_string())
 }
 
-async fn resolve_short_url(short_url: &str) -> Option<String> {
-    let client = reqwest::Client::builder()
+async fn resolve_short_url(short_url: &str, proxy: &Option<String>) -> Option<String> {
+    let mut b = reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent(UA)
-        .build()
-        .ok()?;
-
+        .user_agent(UA);
+    if let Some(px) = proxy {
+        if let Ok(p) = reqwest::Proxy::all(px) {
+            b = b.proxy(p);
+        }
+    }
+    let client = b.build().ok()?;
     let resp = client.head(short_url).send().await.ok()?;
     extract_sec_uid(resp.url().as_str())
 }
@@ -119,15 +122,27 @@ fn pct_encode(s: &str) -> String {
         .collect()
 }
 
+/// Gắn proxy vào builder nếu có (định dạng đã normalize).
+fn with_proxy(mut b: reqwest::ClientBuilder, proxy: &Option<String>) -> reqwest::ClientBuilder {
+    if let Some(px) = proxy {
+        if let Ok(p) = reqwest::Proxy::all(px) {
+            b = b.proxy(p);
+        }
+    }
+    b
+}
+
 /// Lấy cookie ttwid từ douyin.com (best-effort; thiếu vẫn thử gọi API).
 /// QUAN TRỌNG: phải dùng client KHÔNG đặt User-Agent trình duyệt — với UA
 /// Chrome, Douyin trả `__ac_nonce` (đòi giải JS challenge) thay vì ttwid;
 /// với UA mặc định của reqwest thì nó cấp ttwid luôn. ttwid dùng chéo UA OK.
-async fn fetch_ttwid() -> Option<String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .ok()?;
+async fn fetch_ttwid(proxy: &Option<String>) -> Option<String> {
+    let client = with_proxy(
+        reqwest::Client::builder().timeout(Duration::from_secs(15)),
+        proxy,
+    )
+    .build()
+    .ok()?;
     let resp = client.get("https://www.douyin.com/").send().await.ok()?;
     for val in resp.headers().get_all(reqwest::header::SET_COOKIE).iter() {
         if let Ok(s) = val.to_str() {
@@ -183,14 +198,18 @@ fn awemes_to_posts(list: Vec<TikwmAweme>) -> Vec<DouyinPost> {
 async fn fetch_channel_api(
     app: &tauri::AppHandle,
     sec_uid: &str,
+    proxy: &Option<String>,
 ) -> AppResult<Vec<DouyinPost>> {
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .user_agent(DOUYIN_UA)
-        .build()
-        .map_err(|e| AppError::Other(format!("HTTP client lỗi: {e}")))?;
+    let client = with_proxy(
+        reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .user_agent(DOUYIN_UA),
+        proxy,
+    )
+    .build()
+    .map_err(|e| AppError::Other(format!("HTTP client lỗi: {e}")))?;
 
-    let ttwid = fetch_ttwid().await;
+    let ttwid = fetch_ttwid(proxy).await;
     let ab = ABogus::new();
     let referer = format!("https://www.douyin.com/user/{sec_uid}");
 
@@ -422,7 +441,12 @@ fn format_error(e: &AppError) -> String {
 pub async fn scrape_douyin_channel(
     app: tauri::AppHandle,
     url: String,
+    settings: tauri::State<'_, std::sync::Arc<crate::settings_store::SettingsStore>>,
 ) -> AppResult<Vec<DouyinPost>> {
+    // Proxy do user cấu hình — Douyin hay chặn IP Việt Nam; đi qua proxy
+    // (vd proxy Nhật) thì API mới trả dữ liệu. Không có proxy → đi thẳng.
+    let proxy = crate::args_builder::next_proxy(&settings.get());
+
     let lower = url.to_lowercase();
     if !lower.contains("douyin.com") {
         return Err(AppError::Other("URL không phải liên kết Douyin".into()));
@@ -434,7 +458,7 @@ pub async fn scrape_douyin_channel(
             AppError::Other("Không tìm được sec_uid. Dùng URL dạng douyin.com/user/...".into())
         })?
     } else if lower.contains("v.douyin.com") {
-        resolve_short_url(&url).await.ok_or_else(|| {
+        resolve_short_url(&url, &proxy).await.ok_or_else(|| {
             AppError::Other("Không theo được redirect. Thử URL đầy đủ (douyin.com/user/...)".into())
         })?
     } else {
@@ -450,18 +474,26 @@ pub async fn scrape_douyin_channel(
         serde_json::json!({ "label": "douyin-api", "secUid": &sec_uid }),
     );
 
-    // Đường CHÍNH: API douyin.com tự ký a_bogus (không cần dịch vụ ngoài).
-    match fetch_channel_api(&app, &sec_uid).await {
-        Ok(posts) if !posts.is_empty() => {
-            let _ = app.emit(
-                "bqd-douyin-scraper-progress",
-                serde_json::json!({ "count": posts.len() }),
-            );
-            return Ok(posts);
-        }
-        Ok(_) => { /* rỗng → thử phao dự phòng */ }
-        Err(e) => {
-            eprintln!("[douyin] API trực tiếp lỗi, thử tikwm: {e:?}");
+    // Đường CHÍNH: API douyin.com tự ký a_bogus. QUAN TRỌNG — thử TRỰC TIẾP
+    // trước (IP thật): Douyin thường chặn proxy DATACENTER (đã kiểm chứng:
+    // proxy datacenter → ttwid fail), nên KHÔNG ép proxy cho Douyin dù user
+    // có cấu hình proxy (để tải bilibili). Chỉ khi trực tiếp thất bại mới thử
+    // lại qua proxy (may ra proxy dân cư giúp được).
+    let mut attempts: Vec<Option<String>> = vec![None];
+    if proxy.is_some() {
+        attempts.push(proxy.clone());
+    }
+    for (i, px) in attempts.iter().enumerate() {
+        match fetch_channel_api(&app, &sec_uid, px).await {
+            Ok(posts) if !posts.is_empty() => {
+                let _ = app.emit(
+                    "bqd-douyin-scraper-progress",
+                    serde_json::json!({ "count": posts.len() }),
+                );
+                return Ok(posts);
+            }
+            Ok(_) => eprintln!("[douyin] lần {i} (proxy={}) rỗng", px.is_some()),
+            Err(e) => eprintln!("[douyin] lần {i} (proxy={}) lỗi: {e:?}", px.is_some()),
         }
     }
 
