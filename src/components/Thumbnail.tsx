@@ -26,7 +26,9 @@ function needsProxy(src: string): boolean {
     lower.includes("scontent") || // Instagram subdomain
     lower.includes("aweme") ||
     lower.includes("tiktokcdn-eu") || // EU CDN có sometimes Referer check
-    lower.includes("douyinpic.com")
+    lower.includes("douyinpic.com") ||
+    lower.includes("hdslb.com") || // Bilibili.com CDN — chặn hotlink (cần Referer)
+    lower.includes("bstarstatic.com") // Bilibili.tv CDN — cũng cần Referer
   );
 }
 

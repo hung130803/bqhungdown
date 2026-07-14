@@ -17,6 +17,7 @@ pub mod url_resolver;
 pub mod tiktok_photo;
 pub mod douyin_scraper;
 pub mod douyin_sign;
+pub mod bilibili_wbi;
 pub mod clipboard;
 pub mod channel_fetcher;
 pub mod youtube_api;

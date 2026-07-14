@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "bqhungdown"
-version = "0.1.59"
+version = "0.1.60"
 dependencies = [
  "anyhow",
  "arboard",
@@ -377,6 +377,7 @@ dependencies = [
  "digest",
  "dirs 5.0.1",
  "indexmap 2.14.0",
+ "md-5",
  "parking_lot",
  "proptest",
  "regex",
@@ -2388,6 +2389,16 @@ dependencies = [
  "log",
  "tendril",
  "web_atoms",
+]
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
 ]
 
 [[package]]

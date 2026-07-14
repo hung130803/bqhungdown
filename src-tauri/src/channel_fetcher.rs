@@ -327,6 +327,17 @@ pub async fn fetch_channel(
         // API không ra (ID lạ/không phải series) → rơi xuống yt-dlp flat như cũ.
     }
 
+    // Bilibili.com kênh UP (space.bilibili.com/<mid>): dùng API WBI đã ký —
+    // lấy tên + ảnh + view + thời lượng + ngày của 30 video/lần (như BBDown/
+    // yutto). Nhanh + ổn định hơn hẳn yt-dlp flat + dò từng video (hay mất tên
+    // vì risk-control). API hỏng hẳn → rơi xuống yt-dlp flat như cũ.
+    if lower_url.contains("space.bilibili.com") {
+        let now = chrono::Utc::now().timestamp();
+        if let Some((info, vids)) = crate::bilibili_wbi::fetch_space(url, limit, now).await {
+            return finalize_listing(app, info, vids, settings);
+        }
+    }
+
     if lower_url.contains("douyin.com/user/") {
         return Err(AppError::YtDlpFailed(
             "Douyin chặn quá chặt nên không thể tự lấy danh sách kênh được. \

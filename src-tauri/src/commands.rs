@@ -133,6 +133,10 @@ pub async fn fetch_thumbnail_data_url(url: String) -> AppResult<String> {
         Some("https://www.tiktok.com/")
     } else if lower.contains("aweme") || lower.contains("douyin") {
         Some("https://www.douyin.com/")
+    } else if lower.contains("hdslb.com") {
+        Some("https://www.bilibili.com/")
+    } else if lower.contains("bstarstatic.com") {
+        Some("https://www.bilibili.tv/")
     } else {
         None
     };

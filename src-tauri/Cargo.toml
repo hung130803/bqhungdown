@@ -59,6 +59,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # cho API Douyin (lấy danh sách video cả kênh) mà không nhúng blob JS lạ.
 sm3 = "0.4"
 digest = "0.10"
+# MD5 (RustCrypto) — dùng cho chữ ký WBI của bilibili.com (lấy danh sách kênh
+# kèm view/ảnh/tên trong 1 lần gọi, như BBDown/yutto).
+md-5 = "0.10"
 
 # Clipboard reader (cross-platform, pure Rust). Used by clipboard.rs.
 arboard = { version = "3", optional = true }
