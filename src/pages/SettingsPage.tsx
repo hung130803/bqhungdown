@@ -20,6 +20,28 @@ export function SettingsPage() {
   // + Deno + PO token) và hiện kết quả ngay dưới nút.
   const [fixing, setFixing] = useState(false);
   const [fixMsg, setFixMsg] = useState<string | null>(null);
+
+  // Nút "Kiểm tra proxy" — test từng proxy đã nhập, hiện kết quả.
+  const [testingProxy, setTestingProxy] = useState(false);
+  const [proxyTestMsg, setProxyTestMsg] = useState<string | null>(null);
+  const testProxyNow = async () => {
+    if (testingProxy) return;
+    const list = (settings?.proxies ?? []).map(p => p.trim()).filter(Boolean);
+    if (list.length === 0) return;
+    setTestingProxy(true);
+    setProxyTestMsg("⏳ Đang kiểm tra…");
+    const lines: string[] = [];
+    for (let i = 0; i < list.length; i++) {
+      try {
+        const r = await cmd.testProxy(list[i]);
+        lines.push(`Proxy ${i + 1}: ${r}`);
+      } catch (e) {
+        lines.push(`Proxy ${i + 1}: ${String(e)}`);
+      }
+      setProxyTestMsg(lines.join("\n"));
+    }
+    setTestingProxy(false);
+  };
   const fixNow = async () => {
     if (fixing) return;
     setFixing(true);
@@ -284,13 +306,24 @@ export function SettingsPage() {
           spellCheck={false}
         />
       </Field>
-      <p className="text-xs text-muted -mt-3">
-        Dán nhiều proxy (mỗi dòng 1 cái) — app tự xoay vòng và tự đổi proxy khi bị YouTube chặn.
-        Nên dùng proxy <b>dân cư (residential)</b>; proxy datacenter thường bị chặn. Để trống = không dùng.
+      <div className="flex items-center gap-2 -mt-2">
+        <button
+          onClick={() => void testProxyNow()}
+          disabled={testingProxy || (settings.proxies ?? []).filter(p => p.trim()).length === 0}
+          className="px-3 py-1.5 text-xs rounded-md bg-surface-2 border border-border text-fg disabled:opacity-50"
+        >
+          {testingProxy ? "⏳ Đang kiểm tra…" : "Kiểm tra proxy"}
+        </button>
+        {proxyTestMsg && (
+          <span className="text-xs whitespace-pre-line text-muted flex-1">{proxyTestMsg}</span>
+        )}
+      </div>
+      <p className="text-xs text-muted -mt-1">
+        Dán proxy vào là <b>tự lưu ngay</b>, không cần bấm gì — lượt tải TIẾP THEO sẽ tự đi qua proxy
+        (video đang tải dở thì bấm Thử lại để áp dụng). Bấm <b>Kiểm tra proxy</b> để xem proxy sống hay chết.
         <br />
-        <b>Mở khoá site bị nhà mạng chặn</b> (vd bilibili.tv): thêm 1 proxy ở đây là tải được luôn,
-        không cần đổi DNS hay VPN — app tự cho proxy giải tên miền (vượt chặn). Dùng proxy ở nước
-        ngoài nếu video khoá theo vùng.
+        <b>Mở khoá site bị nhà mạng chặn</b> (vd bilibili.tv): thêm 1 proxy là tải được luôn, không cần
+        đổi DNS hay VPN. Video khoá theo vùng thì dùng proxy ở nước ngoài. Để trống = không dùng proxy.
       </p>
 
       <Field label="YouTube API key — thêm nhiều key, hết quota tự nhảy key khác">

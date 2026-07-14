@@ -49,7 +49,7 @@ parking_lot = "0.12"
 # HTTP client — used by url_resolver.rs to follow site-specific redirects
 # (e.g., resolve viralhog `/watch/file/<id>` → embed URL `/e/<embed_id>`)
 # and to call third-party APIs like TikWM for Douyin resolution.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "deflate", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "deflate", "json", "socks"] }
 
 # Zip extraction — used by js_runtime.rs to unpack the Deno release zip
 # (the JS runtime yt-dlp needs to solve YouTube signature/n challenges).

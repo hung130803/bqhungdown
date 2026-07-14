@@ -407,6 +407,51 @@ pub fn force_download(
     queue.force_download(&short_id)
 }
 
+/// Nút "Kiểm tra proxy": thử kết nối Internet QUA proxy đã nhập và trả về
+/// kết quả cho user (sống + độ trễ, hay chết + lý do). Dùng cùng cơ chế
+/// normalize (socks5→socks5h) như lúc tải thật, nên kết quả phản ánh đúng
+/// việc tải sẽ chạy hay không. Test tới generate_204 của Google (nhẹ, toàn
+/// cầu, trả 204 rỗng).
+#[tauri::command]
+pub async fn test_proxy(proxy: String) -> AppResult<String> {
+    let raw = proxy.trim();
+    if raw.is_empty() {
+        return Err(AppError::Other("Chưa nhập proxy".into()));
+    }
+    let normalized = crate::args_builder::normalize_proxy(raw);
+    let p = reqwest::Proxy::all(&normalized)
+        .map_err(|e| AppError::Other(format!("Proxy sai định dạng: {e}")))?;
+    let client = reqwest::Client::builder()
+        .proxy(p)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+
+    let started = std::time::Instant::now();
+    match client.get("https://www.google.com/generate_204").send().await {
+        Ok(resp) => {
+            let ms = started.elapsed().as_millis();
+            let code = resp.status().as_u16();
+            if code == 204 || resp.status().is_success() {
+                Ok(format!("✅ Proxy sống — kết nối {ms}ms. Tải qua proxy này được."))
+            } else {
+                Ok(format!("⚠️ Proxy có phản hồi nhưng mã lạ ({code}). Có thể vẫn tải được, thử tải 1 video."))
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string().to_lowercase();
+            let hint = if msg.contains("timed out") || msg.contains("timeout") {
+                "proxy quá chậm hoặc chết (hết 15s không phản hồi)"
+            } else if msg.contains("connect") || msg.contains("refused") || msg.contains("dns") {
+                "không kết nối được tới proxy — kiểm tra lại IP/cổng/tài khoản"
+            } else {
+                "proxy không dùng được"
+            };
+            Err(AppError::Other(format!("❌ {hint}. ({e})")))
+        }
+    }
+}
+
 #[tauri::command]
 pub fn list_queue(queue: State<Arc<QueueManager>>) -> AppResult<Vec<DownloadItem>> {
     Ok(queue.list())

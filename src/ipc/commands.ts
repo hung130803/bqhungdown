@@ -246,6 +246,13 @@ export async function retryAllFailed(): Promise<number> {
   return invoke<number>("retry_all_failed");
 }
 
+// Nút "Kiểm tra proxy" — trả chuỗi kết quả (Ok) hoặc ném lỗi (Err) tiếng Việt.
+export async function testProxy(proxy: string): Promise<string> {
+  if (IS_WEB) return Promise.reject("unavailable");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("test_proxy", { proxy });
+}
+
 // Nút "Vẫn tải video này" trên mục Bỏ qua — tải bất chấp danh sách đã-tải.
 export async function forceDownload(shortId: string): Promise<DownloadItem> {
   if (IS_WEB) return Promise.reject("unavailable");
