@@ -692,13 +692,32 @@ async fn run_flat_fetch(
     settings: &Settings,
     my_gen: u64,
 ) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
-    let res = run_flat_fetch_attempt(app, resolved, limit, settings, my_gen).await;
+    let mut res = run_flat_fetch_attempt(app, resolved, limit, settings, my_gen).await;
     if let Err(AppError::YtDlpFailed(ref msg)) = res {
         if crate::args_builder::settings_have_cookies(settings)
             && crate::error::is_cookie_decrypt_error(msg)
         {
             let no_cookies = crate::args_builder::settings_without_cookies(settings);
             return run_flat_fetch_attempt(app, resolved, limit, &no_cookies, my_gen).await;
+        }
+    }
+    // Bilibili space hay trả 412 risk-control kèm gợi ý "please wait and try
+    // later" — thử lại vài lần với khoảng nghỉ ngắn (server tự nhả). Đây là
+    // cách các tool bilibili.com xử lý, không cần proxy.
+    if resolved.to_lowercase().contains("bilibili.com") {
+        let mut tries = 0;
+        while tries < 6 {
+            let blocked = matches!(&res, Err(AppError::YtDlpFailed(m)) if {
+                let l = m.to_lowercase();
+                m.contains("412") || m.contains("352")
+                    || l.contains("blocked by server") || l.contains("rejected by server")
+            });
+            if !blocked {
+                break;
+            }
+            tries += 1;
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            res = run_flat_fetch_attempt(app, resolved, limit, settings, my_gen).await;
         }
     }
     res
