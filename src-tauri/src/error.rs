@@ -148,6 +148,13 @@ pub fn friendly_reason(raw: &str) -> String {
     } else if l.contains("live event will begin") || l.contains("premieres in") || l.contains("premiere will begin") {
         "⏰ Video này là buổi phát trực tiếp / công chiếu CHƯA diễn ra — chưa có gì để tải. \
          Đợi phát xong rồi bấm Thử lại."
+    } else if l.contains("registered users") || (l.contains("biliintl") && l.contains("account credentials")) {
+        // Nội dung bilibili.tv yêu cầu ĐĂNG NHẬP (tài khoản miễn phí cũng được).
+        // buvid ẩn danh không đủ — cần cookie phiên đăng nhập.
+        "🔑 Video bilibili.tv này yêu cầu ĐĂNG NHẬP tài khoản (tài khoản MIỄN PHÍ cũng được). \
+         Cách làm: mở bilibili.tv trên trình duyệt (qua VPN/proxy) → đăng nhập → xuất file \
+         cookies.txt → chọn trong Cài đặt → Cookie. Sau đó tải lại. \
+         (Tập có 🔒 Premium thì cần tài khoản trả phí; tập thường chỉ cần đăng nhập.)"
     } else if l.contains("biliintl") && l.contains("412") {
         // bilibili.tv (Bstation): playurl nằm sau tường lửa chống bot (412.js
         // challenge) — không vượt được bằng header/proxy đơn thuần. Cần cookie
@@ -325,6 +332,14 @@ mod tests {
         assert!(m.contains("PROXY") || m.contains("proxy"), "phải hướng dẫn proxy: {m}");
         assert!(!m.contains("Sửa lỗi tải ngay"), "KHÔNG được báo nhầm là lỗi bot: {m}");
         assert!(!m.contains("không tồn tại"), "KHÔNG được báo nhầm là video bị xoá: {m}");
+    }
+
+    #[test]
+    fn friendly_biliintl_registered_users() {
+        let m = friendly_reason("(exit 1) ERROR: [BiliIntl] This video is only available for registered users. Use --cookies, --cookies-from-browser, --username and --password to provide account credentials");
+        assert!(m.contains("ĐĂNG NHẬP"), "phải hướng dẫn đăng nhập: {m}");
+        assert!(m.contains("cookies.txt") || m.contains("Cookie"));
+        assert!(!m.contains("Sửa lỗi tải ngay"));
     }
 
     #[test]
