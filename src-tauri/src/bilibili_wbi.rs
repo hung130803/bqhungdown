@@ -221,6 +221,29 @@ async fn fetch_page(
     None
 }
 
+/// Lấy tên + avatar của UP qua card API (mở, không cần WBI). Trả (name, face_https).
+async fn fetch_up_card(ctx: &WbiCtx, mid: &str) -> Option<(String, Option<String>)> {
+    let url = format!("https://api.bilibili.com/x/web-interface/card?mid={mid}&photo=false");
+    let mut req = ctx.client.get(&url).header("Referer", "https://www.bilibili.com/");
+    if let Some(c) = &ctx.cookie {
+        req = req.header("Cookie", c);
+    }
+    let json: Value = req.send().await.ok()?.json().await.ok()?;
+    if json.get("code").and_then(|v| v.as_i64()) != Some(0) {
+        return None;
+    }
+    let card = json.pointer("/data/card")?;
+    let name = card.get("name").and_then(|v| v.as_str())?.to_string();
+    let face = card.get("face").and_then(|v| v.as_str()).map(|f| {
+        if let Some(rest) = f.strip_prefix("http://") {
+            format!("https://{rest}")
+        } else {
+            f.to_string()
+        }
+    });
+    Some((name, face))
+}
+
 /// UTC unix seconds → "YYYYMMDD" (giờ VN +7 để ngày khớp cảm nhận người dùng).
 fn unix_to_yyyymmdd(ts: i64) -> String {
     // Thuật toán civil-from-days (Howard Hinnant), +7h cho giờ VN.
@@ -277,14 +300,20 @@ pub async fn fetch_space(
         return None;
     }
 
+    // Tên + avatar thật của UP (fallback về tên chung nếu card API lỗi).
+    let (title, avatar) = match fetch_up_card(&ctx, &mid).await {
+        Some((name, face)) => (name, face),
+        None => (format!("Bilibili — {} video", all.len()), None),
+    };
+
     let info = ChannelInfo {
         url: url.to_string(),
-        title: format!("Bilibili — {} video", all.len()),
-        thumbnail: all.first().and_then(|v| v.thumbnail.clone()),
+        title,
+        thumbnail: avatar.or_else(|| all.first().and_then(|v| v.thumbnail.clone())),
         video_count: Some(all.len() as u32),
         extractor: "bilibili".into(),
         hidden_downloaded: None,
-        channel_id: None,
+        channel_id: None, // field này dành cho RSS YouTube (UC…), không dùng cho bili
         api_note: None,
     };
     Some((info, all))
