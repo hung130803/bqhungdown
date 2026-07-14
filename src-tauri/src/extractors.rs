@@ -25,7 +25,11 @@ pub static EXTRACTORS: &[ExtractorPattern] = &[
     ExtractorPattern { name: "vimeo",       host_regex: r"^(?:www\.|player\.)?vimeo\.com$",                                       featured: true },
     ExtractorPattern { name: "reddit",      host_regex: r"^(?:www\.|old\.|new\.)?reddit\.com$|^v\.redd\.it$",                     featured: true },
     ExtractorPattern { name: "dailymotion", host_regex: r"^(?:www\.)?dailymotion\.com$|^dai\.ly$",                                featured: true },
-    ExtractorPattern { name: "bilibili",    host_regex: r"^(?:www\.|m\.|space\.)?bilibili\.com$|^b23\.tv$",                       featured: true },
+    // bilibili.tv = Bstation (bản quốc tế) — yt-dlp BiliIntl extractor xử lý.
+    // LƯU Ý: bilibili.tv bị nhà mạng VN chặn DNS + kết nối (Bstation rút khỏi
+    // VN) — link vẫn nhận, nhưng tải được hay không tuỳ mạng/VPN của user;
+    // lỗi kết nối sẽ ra thông báo hướng dẫn VPN (error::friendly_reason).
+    ExtractorPattern { name: "bilibili",    host_regex: r"^(?:www\.|m\.|space\.)?bilibili\.(?:com|tv)$|^b23\.tv$",               featured: true },
 
     // ── Streaming / Live ───────────────────────────────────────────────────
     ExtractorPattern { name: "kick",        host_regex: r"^(?:www\.)?kick\.com$",                                                 featured: false },

@@ -172,6 +172,13 @@ pub fn friendly_reason(raw: &str) -> String {
     } else if l.contains("[watchdog]") {
         "🐌 Tải bị treo quá lâu nên app đã dừng để thử lại. Bấm Thử lại; nếu lặp lại nhiều lần, \
          mở Cài đặt → bấm \"Sửa lỗi tải ngay\" hoặc kiểm tra mạng."
+    } else if l.contains("actively refused") || l.contains("failed to establish a new connection") {
+        // Kết nối bị TỪ CHỐI ngay — dấu hiệu tên miền bị nhà mạng chặn (DNS
+        // trả 127.0.0.1). Điển hình: bilibili.tv/Bstation bị chặn ở Việt Nam.
+        "🚫 Không kết nối được tới trang này — thường do NHÀ MẠNG chặn tên miền \
+         (ví dụ bilibili.tv/Bstation bị chặn ở Việt Nam). Cách xử lý: bật VPN \
+         (như app 1.1.1.1 WARP của Cloudflare, miễn phí) rồi bấm Thử lại; hoặc tìm \
+         video đó trên bilibili.com (không bị chặn, tải bình thường)."
     } else if l.contains("getaddrinfo") || l.contains("timed out") || l.contains("timeout")
         || l.contains("unable to connect") || l.contains("connection reset") || l.contains("connection refused")
         || l.contains("network is unreachable") || l.contains("ssl")
@@ -268,6 +275,17 @@ mod tests {
         let long = format!("ERROR: xyz {}", "a".repeat(500));
         let m = friendly_reason(&long);
         assert!(m.len() < 700, "chi tiết phải được cắt ngắn, len = {}", m.len());
+    }
+
+    #[test]
+    fn friendly_domain_blocked_by_isp() {
+        // Lỗi thật từ bilibili.tv trên mạng VN (DNS nhà mạng trỏ về 127.0.0.1).
+        let m = friendly_reason(
+            "ERROR: [BiliIntl] 479439: Unable to download webpage: HTTPSConnection(host='www.bilibili.tv', port=443): \
+             Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it",
+        );
+        assert!(m.contains("NHÀ MẠNG"), "phải chỉ ra bị nhà mạng chặn: {m}");
+        assert!(m.contains("VPN"));
     }
 
     #[test]
