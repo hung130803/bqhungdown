@@ -84,6 +84,116 @@ fn friendly_fetch_error(raw: &str) -> String {
     format!("Không lấy được danh sách video: {raw}")
 }
 
+/// Lấy danh sách tập của một series bilibili.tv (BiliIntl) qua API episodes
+/// công khai — trả về (info, videos) kèm TÊN + ẢNH cho từng tập. Endpoint
+/// `web/v2/ogv/play/episodes?season_id=…` không dính tường lửa playurl (412)
+/// nên chạy được kể cả khi tải video cần cookie. Dùng proxy nếu user cấu hình
+/// (bilibili.tv chặn theo vùng). Trả `None` nếu không phải series hợp lệ.
+async fn fetch_bilibili_tv_series(
+    url: &str,
+    settings: &Settings,
+) -> Option<(ChannelInfo, Vec<ChannelVideo>)> {
+    // season_id = số đầu tiên sau /play/. (Link /play/<season>/<ep> hay
+    // /play/<season> đều lấy được season.)
+    let season = regex::Regex::new(r"/play/(\d+)")
+        .ok()?
+        .captures(url)?
+        .get(1)?
+        .as_str()
+        .to_string();
+
+    let proxy = crate::args_builder::next_proxy(settings);
+    let mut b = reqwest::Client::builder().timeout(Duration::from_secs(20));
+    if let Some(px) = &proxy {
+        if let Ok(p) = reqwest::Proxy::all(px) {
+            b = b.proxy(p);
+        }
+    }
+    let client = b.build().ok()?;
+
+    let api = format!(
+        "https://api.bilibili.tv/intl/gateway/web/v2/ogv/play/episodes?season_id={season}&platform=web&s_locale=en_US"
+    );
+    let resp = client
+        .get(&api)
+        .header("Referer", "https://www.bilibili.tv/")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        )
+        .send()
+        .await
+        .ok()?;
+    let json: Value = resp.json().await.ok()?;
+    if json.get("code").and_then(|v| v.as_i64()) != Some(0) {
+        return None;
+    }
+    let sections = json.get("data")?.get("sections")?.as_array()?;
+
+    let mut videos: Vec<ChannelVideo> = Vec::new();
+    for sec in sections {
+        let eps = match sec.get("episodes").and_then(|v| v.as_array()) {
+            Some(e) => e,
+            None => continue,
+        };
+        for ep in eps {
+            let ep_id = match ep.get("episode_id").and_then(|v| v.as_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            // Tên: ưu tiên long_title (tên tập thật), fallback title_display (E1…).
+            let long = ep.get("long_title_display").and_then(|v| v.as_str()).unwrap_or("");
+            let short = ep.get("title_display").and_then(|v| v.as_str()).unwrap_or("");
+            let title = if !long.trim().is_empty() {
+                if short.trim().is_empty() { long.to_string() } else { format!("{short} · {long}") }
+            } else if !short.trim().is_empty() {
+                short.to_string()
+            } else {
+                format!("Tập {ep_id}")
+            };
+            let thumbnail = ep.get("cover").and_then(|v| v.as_str()).map(String::from);
+            // publish_time "2021-05-01T..." → YYYYMMDD.
+            let upload_date = ep
+                .get("publish_time")
+                .and_then(|v| v.as_str())
+                .filter(|s| s.len() >= 10)
+                .map(|s| s[..10].replace('-', ""));
+            videos.push(ChannelVideo {
+                url: format!("https://www.bilibili.tv/en/play/{season}/{ep_id}"),
+                title,
+                duration_sec: None,
+                view_count: None,
+                upload_date,
+                thumbnail,
+                is_photo: false,
+                is_short: false,
+                hashtags: Vec::new(),
+            });
+        }
+    }
+    if videos.is_empty() {
+        return None;
+    }
+
+    let info = ChannelInfo {
+        url: url.to_string(),
+        title: json
+            .get("data")
+            .and_then(|d| d.get("season_title"))
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| format!("Bilibili.tv — {} tập", videos.len())),
+        thumbnail: videos.first().and_then(|v| v.thumbnail.clone()),
+        video_count: Some(videos.len() as u32),
+        extractor: "biliintl".into(),
+        hidden_downloaded: None,
+        channel_id: None,
+        api_note: None,
+    };
+    Some((info, videos))
+}
+
 /// Load the set of video IDs already recorded in the yt-dlp download-archive
 /// (same file used by the download path). Each line is `<extractor> <id>`; we
 /// key on the bare id so it matches `extract_video_id` of a channel entry.
@@ -206,6 +316,17 @@ pub async fn fetch_channel(
     // tikwm page returns ~30 posts; we paginate until we hit `limit` or run
     // out of cursors.
     let lower_url = url.to_lowercase();
+
+    // Bilibili.tv (BiliIntl) series: yt-dlp flat chỉ trả ID trần (không tên/
+    // ảnh), còn probe từng tập thì đụng tường lửa playurl (412). Lấy thẳng từ
+    // API episodes công khai (KHÔNG bị tường lửa) để có tên + ảnh cho từng tập.
+    if lower_url.contains("bilibili.tv") {
+        if let Some((info, vids)) = fetch_bilibili_tv_series(url, settings).await {
+            return finalize_listing(app, info, vids, settings);
+        }
+        // API không ra (ID lạ/không phải series) → rơi xuống yt-dlp flat như cũ.
+    }
+
     if lower_url.contains("douyin.com/user/") {
         return Err(AppError::YtDlpFailed(
             "Douyin chặn quá chặt nên không thể tự lấy danh sách kênh được. \
