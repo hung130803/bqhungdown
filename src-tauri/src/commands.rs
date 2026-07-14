@@ -427,16 +427,24 @@ pub async fn test_proxy(proxy: String) -> AppResult<String> {
         .build()
         .map_err(|e| AppError::Other(e.to_string()))?;
 
+    // Hỏi IP + quốc gia LỐI RA qua proxy (ipinfo.io — HTTPS, miễn phí, nhẹ).
+    // Một request vừa xác nhận proxy sống, vừa cho biết IP thoát ở nước nào →
+    // user biết proxy có mở được video khoá theo vùng hay không.
     let started = std::time::Instant::now();
-    match client.get("https://www.google.com/generate_204").send().await {
+    match client.get("https://ipinfo.io/json").send().await {
         Ok(resp) => {
             let ms = started.elapsed().as_millis();
-            let code = resp.status().as_u16();
-            if code == 204 || resp.status().is_success() {
-                Ok(format!("✅ Proxy sống — kết nối {ms}ms. Tải qua proxy này được."))
-            } else {
-                Ok(format!("⚠️ Proxy có phản hồi nhưng mã lạ ({code}). Có thể vẫn tải được, thử tải 1 video."))
+            if !resp.status().is_success() {
+                let code = resp.status().as_u16();
+                return Ok(format!(
+                    "⚠️ Proxy có phản hồi nhưng mã lạ ({code}) — có thể vẫn tải được, thử 1 video."
+                ));
             }
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let ip = body.get("ip").and_then(|v| v.as_str()).unwrap_or("?");
+            let cc = body.get("country").and_then(|v| v.as_str()).unwrap_or("");
+            let country = country_vi(cc);
+            Ok(format!("✅ Proxy sống ({ms}ms) — IP {ip} · {country}. Tải qua proxy này được."))
         }
         Err(e) => {
             let msg = e.to_string().to_lowercase();
@@ -450,6 +458,34 @@ pub async fn test_proxy(proxy: String) -> AppResult<String> {
             Err(AppError::Other(format!("❌ {hint}. ({e})")))
         }
     }
+}
+
+/// Đổi mã quốc gia ISO 2 chữ → tên tiếng Việt (kèm cờ) cho các nước hay gặp;
+/// nước lạ thì trả về "<Quốc gia CC>" để vẫn đọc được.
+fn country_vi(cc: &str) -> String {
+    let name = match cc {
+        "VN" => "🇻🇳 Việt Nam",
+        "SG" => "🇸🇬 Singapore",
+        "JP" => "🇯🇵 Nhật Bản",
+        "KR" => "🇰🇷 Hàn Quốc",
+        "US" => "🇺🇸 Mỹ",
+        "HK" => "🇭🇰 Hồng Kông",
+        "TW" => "🇹🇼 Đài Loan",
+        "CN" => "🇨🇳 Trung Quốc",
+        "TH" => "🇹🇭 Thái Lan",
+        "MY" => "🇲🇾 Malaysia",
+        "ID" => "🇮🇩 Indonesia",
+        "PH" => "🇵🇭 Philippines",
+        "IN" => "🇮🇳 Ấn Độ",
+        "GB" => "🇬🇧 Anh",
+        "DE" => "🇩🇪 Đức",
+        "FR" => "🇫🇷 Pháp",
+        "NL" => "🇳🇱 Hà Lan",
+        "RU" => "🇷🇺 Nga",
+        "" => return "quốc gia không rõ".to_string(),
+        other => return format!("Quốc gia {other}"),
+    };
+    name.to_string()
 }
 
 #[tauri::command]
