@@ -145,13 +145,23 @@ async fn fetch_bilibili_tv_series(
             // Tên: ưu tiên long_title (tên tập thật), fallback title_display (E1…).
             let long = ep.get("long_title_display").and_then(|v| v.as_str()).unwrap_or("");
             let short = ep.get("title_display").and_then(|v| v.as_str()).unwrap_or("");
-            let title = if !long.trim().is_empty() {
+            let mut title = if !long.trim().is_empty() {
                 if short.trim().is_empty() { long.to_string() } else { format!("{short} · {long}") }
             } else if !short.trim().is_empty() {
                 short.to_string()
             } else {
                 format!("Tập {ep_id}")
             };
+            // Đánh dấu trả phí: limit!=0 hoặc limit_text (vd "Premium") → tập
+            // này cần tài khoản VIP bilibili.tv mới tải được. Tập miễn phí thì
+            // không có dấu.
+            let limit = ep.get("limit").and_then(|v| v.as_i64()).unwrap_or(0);
+            let limit_text = ep.get("limit_text").and_then(|v| v.as_str()).unwrap_or("");
+            let is_paid = limit != 0 || !limit_text.trim().is_empty();
+            if is_paid {
+                let tag = if limit_text.trim().is_empty() { "Trả phí" } else { limit_text.trim() };
+                title = format!("🔒 [{tag}] {title}");
+            }
             let thumbnail = ep.get("cover").and_then(|v| v.as_str()).map(String::from);
             // publish_time "2021-05-01T..." → YYYYMMDD.
             let upload_date = ep
@@ -206,14 +216,9 @@ async fn fetch_bilibili_tv_series(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    // Ghép tên anime vào từng tập cho dễ nhận: "AnimeName - E1".
-    if let Some(name) = &anime_title {
-        for v in &mut videos {
-            if v.title.starts_with('E') || v.title.starts_with("Tập") {
-                v.title = format!("{name} - {}", v.title);
-            }
-        }
-    }
+    // Không ghép tên anime vào từng tập — header (ChannelInfo.title) đã hiện
+    // tên anime rồi. Từng tập giữ "E1" / "🔒 [Premium] E4" cho gọn + rõ tập nào
+    // trả phí.
 
     let title = anime_title.unwrap_or_else(|| format!("Bilibili.tv — {} tập", videos.len()));
     let _ = allow_dl; // allow_download=false KHÔNG chặn tải 480p (đã kiểm chứng)
