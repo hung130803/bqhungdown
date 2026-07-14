@@ -134,6 +134,22 @@ fn normalise_channel_url(raw: &str, tab: &str) -> String {
         return raw.trim_end_matches('/').to_string();
     }
 
+    // Bilibili: `space.bilibili.com/<uid>[...]` — trang cá nhân của uploader.
+    // Chuẩn hoá về `space.bilibili.com/<uid>/video` (tab video, yt-dlp
+    // BilibiliSpaceVideo extractor) — bỏ query (?spm_id_from=... dán từ
+    // trình duyệt) và các tab khác (/upload/video, /dynamic...).
+    if lower.contains("space.bilibili.com/") {
+        let no_query = raw.split(['?', '#']).next().unwrap_or(raw);
+        let mut base = no_query.trim_end_matches('/').to_string();
+        for suffix in ["/upload/video", "/video", "/dynamic", "/favlist", "/audio"] {
+            if base.to_lowercase().ends_with(suffix) {
+                base.truncate(base.len() - suffix.len());
+                break;
+            }
+        }
+        return format!("{base}/video");
+    }
+
     if !lower.contains("youtube.com") {
         return raw.to_string();
     }
@@ -309,7 +325,10 @@ pub async fn fetch_channel(
     // Default mode trusts the flat-playlist response — yt-dlp's
     // `youtubetab:approximate_date` extractor arg already gives most channels
     // a usable upload date in flat mode, so we skip the slow per-video probe.
-    if detailed && !videos.is_empty() {
+    // NGOẠI LỆ: site có flat-mode "trần" (Bilibili space chỉ trả id+url,
+    // không title/thumbnail) → luôn probe, nếu không picker hiện id vô nghĩa.
+    let needs_basic = videos.iter().any(|v| v.title.trim().is_empty());
+    if (detailed || needs_basic) && !videos.is_empty() {
         videos = enrich_in_parallel(app, videos, settings, my_gen, detailed).await?;
     }
 
@@ -695,11 +714,14 @@ async fn enrich_in_parallel(
     // probe to make sure view_count is exact.
     let mut to_probe: Vec<(usize, String)> = Vec::new();
     for (i, v) in videos.iter().enumerate() {
+        // Đủ view + ngày + TÊN thật thì khỏi probe. Title rỗng (Bilibili và
+        // các site flat-mode trần) luôn phải probe — picker cần tên video.
+        let has_basics = !v.title.trim().is_empty();
         if detailed {
-            if v.view_count.is_some() && v.upload_date.is_some() {
+            if v.view_count.is_some() && v.upload_date.is_some() && has_basics {
                 continue;
             }
-        } else if v.upload_date.is_some() && v.view_count.is_some() {
+        } else if v.upload_date.is_some() && v.view_count.is_some() && has_basics {
             continue;
         }
         to_probe.push((i, v.url.clone()));
@@ -718,7 +740,7 @@ async fn enrich_in_parallel(
         .collect();
 
     let sem = Arc::new(Semaphore::new(PROBE_CONCURRENCY));
-    let mut set: JoinSet<HashMap<String, (Option<u64>, Option<String>)>> = JoinSet::new();
+    let mut set: JoinSet<HashMap<String, ProbeMeta>> = JoinSet::new();
 
     for chunk in to_probe.chunks(BATCH_SIZE) {
         let urls: Vec<String> = chunk.iter().map(|(_, u)| u.clone()).collect();
@@ -741,14 +763,27 @@ async fn enrich_in_parallel(
             return Ok(updated);
         }
         if let Ok(map) = joined {
-            for (url, (view, date)) in map {
+            for (url, meta) in map {
                 if let Some(&i) = url_to_idx.get(&url) {
                     if let Some(v) = updated.get_mut(i) {
-                        if view.is_some() {
-                            v.view_count = view;
+                        if meta.view.is_some() {
+                            v.view_count = meta.view;
                         }
-                        if date.is_some() {
-                            v.upload_date = date;
+                        if meta.date.is_some() {
+                            v.upload_date = meta.date;
+                        }
+                        // Chỉ LẤP field còn trống — không ghi đè dữ liệu flat
+                        // đã có (YouTube flat trả title chuẩn sẵn).
+                        if v.title.trim().is_empty() {
+                            if let Some(t) = meta.title {
+                                v.title = t;
+                            }
+                        }
+                        if v.duration_sec.is_none() {
+                            v.duration_sec = meta.duration;
+                        }
+                        if v.thumbnail.is_none() {
+                            v.thumbnail = meta.thumbnail;
                         }
                     }
                 }
@@ -761,13 +796,23 @@ async fn enrich_in_parallel(
 /// Single yt-dlp process that probes many URLs at once. Output format per
 /// line: `<url>|<view_count>|<upload_date>`. Missing values come back as
 /// "NA" (yt-dlp default for missing fields with --print).
+/// Metadata một video thu được từ probe — mọi field đều best-effort.
+#[derive(Debug, Default, Clone)]
+struct ProbeMeta {
+    view: Option<u64>,
+    date: Option<String>,
+    duration: Option<u64>,
+    thumbnail: Option<String>,
+    title: Option<String>,
+}
+
 async fn probe_batch(
     app: &AppHandle,
     urls: &[String],
     settings: &Settings,
     my_gen: u64,
     want_view: bool,
-) -> AppResult<std::collections::HashMap<String, (Option<u64>, Option<String>)>> {
+) -> AppResult<std::collections::HashMap<String, ProbeMeta>> {
     let res = probe_batch_attempt(app, urls, settings, my_gen, want_view).await;
     if let Err(AppError::YtDlpFailed(ref msg)) = res {
         if crate::args_builder::settings_have_cookies(settings)
@@ -786,13 +831,17 @@ async fn probe_batch_attempt(
     settings: &Settings,
     my_gen: u64,
     want_view: bool,
-) -> AppResult<std::collections::HashMap<String, (Option<u64>, Option<String>)>> {
+) -> AppResult<std::collections::HashMap<String, ProbeMeta>> {
     use std::collections::HashMap;
 
+    // Title đặt CUỐI vì tiêu đề video có thể chứa ký tự `|` — splitn giữ
+    // nguyên phần còn lại. Các field giữa (duration/thumbnail) không chứa `|`.
+    // Bilibili (và một số site khác) flat-mode không trả title/duration/
+    // thumbnail — probe này lấp đủ để picker hiện tên thật thay vì id trần.
     let print_tpl = if want_view {
-        "%(id)s|%(view_count)s|%(upload_date)s"
+        "%(id)s|%(view_count)s|%(upload_date)s|%(duration)s|%(thumbnail)s|%(title)s"
     } else {
-        "%(id)s|_|%(upload_date)s"
+        "%(id)s|_|%(upload_date)s|%(duration)s|%(thumbnail)s|%(title)s"
     };
     // Note: dùng %(id)s để parse map key — Shorts URL trả /shorts/<id>
     // còn flat-playlist URL trả /watch?v=<id>, dùng id thì khớp cả 2.
@@ -866,7 +915,7 @@ async fn probe_batch_attempt(
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(3, '|');
+        let mut parts = line.splitn(6, '|');
         let url = match parts.next() {
             Some(u) => u.trim().to_string(),
             None => continue,
@@ -874,18 +923,17 @@ async fn probe_batch_attempt(
         if url.is_empty() {
             continue;
         }
-        let view = parts
-            .next()
-            .and_then(|s| s.trim().parse::<u64>().ok());
-        let date = parts.next().and_then(|s| {
-            let s = s.trim();
-            if s.is_empty() || s == "NA" || s == "None" || s.len() != 8 {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        });
-        out.insert(url, (view, date));
+        // Helper: "NA"/"None"/rỗng của yt-dlp → None.
+        fn clean(s: Option<&str>) -> Option<String> {
+            let s = s?.trim();
+            if s.is_empty() || s == "NA" || s == "None" { None } else { Some(s.to_string()) }
+        }
+        let view = parts.next().and_then(|s| s.trim().parse::<u64>().ok());
+        let date = clean(parts.next()).filter(|s| s.len() == 8);
+        let duration = clean(parts.next()).and_then(|s| s.parse::<f64>().ok()).map(|f| f as u64);
+        let thumbnail = clean(parts.next());
+        let title = clean(parts.next());
+        out.insert(url, ProbeMeta { view, date, duration, thumbnail, title });
     }
     Ok(out)
 }
@@ -1007,4 +1055,39 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
         is_photo,
         hashtags: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalise_bilibili_space_urls() {
+        // Link gốc user profile → thêm /video
+        assert_eq!(
+            normalise_channel_url("https://space.bilibili.com/502035433", "all"),
+            "https://space.bilibili.com/502035433/video"
+        );
+        // Đã có /video → giữ nguyên
+        assert_eq!(
+            normalise_channel_url("https://space.bilibili.com/502035433/video", "videos"),
+            "https://space.bilibili.com/502035433/video"
+        );
+        // Link dán từ trình duyệt: tab mới /upload/video + query rác
+        assert_eq!(
+            normalise_channel_url(
+                "https://space.bilibili.com/502035433/upload/video?tid=0&spm_id_from=333.1387",
+                "all"
+            ),
+            "https://space.bilibili.com/502035433/video"
+        );
+    }
+
+    #[test]
+    fn extract_bilibili_video_id() {
+        assert_eq!(
+            extract_video_id("https://www.bilibili.com/video/BV1uh4y1e7pk").as_deref(),
+            Some("BV1uh4y1e7pk")
+        );
+    }
 }
