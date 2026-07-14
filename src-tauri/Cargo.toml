@@ -55,6 +55,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # (the JS runtime yt-dlp needs to solve YouTube signature/n challenges).
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# SM3 hash (RustCrypto) — dùng trong douyin_sign.rs để tự sinh chữ ký a_bogus
+# cho API Douyin (lấy danh sách video cả kênh) mà không nhúng blob JS lạ.
+sm3 = "0.4"
+digest = "0.10"
+
 # Clipboard reader (cross-platform, pure Rust). Used by clipboard.rs.
 arboard = { version = "3", optional = true }
 tauri-plugin-drag = "2.1.1"

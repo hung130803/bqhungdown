@@ -1,11 +1,12 @@
-//! Douyin Channel Fetcher
+//! Douyin Channel Fetcher — lấy danh sách video của cả kênh.
 //!
-//! Lấy danh sách video từ kênh Douyin. Các chiến lược (theo thứ tự ưu tiên):
-//!  1. TikWM API (https://www.tikwm.com) — phổ biến, miễn phí
-//!  2. TikWM mirror (tikwm.com, api.tikwm.com) — fallback khi primary down
+//! Chiến lược (theo thứ tự ưu tiên):
+//!  1. API TRỰC TIẾP douyin.com — tự ký `a_bogus` (xem `douyin_sign.rs`),
+//!     lấy ttwid, phân trang bằng max_cursor. Không cần dịch vụ trung gian,
+//!     không cần cookie/proxy. Đây là đường chính.
+//!  2. TikWM (dự phòng) — thường đã bị Cloudflare chặn, chỉ thử nốt.
 //!
-//! Lưu ý: Các API này có thể chặn IP Việt Nam hoặc bị rate-limit.
-//! Nếu không hoạt động, user cần dùng VPN hoặc dùng link video riêng lẻ.
+//! Nhận URL dạng `douyin.com/user/<sec_uid>` hoặc link rút gọn `v.douyin.com/…`.
 
 use crate::error::{AppError, AppResult};
 use regex::Regex;
@@ -81,6 +82,192 @@ struct TikwmVideo {
 struct TikwmCover {
     #[serde(default)]
     url_list: Vec<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  API TRỰC TIẾP douyin.com (tự ký a_bogus) — đường CHÍNH, không cần dịch vụ
+//  trung gian. tikwm ở dưới chỉ còn là phao dự phòng.
+// ─────────────────────────────────────────────────────────────────────────
+
+use crate::douyin_sign::{ABogus, DOUYIN_UA};
+
+#[derive(Debug, Deserialize)]
+struct PostResp {
+    #[serde(default)]
+    status_code: i32,
+    #[serde(default)]
+    max_cursor: i64,
+    #[serde(default)]
+    has_more: i64,
+    #[serde(default)]
+    aweme_list: Vec<TikwmAweme>,
+}
+
+/// Percent-encode a_bogus (giữ ký tự unreserved, mã hoá phần còn lại).
+fn pct_encode(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            _ => {
+                let mut b = [0u8; 4];
+                c.encode_utf8(&mut b)
+                    .bytes()
+                    .map(|x| format!("%{x:02X}"))
+                    .collect()
+            }
+        })
+        .collect()
+}
+
+/// Lấy cookie ttwid từ douyin.com (best-effort; thiếu vẫn thử gọi API).
+/// QUAN TRỌNG: phải dùng client KHÔNG đặt User-Agent trình duyệt — với UA
+/// Chrome, Douyin trả `__ac_nonce` (đòi giải JS challenge) thay vì ttwid;
+/// với UA mặc định của reqwest thì nó cấp ttwid luôn. ttwid dùng chéo UA OK.
+async fn fetch_ttwid() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .ok()?;
+    let resp = client.get("https://www.douyin.com/").send().await.ok()?;
+    for val in resp.headers().get_all(reqwest::header::SET_COOKIE).iter() {
+        if let Ok(s) = val.to_str() {
+            if let Some(rest) = s.strip_prefix("ttwid=") {
+                if let Some(v) = rest.split(';').next() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Chuỗi query cho endpoint aweme/post (chưa gồm a_bogus). Thứ tự + giá trị
+/// khớp web thật; browser_version phải là 90.x cho khớp DOUYIN_UA/ua_code.
+fn build_post_params(sec_uid: &str, max_cursor: i64) -> String {
+    format!(
+        "device_platform=webapp&aid=6383&channel=channel_pc_web&sec_user_id={sec_uid}\
+&max_cursor={max_cursor}&locate_query=false&show_live_replay_strategy=1&need_time_list=1\
+&time_list_query=0&whale_cut_token=&cut_version=1&count=18&publish_video_strategy_type=2\
+&version_code=290100&version_name=29.1.0&cookie_enabled=true&screen_width=1536\
+&screen_height=864&browser_language=zh-CN&browser_platform=Win32&browser_name=Chrome\
+&browser_version=90.0.4430.212&browser_online=true&engine_name=Blink&engine_version=90.0\
+&os_name=Windows&os_version=10&cpu_core_num=8&device_memory=8&platform=PC&downlink=10\
+&effective_type=4g&round_trip_time=50"
+    )
+}
+
+fn awemes_to_posts(list: Vec<TikwmAweme>) -> Vec<DouyinPost> {
+    list.into_iter()
+        .filter_map(|aweme| {
+            let id = aweme.aweme_id?;
+            let thumb = aweme
+                .video
+                .as_ref()
+                .and_then(|v| v.cover.as_ref())
+                .and_then(|c| c.url_list.first())
+                .cloned()
+                .unwrap_or_default();
+            Some(DouyinPost {
+                id: id.clone(),
+                url: format!("https://www.douyin.com/video/{id}"),
+                title: aweme.desc.unwrap_or_default(),
+                thumbnail: thumb,
+                is_photo: !aweme.images.is_empty(),
+            })
+        })
+        .collect()
+}
+
+/// Lấy TOÀN BỘ video của kênh qua API douyin.com, phân trang bằng max_cursor.
+/// Tự ký a_bogus mỗi lần gọi. Emit tiến độ để UI cập nhật số video.
+async fn fetch_channel_api(
+    app: &tauri::AppHandle,
+    sec_uid: &str,
+) -> AppResult<Vec<DouyinPost>> {
+    let client = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .user_agent(DOUYIN_UA)
+        .build()
+        .map_err(|e| AppError::Other(format!("HTTP client lỗi: {e}")))?;
+
+    let ttwid = fetch_ttwid().await;
+    let ab = ABogus::new();
+    let referer = format!("https://www.douyin.com/user/{sec_uid}");
+
+    let mut all: Vec<DouyinPost> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut cursor: i64 = 0;
+    const MAX_PAGES: usize = 120; // 120 × 18 ≈ 2160 video — dư cho hầu hết kênh
+
+    for page in 0..MAX_PAGES {
+        let params = build_post_params(sec_uid, cursor);
+        let a_bogus = ab.get_value(&params, "GET");
+        let url = format!(
+            "https://www.douyin.com/aweme/v1/web/aweme/post/?{params}&a_bogus={}",
+            pct_encode(&a_bogus)
+        );
+
+        let mut req = client.get(&url).header("Referer", &referer);
+        if let Some(tt) = &ttwid {
+            req = req.header("Cookie", format!("ttwid={tt}"));
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| AppError::Other(format!("Gọi API Douyin thất bại: {e}")))?;
+        let body = resp.text().await.unwrap_or_default();
+
+        // Rỗng = chữ ký bị từ chối / rate-limit. Trang đầu rỗng → lỗi thật;
+        // trang sau rỗng → dừng, giữ những gì đã lấy.
+        if body.trim().is_empty() {
+            if page == 0 {
+                return Err(AppError::Other(
+                    "Douyin không trả dữ liệu (có thể đã đổi thuật toán chặn, hoặc kênh riêng tư). \
+                     Thử lại sau, hoặc thêm cookie Douyin trong Cài đặt."
+                        .into(),
+                ));
+            }
+            break;
+        }
+
+        let json: PostResp = match serde_json::from_str(&body) {
+            Ok(j) => j,
+            Err(_) if page > 0 => break,
+            Err(e) => {
+                return Err(AppError::Other(format!("Dữ liệu Douyin không hợp lệ: {e}")))
+            }
+        };
+        if json.status_code != 0 {
+            if page == 0 {
+                return Err(AppError::Other(format!(
+                    "Douyin trả mã lỗi {} — kênh có thể riêng tư hoặc cần cookie.",
+                    json.status_code
+                )));
+            }
+            break;
+        }
+
+        let fresh = awemes_to_posts(json.aweme_list);
+        for p in fresh {
+            if seen.insert(p.id.clone()) {
+                all.push(p);
+            }
+        }
+
+        let _ = app.emit(
+            "bqd-douyin-scraper-progress",
+            serde_json::json!({ "count": all.len() }),
+        );
+
+        if json.has_more != 1 || json.max_cursor == 0 || json.max_cursor == cursor {
+            break;
+        }
+        cursor = json.max_cursor;
+        // Nghỉ nhẹ giữa các trang cho đỡ bị rate-limit.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+
+    Ok(all)
 }
 
 /// Gọi 1 endpoint cụ thể. Trả về (posts, has_more) hoặc lỗi.
@@ -260,9 +447,25 @@ pub async fn scrape_douyin_channel(
 
     let _ = app.emit(
         "bqd-douyin-scraper-started",
-        serde_json::json!({ "label": "tikwm", "secUid": &sec_uid }),
+        serde_json::json!({ "label": "douyin-api", "secUid": &sec_uid }),
     );
 
+    // Đường CHÍNH: API douyin.com tự ký a_bogus (không cần dịch vụ ngoài).
+    match fetch_channel_api(&app, &sec_uid).await {
+        Ok(posts) if !posts.is_empty() => {
+            let _ = app.emit(
+                "bqd-douyin-scraper-progress",
+                serde_json::json!({ "count": posts.len() }),
+            );
+            return Ok(posts);
+        }
+        Ok(_) => { /* rỗng → thử phao dự phòng */ }
+        Err(e) => {
+            eprintln!("[douyin] API trực tiếp lỗi, thử tikwm: {e:?}");
+        }
+    }
+
+    // Phao dự phòng: tikwm (thường đã bị Cloudflare chặn, nhưng thử nốt).
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .user_agent(UA)
