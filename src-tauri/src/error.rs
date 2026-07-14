@@ -151,8 +151,19 @@ pub fn friendly_reason(raw: &str) -> String {
     } else if l.contains("drm protected") || l.contains("drm-protected") {
         "🔐 Video có khoá bản quyền DRM (phim/nội dung trả phí) — YouTube không cho tải loại này, \
          không phải lỗi của app."
-    } else if l.contains("not available in your country") || l.contains("geo restricted") || l.contains("geo-restricted") {
-        "🌍 Video bị chặn ở quốc gia của bạn — cần proxy/VPN nước khác rồi thử lại."
+    } else if l.contains("in your country")
+        || l.contains("in your location")
+        || l.contains("geo restricted")
+        || l.contains("geo-restricted")
+        || l.contains("not available in your")
+    {
+        // Vd: "The uploader has not made this video available in your country".
+        // Rất hay gặp với kênh đài Nhật/Hàn (日テレ…) khoá video mới chỉ cho
+        // xem trong nước họ. KHÔNG phải lỗi app — cần đổi IP sang đúng nước đó.
+        "🌍 Video này người đăng CHỈ cho xem ở nước khác (khoá theo vùng) — không tải \
+         trực tiếp từ Việt Nam được, mọi tool đều vậy. Cách sửa: mở Cài đặt → thêm 1 PROXY \
+         Ở ĐÚNG NƯỚC cho phép (kênh Nhật → proxy Nhật 🇯🇵, kênh Hàn → proxy Hàn 🇰🇷) → \
+         bấm \"Kiểm tra proxy\" để xác nhận đúng nước → rồi Thử lại. Hoặc bật VPN đặt ở nước đó."
     } else if l.contains("video unavailable") || l.contains("this video is not available")
         || l.contains("has been removed") || l.contains("account associated with this video has been terminated")
     {
@@ -291,6 +302,17 @@ mod tests {
         assert!(m.contains("nhà mạng"), "phải chỉ ra bị nhà mạng chặn: {m}");
         assert!(m.contains("DNS"), "phải gợi ý đổi DNS: {m}");
         assert!(m.contains("VPN"));
+    }
+
+    #[test]
+    fn friendly_geo_blocked_matches_real_youtube_message() {
+        // Đúng câu yt-dlp trả cho kênh Nhật 日テレ (khoá video mới chỉ ở Nhật).
+        let raw = "(exit 1) ERROR: [youtube] 3HStu-xnR6E: The uploader has not made this video available in your country";
+        let m = friendly_reason(raw);
+        assert!(m.contains("khoá theo vùng"), "phải nhận diện geo-block: {m}");
+        assert!(m.contains("PROXY") || m.contains("proxy"), "phải hướng dẫn proxy: {m}");
+        assert!(!m.contains("Sửa lỗi tải ngay"), "KHÔNG được báo nhầm là lỗi bot: {m}");
+        assert!(!m.contains("không tồn tại"), "KHÔNG được báo nhầm là video bị xoá: {m}");
     }
 
     #[test]
