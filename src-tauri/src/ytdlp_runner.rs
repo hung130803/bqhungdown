@@ -162,6 +162,7 @@ impl YtDlpRunner {
         // encryption issue). Caller retries without cookies on DPAPI failure.
         args_builder::push_cookie_args(&mut args, settings);
         args_builder::push_proxy_args(&mut args, settings);
+        args_builder::push_bilibili_headers(&mut args, url);
         if force_generic {
             args.push("--force-generic-extractor".into());
         }

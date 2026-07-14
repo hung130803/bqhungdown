@@ -150,6 +150,13 @@ fn normalise_channel_url(raw: &str, tab: &str) -> String {
         return format!("{base}/video");
     }
 
+    // Bilibili.tv (BiliIntl): link series/mùa `bilibili.tv/en/play/<season>`
+    // hoặc trang space quốc tế — bỏ query rác, để yt-dlp BiliIntlSeries /
+    // playlist extractor tự liệt kê tập. Giữ nguyên path, chỉ cắt query.
+    if lower.contains("bilibili.tv") {
+        return raw.split(['?', '#']).next().unwrap_or(raw).trim_end_matches('/').to_string();
+    }
+
     if !lower.contains("youtube.com") {
         return raw.to_string();
     }
@@ -609,6 +616,7 @@ async fn run_flat_fetch_attempt(
     }
     crate::args_builder::push_cookie_args(&mut args, settings);
     crate::args_builder::push_proxy_args(&mut args, settings);
+    crate::args_builder::push_bilibili_headers(&mut args, resolved);
     args.push(resolved.to_string());
 
     let cmd = app
@@ -880,6 +888,11 @@ async fn probe_batch_attempt(
     };
     crate::args_builder::push_cookie_args(&mut args, settings);
     crate::args_builder::push_proxy_args(&mut args, settings);
+    // Bilibili 412 fix — probe chi tiết cũng cần Origin/Referer. Dùng URL đầu
+    // làm đại diện (cả batch cùng site).
+    if let Some(first) = urls.first() {
+        crate::args_builder::push_bilibili_headers(&mut args, first);
+    }
     for u in urls {
         args.push(u.clone());
     }
@@ -1060,6 +1073,14 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalise_bilibili_tv_series_strips_query() {
+        assert_eq!(
+            normalise_channel_url("https://www.bilibili.tv/en/play/1006275/10225348?s_locale=en_US", "all"),
+            "https://www.bilibili.tv/en/play/1006275/10225348"
+        );
+    }
 
     #[test]
     fn normalise_bilibili_space_urls() {

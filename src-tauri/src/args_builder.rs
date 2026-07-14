@@ -22,6 +22,26 @@ pub fn is_youtube(url: &str) -> bool {
     l.contains("youtube.com") || l.contains("youtu.be")
 }
 
+/// Push `Origin` + `Referer` headers for Bilibili URLs — bắt buộc để tránh
+/// HTTP 412 "Precondition Failed" mà Bilibili trả khi request thiếu 2 header
+/// này (fix đã kiểm chứng, xem yt-dlp#12013). Chọn đúng domain: bilibili.tv
+/// (bản quốc tế / BiliIntl) vs bilibili.com. No-op cho site khác.
+pub fn push_bilibili_headers(args: &mut Vec<String>, url: &str) {
+    let l = url.to_lowercase();
+    if !l.contains("bilibili.com") && !l.contains("bilibili.tv") && !l.contains("b23.tv") {
+        return;
+    }
+    let base = if l.contains("bilibili.tv") {
+        "https://www.bilibili.tv"
+    } else {
+        "https://www.bilibili.com"
+    };
+    args.push("--add-header".into());
+    args.push(format!("Origin:{base}"));
+    args.push("--add-header".into());
+    args.push(format!("Referer:{base}/"));
+}
+
 fn should_force_generic(url: &str) -> bool {
     let extractor = match crate::url_validator::resolve_extractor(url) {
         Some(e) => e,
@@ -201,6 +221,9 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
         args.push("--add-header".into());
         args.push("Referer:https://www.douyin.com/".into());
     }
+
+    // Bilibili: Origin + Referer để tránh HTTP 412.
+    push_bilibili_headers(&mut args, &req.url);
 
     // Cookies từ browser (Settings → "Lấy cookies từ trình duyệt") — bắt buộc
     // cho Douyin / Bilibili / video YouTube giới hạn tuổi v.v.
@@ -575,6 +598,35 @@ mod tests {
             BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false },
         );
         assert!(args.contains(&"--user-agent".to_string()));
+    }
+
+    #[test]
+    fn bilibili_headers_pick_right_domain() {
+        let mut a = vec![];
+        push_bilibili_headers(&mut a, "https://www.bilibili.com/video/BV1xx");
+        let j = a.join(" ");
+        assert!(j.contains("Origin:https://www.bilibili.com"));
+        assert!(j.contains("Referer:https://www.bilibili.com/"));
+
+        let mut b = vec![];
+        push_bilibili_headers(&mut b, "https://www.bilibili.tv/en/play/12345");
+        let j = b.join(" ");
+        assert!(j.contains("Origin:https://www.bilibili.tv"), "tv phải dùng domain .tv: {j}");
+
+        // Site khác → không thêm gì.
+        let mut c = vec![];
+        push_bilibili_headers(&mut c, "https://www.youtube.com/watch?v=x");
+        assert!(c.is_empty());
+    }
+
+    #[test]
+    fn bilibili_download_args_include_headers() {
+        let mut r = req();
+        r.url = "https://www.bilibili.com/video/BV1C8411i7we".into();
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
+        let j = args.join(" ");
+        assert!(j.contains("Origin:https://www.bilibili.com"));
+        assert!(j.contains("Referer:https://www.bilibili.com/"));
     }
 
     #[test]

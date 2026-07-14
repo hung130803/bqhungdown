@@ -148,6 +148,10 @@ pub fn friendly_reason(raw: &str) -> String {
     } else if l.contains("live event will begin") || l.contains("premieres in") || l.contains("premiere will begin") {
         "⏰ Video này là buổi phát trực tiếp / công chiếu CHƯA diễn ra — chưa có gì để tải. \
          Đợi phát xong rồi bấm Thử lại."
+    } else if l.contains("412") && (l.contains("precondition") || l.contains("bilibili") || l.contains("biliintl")) {
+        "🅱️ Bilibili tạm chặn request (lỗi 412). App đã tự thêm header chống chặn — \
+         hãy bấm Thử lại 1-2 lần. Nếu vẫn lỗi: đợi vài phút rồi thử, hoặc thêm proxy \
+         (Cài đặt) vì Bilibili hay chặn theo IP/khu vực."
     } else if l.contains("drm protected") || l.contains("drm-protected") {
         "🔐 Video có khoá bản quyền DRM (phim/nội dung trả phí) — YouTube không cho tải loại này, \
          không phải lỗi của app."
@@ -313,6 +317,14 @@ mod tests {
         assert!(m.contains("PROXY") || m.contains("proxy"), "phải hướng dẫn proxy: {m}");
         assert!(!m.contains("Sửa lỗi tải ngay"), "KHÔNG được báo nhầm là lỗi bot: {m}");
         assert!(!m.contains("không tồn tại"), "KHÔNG được báo nhầm là video bị xoá: {m}");
+    }
+
+    #[test]
+    fn friendly_bilibili_412() {
+        let m = friendly_reason("(exit 1) ERROR: [BiliIntl] 23336253: Unable to download video formats: HTTP Error 412: Precondition Failed");
+        assert!(m.contains("412"), "phải nhận diện 412: {m}");
+        assert!(m.contains("Thử lại"), "phải bảo thử lại: {m}");
+        assert!(!m.contains("Sửa lỗi tải ngay"), "không nhầm sang lỗi bot: {m}");
     }
 
     #[test]
