@@ -287,6 +287,10 @@ export function SettingsPage() {
       <p className="text-xs text-muted -mt-3">
         Dán nhiều proxy (mỗi dòng 1 cái) — app tự xoay vòng và tự đổi proxy khi bị YouTube chặn.
         Nên dùng proxy <b>dân cư (residential)</b>; proxy datacenter thường bị chặn. Để trống = không dùng.
+        <br />
+        <b>Mở khoá site bị nhà mạng chặn</b> (vd bilibili.tv): thêm 1 proxy ở đây là tải được luôn,
+        không cần đổi DNS hay VPN — app tự cho proxy giải tên miền (vượt chặn). Dùng proxy ở nước
+        ngoài nếu video khoá theo vùng.
       </p>
 
       <Field label="YouTube API key — thêm nhiều key, hết quota tự nhảy key khác">

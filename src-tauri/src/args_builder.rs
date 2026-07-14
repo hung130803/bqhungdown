@@ -52,10 +52,19 @@ pub fn next_proxy(settings: &Settings) -> Option<String> {
 ///   - `ip:port:user:pass`             → `http://user:pass@ip:port`
 ///   - `ip:port`                       → `http://ip:port`
 ///   - `user:pass@ip:port`             → `http://user:pass@ip:port`
+///
+/// CRITICAL cho các site bị nhà mạng chặn DNS (vd bilibili.tv ở VN): ép giải
+/// tên miền Ở PROXY chứ không ở máy user, nếu không proxy vô dụng vì máy vẫn
+/// hỏi DNS nhà mạng (đã bị đầu độc → 127.0.0.1). HTTP proxy vốn đã giải tên ở
+/// proxy; riêng `socks5://` mặc định giải tên tại máy → nâng lên `socks5h://`
+/// (và `socks4://` → `socks4a://`) để giải tên tại proxy.
 pub fn normalize_proxy(raw: &str) -> String {
     let p = raw.trim();
-    if p.is_empty() || p.contains("://") {
+    if p.is_empty() {
         return p.to_string();
+    }
+    if p.contains("://") {
+        return upgrade_socks_remote_dns(p);
     }
     if p.contains('@') {
         return format!("http://{p}");
@@ -65,6 +74,18 @@ pub fn normalize_proxy(raw: &str) -> String {
         2 => format!("http://{}:{}", parts[0], parts[1]),
         4 => format!("http://{}:{}@{}:{}", parts[2], parts[3], parts[0], parts[1]),
         _ => format!("http://{p}"),
+    }
+}
+
+/// Nâng scheme SOCKS lên biến thể giải-tên-tại-proxy (giữ nguyên phần còn lại).
+fn upgrade_socks_remote_dns(p: &str) -> String {
+    let lower = p.to_lowercase();
+    if let Some(rest) = lower.strip_prefix("socks5://") {
+        format!("socks5h://{}", &p[p.len() - rest.len()..])
+    } else if let Some(rest) = lower.strip_prefix("socks4://") {
+        format!("socks4a://{}", &p[p.len() - rest.len()..])
+    } else {
+        p.to_string()
     }
 }
 
@@ -567,8 +588,15 @@ mod tests {
         assert_eq!(normalize_proxy("1.2.3.4:8000"), "http://1.2.3.4:8000");
         // user:pass@ip:port
         assert_eq!(normalize_proxy("u:p@1.2.3.4:8000"), "http://u:p@1.2.3.4:8000");
-        // already has scheme → unchanged
-        assert_eq!(normalize_proxy("socks5://1.2.3.4:1080"), "socks5://1.2.3.4:1080");
+        // socks5 → socks5h (giải tên tại proxy, vượt chặn DNS nhà mạng)
+        assert_eq!(normalize_proxy("socks5://1.2.3.4:1080"), "socks5h://1.2.3.4:1080");
+        assert_eq!(
+            normalize_proxy("socks5://user:pass@1.2.3.4:1080"),
+            "socks5h://user:pass@1.2.3.4:1080"
+        );
+        // socks5h giữ nguyên; http giữ nguyên
+        assert_eq!(normalize_proxy("socks5h://1.2.3.4:1080"), "socks5h://1.2.3.4:1080");
+        assert_eq!(normalize_proxy("http://1.2.3.4:8000"), "http://1.2.3.4:8000");
         assert_eq!(
             normalize_proxy("http://u:p@1.2.3.4:8000"),
             "http://u:p@1.2.3.4:8000"
