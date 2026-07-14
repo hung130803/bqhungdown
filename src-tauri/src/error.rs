@@ -122,6 +122,24 @@ pub fn is_cookie_decrypt_error(msg: &str) -> bool {
         || (l.contains("cookie") && l.contains("decrypt"))
 }
 
+/// Trích "lý do" tốt nhất từ stderr của yt-dlp để đưa cho `friendly_reason`.
+/// yt-dlp thường in dòng `ERROR: ...` rồi một dòng gợi ý riêng (vd
+/// "You might want to use a VPN or a proxy..."). Nếu chỉ lấy DÒNG CUỐI ta hay
+/// vớ phải dòng gợi ý → nhận diện sai. Nên: gộp từ dòng chứa "ERROR" tới hết
+/// (kèm mọi gợi ý), hoặc 3 dòng cuối nếu không thấy "ERROR".
+pub fn best_error_line(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    if lines.is_empty() {
+        return "yt-dlp failed".to_string();
+    }
+    if let Some(idx) = lines.iter().rposition(|l| l.to_lowercase().contains("error")) {
+        // Dòng ERROR + các dòng sau nó (gợi ý VPN/proxy/cookie) — gộp lại.
+        return lines[idx..].join(" ");
+    }
+    let start = lines.len().saturating_sub(3);
+    lines[start..].join(" ")
+}
+
 /// Dịch lỗi thô của yt-dlp (tiếng Anh, khó hiểu) thành thông báo tiếng Việt
 /// RÕ RÀNG + kèm hướng dẫn user phải làm gì tiếp. Dòng chi tiết kỹ thuật gốc
 /// được giữ ở cuối (cỡ chữ nhỏ trong UI) để còn chẩn đoán từ xa được.
@@ -172,9 +190,12 @@ pub fn friendly_reason(raw: &str) -> String {
          không phải lỗi của app."
     } else if l.contains("in your country")
         || l.contains("in your location")
+        || l.contains("in your region")
         || l.contains("geo restricted")
         || l.contains("geo-restricted")
         || l.contains("not available in your")
+        || l.contains("use a vpn or a proxy")
+        || l.contains("vpn or a proxy server")
     {
         // Vd: "The uploader has not made this video available in your country".
         // Rất hay gặp với kênh đài Nhật/Hàn (日テレ…) khoá video mới chỉ cho
@@ -332,6 +353,28 @@ mod tests {
         assert!(m.contains("PROXY") || m.contains("proxy"), "phải hướng dẫn proxy: {m}");
         assert!(!m.contains("Sửa lỗi tải ngay"), "KHÔNG được báo nhầm là lỗi bot: {m}");
         assert!(!m.contains("không tồn tại"), "KHÔNG được báo nhầm là video bị xoá: {m}");
+    }
+
+    #[test]
+    fn best_error_line_grabs_error_not_hint() {
+        // yt-dlp in dòng ERROR rồi dòng gợi ý riêng — phải gộp cả hai.
+        let stderr = "[BiliIntl] Extracting URL\n\
+                      ERROR: [BiliIntl] 123: This video is not available in your region\n\
+                      You might want to use a VPN or a proxy server (with --proxy) to workaround.";
+        let r = best_error_line(stderr);
+        assert!(r.contains("not available in your region"), "phải lấy dòng ERROR: {r}");
+        assert!(r.contains("VPN or a proxy"), "phải kèm gợi ý: {r}");
+        // Và friendly_reason phải ra thông báo khoá vùng (không phải generic).
+        let m = friendly_reason(&r);
+        assert!(m.contains("khoá theo vùng"), "phải nhận diện geo: {m}");
+    }
+
+    #[test]
+    fn friendly_vpn_hint_alone_is_geo_not_generic() {
+        // Trường hợp xấu: chỉ còn dòng gợi ý (không có dòng ERROR rõ).
+        let m = friendly_reason("You might want to use a VPN or a proxy server (with --proxy) to workaround.");
+        assert!(m.contains("khoá theo vùng"), "gợi ý VPN → geo: {m}");
+        assert!(!m.contains("Sửa lỗi tải ngay"), "không được ra generic: {m}");
     }
 
     #[test]

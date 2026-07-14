@@ -191,7 +191,7 @@ impl YtDlpRunner {
                 }
             }
             if exit_code.unwrap_or(-1) != 0 {
-                let last = stderr_buf.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("yt-dlp failed").to_string();
+                let last = crate::error::best_error_line(&stderr_buf);
                 return Err(AppError::YtDlpFailed(last));
             }
             let value: Value = serde_json::from_str(&stdout_buf)?;
@@ -519,7 +519,7 @@ impl YtDlpRunner {
                 channel: resolved_channel,
             }),
             code => {
-                let last = stderr_tail.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("yt-dlp failed").to_string();
+                let last = crate::error::best_error_line(&stderr_tail);
                 Ok(RunOutcome::Failed { reason: format!("(exit {code}) {last}") })
             }
         }
