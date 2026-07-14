@@ -197,13 +197,21 @@ pub fn friendly_reason(raw: &str) -> String {
         || l.contains("use a vpn or a proxy")
         || l.contains("vpn or a proxy server")
     {
-        // Vd: "The uploader has not made this video available in your country".
-        // Rất hay gặp với kênh đài Nhật/Hàn (日テレ…) khoá video mới chỉ cho
-        // xem trong nước họ. KHÔNG phải lỗi app — cần đổi IP sang đúng nước đó.
-        "🌍 Video này người đăng CHỈ cho xem ở nước khác (khoá theo vùng) — không tải \
-         trực tiếp từ Việt Nam được, mọi tool đều vậy. Cách sửa: mở Cài đặt → thêm 1 PROXY \
-         Ở ĐÚNG NƯỚC cho phép (kênh Nhật → proxy Nhật 🇯🇵, kênh Hàn → proxy Hàn 🇰🇷) → \
-         bấm \"Kiểm tra proxy\" để xác nhận đúng nước → rồi Thử lại. Hoặc bật VPN đặt ở nước đó."
+        // Khoá theo vùng. Lời khuyên proxy KHÁC nhau theo site:
+        //  - bilibili.tv (Bstation): cấp phép cho ĐÔNG NAM Á → proxy Indonesia/
+        //    Thái/Sing/Philippines. Nhật/Hàn thường BỊ LOẠI TRỪ (nhầm phổ biến).
+        //  - YouTube (kênh Nhật/Hàn): proxy đúng nước gốc của kênh.
+        if l.contains("biliintl") || l.contains("bilibili") {
+            "🌍 Video bilibili.tv này khoá theo vùng — proxy của bạn đang ở nước KHÔNG được \
+             cấp phép. LƯU Ý: Bstation cấp phép cho ĐÔNG NAM Á, nên hãy dùng proxy 🇮🇩 Indonesia / \
+             🇹🇭 Thái Lan / 🇸🇬 Singapore / 🇵🇭 Philippines / 🇲🇾 Malaysia (KHÔNG dùng proxy Nhật/Mỹ — \
+             thường bị loại trừ). Đổi proxy → bấm \"Kiểm tra proxy\" xác nhận đúng nước → Thử lại."
+        } else {
+            "🌍 Video này người đăng CHỈ cho xem ở nước khác (khoá theo vùng) — không tải \
+             trực tiếp từ Việt Nam được, mọi tool đều vậy. Cách sửa: mở Cài đặt → thêm 1 PROXY \
+             Ở ĐÚNG NƯỚC cho phép (kênh Nhật → proxy Nhật 🇯🇵, kênh Hàn → proxy Hàn 🇰🇷) → \
+             bấm \"Kiểm tra proxy\" để xác nhận đúng nước → rồi Thử lại. Hoặc bật VPN đặt ở nước đó."
+        }
     } else if l.contains("video unavailable") || l.contains("this video is not available")
         || l.contains("has been removed") || l.contains("account associated with this video has been terminated")
     {
@@ -367,6 +375,13 @@ mod tests {
         // Và friendly_reason phải ra thông báo khoá vùng (không phải generic).
         let m = friendly_reason(&r);
         assert!(m.contains("khoá theo vùng"), "phải nhận diện geo: {m}");
+    }
+
+    #[test]
+    fn friendly_biliintl_geo_suggests_sea_proxy() {
+        let m = friendly_reason("ERROR: [BiliIntl] This video is not available from your location due to geo restriction. You might want to use a VPN or a proxy server");
+        assert!(m.contains("ĐÔNG NAM Á") || m.contains("Indonesia"), "bilibili.tv geo → gợi ý ĐNÁ: {m}");
+        assert!(!m.contains("Sửa lỗi tải ngay"));
     }
 
     #[test]
