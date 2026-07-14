@@ -22,6 +22,12 @@ pub fn is_youtube(url: &str) -> bool {
     l.contains("youtube.com") || l.contains("youtu.be")
 }
 
+/// True cho mọi URL Bilibili (com/tv/b23).
+pub fn is_bilibili(url: &str) -> bool {
+    let l = url.to_lowercase();
+    l.contains("bilibili.com") || l.contains("bilibili.tv") || l.contains("b23.tv")
+}
+
 /// Push `Origin` + `Referer` headers for Bilibili URLs — bắt buộc để tránh
 /// HTTP 412 "Precondition Failed" mà Bilibili trả khi request thiếu 2 header
 /// này (fix đã kiểm chứng, xem yt-dlp#12013). Chọn đúng domain: bilibili.tv

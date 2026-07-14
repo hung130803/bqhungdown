@@ -375,6 +375,21 @@ impl YtDlpRunner {
                 args.push(archive.to_string_lossy().to_string());
             }
         }
+
+        // Bilibili cần cookie `buvid3` để qua tường lửa risk-control (thiếu →
+        // HTTP 412). yt-dlp không tự lấy buvid, nên app tự xin từ trang chủ
+        // (qua proxy nếu có) rồi truyền vào. Chỉ thêm khi user CHƯA cấu hình
+        // file cookies (nếu có cookies premium thì đã gồm buvid + SESSDATA).
+        if args_builder::is_bilibili(&item.request.url)
+            && !args_builder::settings_have_cookies(settings)
+        {
+            let proxy = args_builder::next_proxy(settings);
+            if let Some(buvid) = fetch_bilibili_buvid(&item.request.url, &proxy).await {
+                args.push("--add-header".into());
+                args.push(format!("Cookie:buvid3={buvid}"));
+            }
+        }
+
         let cmd = self.app.shell().sidecar("yt-dlp").map_err(|e| AppError::YtDlpFailed(e.to_string()))?.args(args);
 
         let (mut rx, child) = cmd.spawn().map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
@@ -532,6 +547,42 @@ async fn youtube_video_exists(url: &str) -> bool {
         Ok(resp) => resp.status().is_success(),
         Err(_) => false,
     }
+}
+
+/// Lấy cookie `buvid3` từ Bilibili để yt-dlp qua tường lửa 412 khi tải.
+/// Đúng domain: bilibili.tv (bản quốc tế) vs bilibili.com. Đi qua proxy nếu
+/// có (bilibili.tv chặn theo vùng). Best-effort — None nếu không lấy được.
+async fn fetch_bilibili_buvid(url: &str, proxy: &Option<String>) -> Option<String> {
+    let home = if url.to_lowercase().contains("bilibili.tv") {
+        "https://www.bilibili.tv/en"
+    } else {
+        "https://www.bilibili.com/"
+    };
+    let mut b = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        );
+    if let Some(px) = proxy {
+        if let Ok(p) = reqwest::Proxy::all(px) {
+            b = b.proxy(p);
+        }
+    }
+    let client = b.build().ok()?;
+    let resp = client.get(home).send().await.ok()?;
+    for v in resp.headers().get_all(reqwest::header::SET_COOKIE).iter() {
+        if let Ok(s) = v.to_str() {
+            if let Some(rest) = s.strip_prefix("buvid3=") {
+                if let Some(val) = rest.split(';').next() {
+                    if !val.is_empty() {
+                        return Some(val.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 // -- JSON parsing helpers --------------------------------------------------

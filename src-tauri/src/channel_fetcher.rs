@@ -216,13 +216,13 @@ async fn fetch_bilibili_tv_series(
     }
 
     let title = anime_title.unwrap_or_else(|| format!("Bilibili.tv — {} tập", videos.len()));
+    let _ = allow_dl; // allow_download=false KHÔNG chặn tải 480p (đã kiểm chứng)
     let mut notes: Vec<String> = Vec::new();
     if !season_view.is_empty() {
         notes.push(format!("👁 {season_view}"));
     }
-    if !allow_dl {
-        notes.push("⚠️ Bilibili KHÔNG cho tải anime này (allow_download=false) — chỉ xem online được".into());
-    }
+    // Tải được tới 480p miễn phí; 720p/1080p cần tài khoản premium bilibili.tv.
+    notes.push("Tải tối đa 480p (miễn phí); 720p/1080p cần cookie tài khoản premium".into());
 
     let info = ChannelInfo {
         url: url.to_string(),
