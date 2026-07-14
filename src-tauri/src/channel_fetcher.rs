@@ -176,20 +176,63 @@ async fn fetch_bilibili_tv_series(
         return None;
     }
 
+    // season_info: tên anime + view tổng + cover + cảnh báo cấm tải.
+    let season_api = format!(
+        "https://api.bilibili.tv/intl/gateway/web/v2/ogv/play/season_info?season_id={season}&platform=web&s_locale=en_US"
+    );
+    let sinfo: Option<Value> = match client
+        .get(&season_api)
+        .header("Referer", "https://www.bilibili.tv/")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        .send()
+        .await
+    {
+        Ok(r) => r.json::<Value>().await.ok(),
+        Err(_) => None,
+    };
+    let season = sinfo.as_ref().and_then(|j| j.pointer("/data/season"));
+    let anime_title = season
+        .and_then(|s| s.get("title"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let season_view = season.and_then(|s| s.get("view")).and_then(|v| v.as_str()).unwrap_or("");
+    let cover = season
+        .and_then(|s| s.get("horizontal_cover").or_else(|| s.get("vertical_cover")))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let allow_dl = season
+        .and_then(|s| s.get("allow_download"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    // Ghép tên anime vào từng tập cho dễ nhận: "AnimeName - E1".
+    if let Some(name) = &anime_title {
+        for v in &mut videos {
+            if v.title.starts_with('E') || v.title.starts_with("Tập") {
+                v.title = format!("{name} - {}", v.title);
+            }
+        }
+    }
+
+    let title = anime_title.unwrap_or_else(|| format!("Bilibili.tv — {} tập", videos.len()));
+    let mut notes: Vec<String> = Vec::new();
+    if !season_view.is_empty() {
+        notes.push(format!("👁 {season_view}"));
+    }
+    if !allow_dl {
+        notes.push("⚠️ Bilibili KHÔNG cho tải anime này (allow_download=false) — chỉ xem online được".into());
+    }
+
     let info = ChannelInfo {
         url: url.to_string(),
-        title: json
-            .get("data")
-            .and_then(|d| d.get("season_title"))
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| format!("Bilibili.tv — {} tập", videos.len())),
-        thumbnail: videos.first().and_then(|v| v.thumbnail.clone()),
+        title,
+        thumbnail: cover.or_else(|| videos.first().and_then(|v| v.thumbnail.clone())),
         video_count: Some(videos.len() as u32),
         extractor: "biliintl".into(),
         hidden_downloaded: None,
         channel_id: None,
-        api_note: None,
+        api_note: if notes.is_empty() { None } else { Some(notes.join(" · ")) },
     };
     Some((info, videos))
 }
