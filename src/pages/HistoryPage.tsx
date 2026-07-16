@@ -7,6 +7,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { platformInfo } from "@/lib/platforms";
 import * as cmd from "@/ipc/commands";
+import { EmptyState } from "@/components/EmptyState";
 
 type StatusFilter = "all" | HistoryStatus;
 type SortKey = "time" | "channel" | "title";
@@ -782,7 +783,7 @@ export function HistoryPage() {
 
       {/* List */}
       {filtered.length === 0 ? (
-        <p className="text-muted text-center py-12">{t("history.empty")}</p>
+        <EmptyState icon="🕘" title="Chưa có lịch sử tải" hint="Các video đã tải xong sẽ hiện ở đây để bạn mở lại hoặc tải lại." />
       ) : groups ? (
         <div className="space-y-5">
           {groups.map((g) => (

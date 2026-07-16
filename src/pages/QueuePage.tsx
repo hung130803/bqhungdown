@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useQueueStore } from "@/stores/useQueueStore";
 import { QueueRow } from "@/components/QueueRow";
 import { ConflictDialog } from "@/components/ConflictDialog";
 import * as cmd from "@/ipc/commands";
 import { formatSpeed } from "@/lib/format";
+import { EmptyState } from "@/components/EmptyState";
 
 const TERMINAL = ["completed", "failed", "cancelled", "skipped"];
 
 export function QueuePage() {
-  const { t } = useTranslation();
   const items = useQueueStore((s) => s.items ?? []);
   const refresh = useQueueStore((s) => s.refresh);
   const clearTerminal = useQueueStore((s) => s.clearTerminal);
@@ -177,7 +176,11 @@ export function QueuePage() {
     return (
       <div className="max-w-3xl mx-auto">
         {undoBanner}
-        <p className="text-muted text-center py-12">{t("queue.empty")}</p>
+        <EmptyState
+          icon="📭"
+          title="Hàng đợi trống"
+          hint="Dán link video hoặc kênh ở tab “Tải mới” để bắt đầu — video đang tải sẽ hiện ở đây."
+        />
       </div>
     );
   }

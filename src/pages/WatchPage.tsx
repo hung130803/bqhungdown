@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import * as cmd from "@/ipc/commands";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import type { WatchedChannel } from "@/types/models";
+import { EmptyState } from "@/components/EmptyState";
 
 /**
  * "Theo dõi kênh" — auto-watch list. The backend monitor periodically checks
@@ -192,7 +193,11 @@ export function WatchPage() {
       {/* List */}
       <div className="space-y-2">
         {channels.length === 0 && (
-          <p className="text-muted text-center py-8 text-sm">Chưa theo dõi kênh nào.</p>
+          <EmptyState
+            icon="🔔"
+            title="Chưa theo dõi kênh nào"
+            hint="Thêm kênh để app tự kiểm tra video mới định kỳ và tải về giúp bạn — không cần ngồi canh."
+          />
         )}
         {channels.map((c) => (
           <div key={c.id} className="rounded-lg border border-border bg-surface">

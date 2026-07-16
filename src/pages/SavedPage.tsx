@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import * as cmd from "@/ipc/commands";
 import { useChannelStore } from "@/stores/useChannelStore";
 import type { Bookmark } from "@/types/models";
+import { EmptyState } from "@/components/EmptyState";
 
 /**
  * "Đã lưu" — a simple bookmark list. Save channels/links to come back to later
@@ -103,7 +104,11 @@ export function SavedPage() {
       {/* List */}
       <div className="space-y-2">
         {items.length === 0 && (
-          <p className="text-muted text-center py-8 text-sm">Chưa lưu mục nào.</p>
+          <EmptyState
+            icon="🔖"
+            title="Chưa lưu mục nào"
+            hint="Lưu video/kênh yêu thích để tải lại nhanh sau này — chúng sẽ hiện ở đây."
+          />
         )}
         {items.map((b) => (
           <div key={b.id} className="p-3 rounded-lg border border-border bg-surface space-y-2">
