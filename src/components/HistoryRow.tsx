@@ -98,6 +98,39 @@ function useRowDragOut(
   return { onMouseDown, onMouseMove, onMouseUp, onMouseLeave: onMouseUp };
 }
 
+/**
+ * Kéo-ra-file TỪ THUMBNAIL — hoạt động NGAY cả khi dòng CHƯA được tick chọn
+ * (giống tab "Đang tải"). stopPropagation để không kích hoạt rubber-band chọn
+ * của trang. Đây là cách trực quan nhất: "cầm" ảnh video kéo thẳng vào CapCut.
+ */
+function useThumbDragOut(filePath: string | null, canDrag: boolean) {
+  const ref = useState({ pressed: false, x: 0, y: 0 })[0];
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (!canDrag || !filePath) return;
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    // Miễn trừ checkbox/nút chồng lên thumbnail (vd ô tích ở chế độ lưới) —
+    // để bấm chọn vẫn hoạt động, không bị nuốt bởi drag.
+    const target = e.target as HTMLElement;
+    if (target.closest("button, a, input, label, select, textarea")) return;
+    e.stopPropagation(); // chặn rubber-band chọn của trang
+    e.preventDefault();
+    ref.pressed = true;
+    ref.x = e.clientX;
+    ref.y = e.clientY;
+  };
+  const onMouseMove = (e: React.MouseEvent) => {
+    if (!ref.pressed || !filePath) return;
+    if (Math.abs(e.clientX - ref.x) > 4 || Math.abs(e.clientY - ref.y) > 4) {
+      ref.pressed = false;
+      void startFileDrag(filePath);
+    }
+  };
+  const onMouseUp = () => {
+    ref.pressed = false;
+  };
+  return { onMouseDown, onMouseMove, onMouseUp, onMouseLeave: onMouseUp };
+}
+
 function useHistoryRowHandlers(entry: HistoryEntry) {
   const del = useHistoryStore((s) => s.delete);
 
@@ -245,6 +278,7 @@ function HistoryRowDetailed({
   const canOpen = entry.status === "completed";
   const platform = platformInfo(entry.extractor).label;
   const dragProps = useRowDragOut(filePath, entry.shortId, !!canOpen, !!selected, onPlainClickSelected);
+  const thumbDrag = useThumbDragOut(filePath, !!canOpen);
 
   return (
     <div
@@ -268,8 +302,9 @@ function HistoryRowDetailed({
         />
       )}
       <div
-        className="aspect-video w-40 sm:w-44 shrink-0 rounded-lg overflow-hidden"
-        title={canOpen && filePath ? "Kéo để thả vào CapCut / Premiere / thư mục khác" : undefined}
+        className={`aspect-video w-40 sm:w-44 shrink-0 rounded-lg overflow-hidden ${canOpen && filePath ? "cursor-grab active:cursor-grabbing" : ""}`}
+        title={canOpen && filePath ? "Kéo ảnh này để thả video vào CapCut / Premiere / thư mục" : undefined}
+        {...thumbDrag}
       >
         <Thumbnail src={entry.thumbnail} extractor={entry.extractor} alt={entry.title} />
       </div>
@@ -361,6 +396,7 @@ function HistoryRowCompact({
   const platform = platformInfo(entry.extractor).label;
   const time = formatRelative(entry.finishedAt);
   const dragProps = useRowDragOut(filePath, entry.shortId, !!canOpen, !!selected, onPlainClickSelected);
+  const thumbDrag = useThumbDragOut(filePath, !!canOpen);
 
   return (
     <div
@@ -385,8 +421,9 @@ function HistoryRowCompact({
         />
       )}
       <div
-        className="aspect-video w-16 shrink-0 rounded overflow-hidden"
-        title={canOpen && filePath ? "Kéo để thả vào CapCut / Premiere / thư mục khác" : undefined}
+        className={`aspect-video w-16 shrink-0 rounded overflow-hidden ${canOpen && filePath ? "cursor-grab active:cursor-grabbing" : ""}`}
+        title={canOpen && filePath ? "Kéo ảnh này để thả video vào CapCut / Premiere / thư mục" : undefined}
+        {...thumbDrag}
       >
         <Thumbnail src={entry.thumbnail} extractor={entry.extractor} alt={entry.title} />
       </div>
@@ -455,6 +492,7 @@ function HistoryCard({
   const platform = platformInfo(entry.extractor).label;
   const time = formatRelative(entry.finishedAt);
   const dragProps = useRowDragOut(filePath, entry.shortId, !!canOpen, !!selected, onPlainClickSelected);
+  const thumbDrag = useThumbDragOut(filePath, !!canOpen);
 
   return (
     <div
@@ -471,8 +509,9 @@ function HistoryCard({
       {...dragProps}
     >
       <div
-        className="relative aspect-video"
-        title={canOpen && filePath ? "Kéo để thả vào CapCut / Premiere / thư mục khác" : undefined}
+        className={`relative aspect-video ${canOpen && filePath ? "cursor-grab active:cursor-grabbing" : ""}`}
+        title={canOpen && filePath ? "Kéo ảnh này để thả video vào CapCut / Premiere / thư mục" : undefined}
+        {...thumbDrag}
       >
         <Thumbnail src={entry.thumbnail} extractor={entry.extractor} alt={entry.title} />
         {selectable && (
