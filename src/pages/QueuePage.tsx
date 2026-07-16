@@ -28,6 +28,10 @@ export function QueuePage() {
     let cancelled = false;
     (async () => {
       const completed = items.filter((i) => i.state === "completed" && i.outputPath);
+      // Tránh "bão" IPC khi danh sách rất lớn (vd cả kênh 500+ video) — kiểm
+      // tra file tồn tại chỉ tốn công và làm đơ lúc mở. Bỏ qua nếu quá nhiều;
+      // user vẫn dọn tay được bằng nút "Xoá mục đã xong".
+      if (completed.length > 60) return;
       for (const it of completed) {
         if (cancelled) return;
         try {
@@ -193,6 +197,10 @@ export function QueuePage() {
             key={item.shortId}
             id={`queue-${item.shortId}`}
             className={focus === item.shortId ? "ring-2 ring-accent rounded-md" : ""}
+            // Ảo hoá nhẹ bằng CSS: WebView (Chromium) bỏ qua việc dựng/layout
+            // các dòng NGOÀI màn hình → cuộn mượt kể cả 500-1000 video. Cần
+            // contain-intrinsic-size để scrollbar không nhảy (~96px/dòng).
+            style={{ contentVisibility: "auto", containIntrinsicSize: "auto 96px" } as React.CSSProperties}
           >
             <QueueRow item={item} />
           </div>

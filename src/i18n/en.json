@@ -67,7 +67,7 @@
     "language": "Language",
     "clipboardWatcher": "Auto-detect links from clipboard",
     "notifications": "Show system notifications",
-    "aria2cEnabled": "aria2c boost — 16 parallel connections, keeps speed high even when YouTube throttles (recommended ON)",
+    "aria2cEnabled": "aria2c boost — 16 parallel connections. Only enable for 1-2 LARGE slow videos. For whole channels (many videos) keep OFF (more blocks + jerky progress)",
     "skipDownloaded": "Skip already-downloaded videos (no duplicates)",
     "skipDownloadedHint": "When re-fetching a channel, previously downloaded videos are hidden from the picker and show as \"Skipped\" in the queue. To re-download a skipped video, press \"⬇ Download anyway\" on that row. Turn this off to always download everything.",
     "cookiesBrowser": "Use cookies from browser",

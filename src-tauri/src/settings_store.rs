@@ -281,15 +281,15 @@ fn migrate_po_token_default(settings: &mut Settings) {
     }
 }
 
-/// Migration một lần: bật aria2c (tải 16 kết nối song song) cho settings cũ.
-/// Trước đây tính năng này (a) mặc định tắt và (b) có bug -x 32 làm aria2c
-/// chết ngay khi bật — giờ đã sửa, bật lên là cách duy nhất giữ tốc độ cao
-/// khi YouTube bóp băng thông từng kết nối. User tắt thủ công sau đó thì
-/// `aria2c_migrated` (đã true) giữ nguyên lựa chọn.
+/// Migration ĐẢO NGƯỢC một lần: TẮT lại aria2c. Bản trước (v0.1.46) tự bật
+/// aria2c cho mọi người, nhưng thực tế nó làm tải cả kênh (hàng trăm video)
+/// bị YouTube chặn nhiều hơn + thanh tiến độ giật/đơ. Mặc định aria2c nên
+/// TẮT — chỉ bật thủ công khi tải 1-2 video lớn trên IP bị bóp băng thông.
+/// Chạy đúng 1 lần; sau đó user tự bật lại thì được tôn trọng.
 fn migrate_aria2c_default(settings: &mut Settings) {
-    if !settings.aria2c_migrated {
-        settings.aria2c_enabled = true;
-        settings.aria2c_migrated = true;
+    if !settings.aria2c_reverted {
+        settings.aria2c_enabled = false;
+        settings.aria2c_reverted = true;
     }
 }
 
@@ -411,25 +411,27 @@ mod tests {
     }
 
     #[test]
-    fn migrates_old_aria2c_off_to_on_once() {
+    fn reverts_aria2c_to_off_once() {
         let path = unique_tmp_path();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
 
+        // File bị bản v0.1.46 tự bật aria2c (enabled=true, chưa reverted).
         let mut old = Settings::default();
-        old.aria2c_enabled = false;
-        old.aria2c_migrated = false;
+        old.aria2c_enabled = true;
+        old.aria2c_reverted = false;
         fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
 
         let (store, err) = SettingsStore::load(path.clone());
         assert!(err.is_none());
-        assert!(store.get().aria2c_enabled, "migration phải bật aria2c");
+        assert!(!store.get().aria2c_enabled, "migration đảo ngược phải TẮT aria2c");
+        assert!(store.get().aria2c_reverted);
 
-        // User chủ động tắt sau migration → được tôn trọng.
-        let mut off = store.get();
-        off.aria2c_enabled = false;
-        fs::write(&path, serde_json::to_string(&off).unwrap()).unwrap();
+        // User chủ động bật lại sau đó → được tôn trọng (không tắt nữa).
+        let mut on = store.get();
+        on.aria2c_enabled = true;
+        fs::write(&path, serde_json::to_string(&on).unwrap()).unwrap();
         let (store2, _) = SettingsStore::load(path.clone());
-        assert!(!store2.get().aria2c_enabled);
+        assert!(store2.get().aria2c_enabled, "đã reverted → tôn trọng lựa chọn user");
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
