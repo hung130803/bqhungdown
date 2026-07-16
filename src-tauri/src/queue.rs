@@ -68,12 +68,42 @@ pub fn cleanup_partials_aggressive(item: &DownloadItem) {
     cleanup_partials_inner(item, true);
 }
 
+/// True nếu tên file là file TẠM của yt-dlp (đang tải dở), KHÔNG phải video
+/// hoàn chỉnh. Rất chặt để TUYỆT ĐỐI không xoá nhầm file đã tải xong:
+///   - `.part`, `.ytdl`             (đuôi)
+///   - `.part-Frag123`, `.part-N`   (mảnh fragment)
+///   - `.f137.mp4`, `.f251.webm`    (format trung gian: `.f` + SỐ)
+///   - `.temp.mp4`, `.frag`
+/// Lưu ý: KHÔNG dùng `contains(".f")` (khớp bừa "clip.for.mp4"); phải là
+/// `.f` theo sau bởi CHỮ SỐ.
+fn is_ytdlp_temp_file(name: &str) -> bool {
+    let l = name.to_lowercase();
+    if l.ends_with(".part") || l.ends_with(".ytdl") || l.ends_with(".frag")
+        || l.contains(".part-") || l.contains(".temp.")
+    {
+        return true;
+    }
+    // `.f<digits>.` — vd ".f137.", ".f251." (format trung gian yt-dlp).
+    if let Some(idx) = l.find(".f") {
+        let after = &l[idx + 2..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() && after[digits.len()..].starts_with('.') {
+            return true;
+        }
+    }
+    false
+}
+
+/// Dọn file TẠM của một mục (an toàn). `aggressive` (khi huỷ giữa chừng) chỉ
+/// bổ sung xoá đúng 1 file output_path NẾU nó cũng là file tạm — KHÔNG bao giờ
+/// xoá video hoàn chỉnh, KHÔNG bao giờ xoá file của mục khác.
+///
+/// SỬA LỖI NGHIÊM TRỌNG (từng xoá cả trăm video): bản cũ ở chế độ aggressive
+/// xoá MỌI file cùng tiền tố tên (kênh rap battle cùng tên → mất sạch), và
+/// mẫu `.f` khớp bừa. Giờ chỉ đụng file tạm thật sự.
 fn cleanup_partials_inner(item: &DownloadItem, aggressive: bool) {
     let folder = &item.request.save_folder;
     let title_prefix = crate::filename_resolver::sanitize(&item.title);
-    // Stem from any pre-resolved output_path so we catch files yt-dlp wrote
-    // under a slightly different sanitization than ours (Douyin CDN ids,
-    // alternate punctuation, etc.).
     let path_stem = item
         .output_path
         .as_ref()
@@ -81,10 +111,15 @@ fn cleanup_partials_inner(item: &DownloadItem, aggressive: bool) {
         .and_then(|s| s.to_str())
         .map(String::from);
 
-    // Aggressive: remove the canonical output file too if we know it.
+    // aggressive: nếu output_path trỏ tới 1 file TẠM (đuôi .part…), xoá nó.
+    // Nếu output_path là video hoàn chỉnh (.mp4/.mp3…) → KHÔNG đụng.
     if aggressive {
         if let Some(ref p) = item.output_path {
-            let _ = std::fs::remove_file(p);
+            if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                if is_ytdlp_temp_file(n) {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
         }
     }
 
@@ -98,24 +133,16 @@ fn cleanup_partials_inner(item: &DownloadItem, aggressive: bool) {
             Ok(s) => s,
             Err(_) => continue,
         };
+        // BẮT BUỘC là file tạm — không bao giờ xoá file hoàn chỉnh dù trùng tên.
+        if !is_ytdlp_temp_file(&name) {
+            continue;
+        }
         let matches_prefix = (!title_prefix.is_empty() && name.starts_with(&title_prefix))
             || path_stem
                 .as_deref()
                 .map(|s| !s.is_empty() && name.starts_with(s))
                 .unwrap_or(false);
-        if !matches_prefix {
-            continue;
-        }
-        // Partial markers always cleaned. In aggressive mode we additionally
-        // wipe any same-stem file (could be the .mp4 yt-dlp finalized between
-        // cancel signal and process exit).
-        let is_partial = name.ends_with(".part")
-            || name.ends_with(".ytdl")
-            || name.contains(".part-")
-            || name.contains(".f")
-            || name.contains(".temp.")
-            || name.ends_with(".frag");
-        if is_partial || aggressive {
+        if matches_prefix {
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -1039,6 +1066,26 @@ mod tests {
     use super::*;
     use crate::models::DownloadState::*;
     use crate::models::QueueEvent::*;
+
+    #[test]
+    fn temp_file_detection_never_matches_completed() {
+        // File TẠM → true (được phép dọn).
+        assert!(is_ytdlp_temp_file("video.mp4.part"));
+        assert!(is_ytdlp_temp_file("video.ytdl"));
+        assert!(is_ytdlp_temp_file("video.f137.mp4"));
+        assert!(is_ytdlp_temp_file("video.f251.webm"));
+        assert!(is_ytdlp_temp_file("GEECHI GOTTI vs JOEY.mp4.part-Frag238"));
+        assert!(is_ytdlp_temp_file("clip.temp.mp4"));
+        assert!(is_ytdlp_temp_file("seg.frag"));
+
+        // Video HOÀN CHỈNH → false (TUYỆT ĐỐI không được dọn).
+        assert!(!is_ytdlp_temp_file("GEECHI GOTTI vs JOEY LINWOOD Rap Battle BMBL.mp4"));
+        assert!(!is_ytdlp_temp_file("video.mp4"));
+        assert!(!is_ytdlp_temp_file("song.mp3"));
+        assert!(!is_ytdlp_temp_file("clip.for.you.mp4"), "\".f\" trong \"for\" KHÔNG được coi là file tạm");
+        assert!(!is_ytdlp_temp_file("My.Final.Cut.mp4"));
+        assert!(!is_ytdlp_temp_file("movie.flv"));
+    }
 
     #[test]
     fn legal_transitions() {
