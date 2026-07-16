@@ -94,7 +94,7 @@ function Bootstrap({ children }: { children: React.ReactNode }) {
 function PageContainer({ children }: { children: React.ReactNode }) {
   // Wraps non-history pages so they keep a comfortable reading width while
   // the history page itself goes full-bleed for grid/compact view.
-  return <div className="max-w-5xl w-full mx-auto">{children}</div>;
+  return <div className="max-w-5xl w-full mx-auto bqd-page">{children}</div>;
 }
 
 function Shell() {

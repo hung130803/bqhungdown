@@ -201,7 +201,7 @@ export function QueueRow({ item }: { item: DownloadItem }) {
 
   return (
     <div
-      className={`p-3 rounded-xl bg-surface border border-border hover:border-accent/40 transition-colors space-y-3 ${
+      className={`p-3 rounded-xl bg-surface border border-border hover:border-accent/40 hover:shadow-md transition duration-150 space-y-3 ${
         dragCanStart ? "cursor-grab active:cursor-grabbing" : ""
       }`}
       onMouseDown={onRowDown}
