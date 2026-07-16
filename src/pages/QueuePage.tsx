@@ -7,7 +7,6 @@ import * as cmd from "@/ipc/commands";
 import { formatSpeed } from "@/lib/format";
 import { EmptyState } from "@/components/EmptyState";
 
-const TERMINAL = ["completed", "failed", "cancelled", "skipped"];
 
 export function QueuePage() {
   const items = useQueueStore((s) => s.items ?? []);
@@ -63,7 +62,6 @@ export function QueuePage() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [focus, items.length]);
 
-  const terminalCount = items.filter((i) => TERMINAL.includes(i.state)).length;
   const failedCount = items.filter((i) => i.state === "failed").length;
 
   // Tổng quan hàng đợi — hữu ích khi tải cả kênh (hàng trăm video): thấy ngay
@@ -265,7 +263,7 @@ export function QueuePage() {
             ))}
           </div>
         )}
-        {(terminalCount > 0 || failedCount > 0) && (
+        {(summary.completed > 0 || failedCount > 0) && (
           <div className="flex justify-end gap-2 flex-wrap">
             {failedCount > 0 && (
               <button
@@ -277,12 +275,13 @@ export function QueuePage() {
                 {retryingAll ? "⏳ Đang đưa vào hàng đợi…" : `🔄 Thử lại ${failedCount} video lỗi`}
               </button>
             )}
-            {terminalCount > 0 && (
+            {summary.completed > 0 && (
               <button
                 onClick={clearTerminal}
+                title="Chỉ xoá các mục ĐÃ TẢI XONG khỏi danh sách (video lỗi vẫn giữ để thử lại). File trên máy không bị xoá."
                 className="px-3 py-1.5 text-xs rounded-md border border-border hover:bg-surface-2 text-muted"
               >
-                Xoá {terminalCount} mục đã xong khỏi danh sách
+                Xoá {summary.completed} mục đã tải xong
               </button>
             )}
           </div>

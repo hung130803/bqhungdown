@@ -92,8 +92,10 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
     })),
   remove: (shortId) =>
     set((s) => ({ items: s.items.filter((i) => i.shortId !== shortId) })),
+  // CHỈ xoá mục ĐÃ TẢI XONG (completed). KHÔNG đụng mục lỗi/huỷ — để user còn
+  // "Thử lại" (trước đây gộp cả lỗi vào "đã xong" → bấm nhầm mất video lỗi).
   clearTerminal: () =>
-    set((s) => ({ items: s.items.filter((i) => !TERMINAL_STATES.includes(i.state)) })),
+    set((s) => ({ items: s.items.filter((i) => i.state !== "completed") })),
   refresh: async () => {
     const items = await cmd.listQueue();
     set({ items });
