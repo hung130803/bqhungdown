@@ -5,6 +5,7 @@ import { useQueueStore } from "@/stores/useQueueStore";
 import { QueueRow } from "@/components/QueueRow";
 import { ConflictDialog } from "@/components/ConflictDialog";
 import * as cmd from "@/ipc/commands";
+import { formatSpeed } from "@/lib/format";
 
 const TERMINAL = ["completed", "failed", "cancelled", "skipped"];
 
@@ -65,6 +66,21 @@ export function QueuePage() {
 
   const terminalCount = items.filter((i) => TERMINAL.includes(i.state)).length;
   const failedCount = items.filter((i) => i.state === "failed").length;
+
+  // Tổng quan hàng đợi — hữu ích khi tải cả kênh (hàng trăm video): thấy ngay
+  // tiến độ chung + tốc độ tổng, không phải cuộn xem từng dòng.
+  const summary = useMemo(() => {
+    let downloading = 0, completed = 0, failed = 0, queued = 0, totalSpeed = 0;
+    for (const i of items) {
+      switch (i.state) {
+        case "downloading": downloading++; totalSpeed += i.speedBps ?? 0; break;
+        case "completed": completed++; break;
+        case "failed": failed++; break;
+        case "queued": case "paused": queued++; break;
+      }
+    }
+    return { total: items.length, downloading, completed, failed, queued, totalSpeed };
+  }, [items]);
 
   // Nút "Thử lại tất cả video lỗi" — kịch bản: tải cả kênh dính lỗi hàng loạt
   // (thiếu cookie / bị chặn tạm), user sửa nguyên nhân xong chỉ cần 1 nút
@@ -155,6 +171,19 @@ export function QueuePage() {
       <ConflictDialog />
       <div className="space-y-2 max-w-3xl mx-auto">
         {undoBanner}
+        {/* Thanh tổng quan — chỉ hiện khi có nhiều mục (tải cả kênh) */}
+        {summary.total > 1 && (
+          <div className="flex items-center gap-3 flex-wrap px-3 py-2 rounded-md bg-surface border border-border text-xs">
+            <span className="font-medium text-fg">Tổng {summary.total}</span>
+            {summary.downloading > 0 && <span className="text-accent">⬇ {summary.downloading} đang tải</span>}
+            {summary.queued > 0 && <span className="text-muted">⏳ {summary.queued} chờ</span>}
+            {summary.completed > 0 && <span className="text-success">✓ {summary.completed} xong</span>}
+            {summary.failed > 0 && <span className="text-danger">✕ {summary.failed} lỗi</span>}
+            {summary.totalSpeed > 0 && (
+              <span className="ml-auto font-medium text-fg">⚡ {formatSpeed(summary.totalSpeed)}</span>
+            )}
+          </div>
+        )}
         {groups.length >= 1 && items.length > 1 && (
           <div className="flex flex-wrap gap-1.5 pb-1">
             <span className="text-xs text-muted self-center mr-1">Xóa cả kênh:</span>
