@@ -141,14 +141,24 @@ export function QueuePage() {
   // Lọc theo trạng thái (bấm ô trong thanh tổng quan). null = xem tất cả.
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const toggleFilter = (s: string) => setStatusFilter((cur) => (cur === s ? null : s));
+  // Tìm kiếm theo tên/URL — tiện khi hàng đợi hàng trăm video.
+  const [search, setSearch] = useState("");
 
-  // Sort newest first using createdAt (descending), rồi lọc theo statusFilter.
+  // Sort newest first using createdAt (descending), rồi lọc theo trạng thái + tìm kiếm.
+  const q = search.trim().toLowerCase();
   const sortedItems = [...items]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .filter((i) => {
-      if (!statusFilter) return true;
-      if (statusFilter === "queued") return i.state === "queued" || i.state === "paused";
-      return i.state === statusFilter;
+      if (statusFilter) {
+        if (statusFilter === "queued") {
+          if (i.state !== "queued" && i.state !== "paused") return false;
+        } else if (i.state !== statusFilter) return false;
+      }
+      if (q) {
+        const hay = `${i.title ?? ""} ${i.request?.url ?? ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
     });
 
   const undoBanner = undoLabel ? (
@@ -227,6 +237,16 @@ export function QueuePage() {
             </div>
           </div>
         )}
+        {items.length > 8 && (
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="🔍 Tìm video theo tên…"
+            className="w-full px-3 py-1.5 rounded-md bg-surface border border-border text-fg placeholder:text-muted text-sm"
+            spellCheck={false}
+          />
+        )}
         {groups.length >= 1 && items.length > 1 && (
           <div className="flex flex-wrap gap-1.5 pb-1">
             <span className="text-xs text-muted self-center mr-1">Xóa cả kênh:</span>
@@ -263,6 +283,17 @@ export function QueuePage() {
               </button>
             )}
           </div>
+        )}
+        {sortedItems.length === 0 && (statusFilter || q) && (
+          <p className="text-muted text-center py-8 text-sm">
+            Không có mục nào khớp bộ lọc.{" "}
+            <button
+              onClick={() => { setStatusFilter(null); setSearch(""); }}
+              className="text-accent underline underline-offset-2"
+            >
+              Bỏ lọc
+            </button>
+          </p>
         )}
         {sortedItems.map((item) => (
           <div
