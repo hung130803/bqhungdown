@@ -1,6 +1,6 @@
 [package]
 name = "bqhungdown"
-version = "0.1.72"
+version = "0.1.73"
 description = "BQHungDown — Tải video đa nền tảng"
 authors = ["BQHung"]
 edition = "2021"
