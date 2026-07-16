@@ -138,12 +138,18 @@ export function QueuePage() {
     }
   };
 
-  // Sort newest first using createdAt (descending).
-  const sortedItems = [...items].sort((a, b) => {
-    const ta = new Date(a.createdAt).getTime();
-    const tb = new Date(b.createdAt).getTime();
-    return tb - ta;
-  });
+  // Lọc theo trạng thái (bấm ô trong thanh tổng quan). null = xem tất cả.
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const toggleFilter = (s: string) => setStatusFilter((cur) => (cur === s ? null : s));
+
+  // Sort newest first using createdAt (descending), rồi lọc theo statusFilter.
+  const sortedItems = [...items]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .filter((i) => {
+      if (!statusFilter) return true;
+      if (statusFilter === "queued") return i.state === "queued" || i.state === "paused";
+      return i.state === statusFilter;
+    });
 
   const undoBanner = undoLabel ? (
     <div className="flex items-center justify-between gap-2 px-3 py-2 mb-2 rounded-md bg-warning/10 border border-warning text-sm">
@@ -173,12 +179,31 @@ export function QueuePage() {
         {undoBanner}
         {/* Thanh tổng quan — chỉ hiện khi có nhiều mục (tải cả kênh) */}
         {summary.total > 1 && (
-          <div className="flex items-center gap-3 flex-wrap px-3 py-2 rounded-md bg-surface border border-border text-xs">
-            <span className="font-medium text-fg">Tổng {summary.total}</span>
-            {summary.downloading > 0 && <span className="text-accent">⬇ {summary.downloading} đang tải</span>}
-            {summary.queued > 0 && <span className="text-muted">⏳ {summary.queued} chờ</span>}
-            {summary.completed > 0 && <span className="text-success">✓ {summary.completed} xong</span>}
-            {summary.failed > 0 && <span className="text-danger">✕ {summary.failed} lỗi</span>}
+          <div className="flex items-center gap-2 flex-wrap px-3 py-2 rounded-md bg-surface border border-border text-xs">
+            <button
+              onClick={() => setStatusFilter(null)}
+              className={`font-medium ${statusFilter === null ? "text-fg" : "text-muted hover:text-fg"}`}
+            >
+              Tổng {summary.total}
+            </button>
+            {(() => {
+              const chip = (key: string, cls: string, label: string) => (
+                <button
+                  onClick={() => toggleFilter(key)}
+                  className={`px-1.5 py-0.5 rounded ${cls} ${statusFilter === key ? "ring-1 ring-current" : "opacity-90 hover:opacity-100"}`}
+                >
+                  {label}
+                </button>
+              );
+              return (
+                <>
+                  {summary.downloading > 0 && chip("downloading", "text-accent", `⬇ ${summary.downloading} đang tải`)}
+                  {summary.queued > 0 && chip("queued", "text-muted", `⏳ ${summary.queued} chờ`)}
+                  {summary.completed > 0 && chip("completed", "text-success", `✓ ${summary.completed} xong`)}
+                  {summary.failed > 0 && chip("failed", "text-danger", `✕ ${summary.failed} lỗi`)}
+                </>
+              );
+            })()}
             {summary.totalSpeed > 0 && (
               <span className="ml-auto font-medium text-fg">⚡ {formatSpeed(summary.totalSpeed)}</span>
             )}
