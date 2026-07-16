@@ -256,6 +256,8 @@ pub fn run() {
             commands::cancel_download,
             commands::retry_download,
             commands::retry_all_failed,
+            commands::pause_all_downloads,
+            commands::resume_all_downloads,
             commands::force_download,
             commands::test_proxy,
             commands::list_queue,

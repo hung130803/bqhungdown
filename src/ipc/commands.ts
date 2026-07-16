@@ -246,6 +246,18 @@ export async function retryAllFailed(): Promise<number> {
   return invoke<number>("retry_all_failed");
 }
 
+// Tạm dừng / tiếp tục TẤT CẢ. Trả số mục bị ảnh hưởng.
+export async function pauseAllDownloads(): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("pause_all_downloads");
+}
+export async function resumeAllDownloads(): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("resume_all_downloads");
+}
+
 // Nút "Kiểm tra proxy" — trả chuỗi kết quả (Ok) hoặc ném lỗi (Err) tiếng Việt.
 export async function testProxy(proxy: string): Promise<string> {
   if (IS_WEB) return Promise.reject("unavailable");

@@ -182,6 +182,24 @@ export function QueuePage() {
             {summary.totalSpeed > 0 && (
               <span className="ml-auto font-medium text-fg">⚡ {formatSpeed(summary.totalSpeed)}</span>
             )}
+            <div className={`flex gap-1.5 ${summary.totalSpeed > 0 ? "" : "ml-auto"}`}>
+              {summary.downloading > 0 && (
+                <button
+                  onClick={() => void cmd.pauseAllDownloads().then(() => refresh())}
+                  className="px-2 py-0.5 rounded border border-border hover:bg-surface-2 text-fg"
+                >
+                  ⏸ Tạm dừng tất cả
+                </button>
+              )}
+              {(summary.queued > 0 && summary.downloading === 0) && (
+                <button
+                  onClick={() => void cmd.resumeAllDownloads().then(() => refresh())}
+                  className="px-2 py-0.5 rounded bg-accent text-accent-fg"
+                >
+                  ▶ Tiếp tục tất cả
+                </button>
+              )}
+            </div>
           </div>
         )}
         {groups.length >= 1 && items.length > 1 && (

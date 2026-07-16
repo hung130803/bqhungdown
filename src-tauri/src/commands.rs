@@ -402,6 +402,18 @@ pub fn retry_all_failed(queue: State<Arc<QueueManager>>) -> AppResult<u32> {
     Ok(queue.retry_all_failed() as u32)
 }
 
+/// Nút "Tạm dừng tất cả" — dừng mọi mục đang tải + chặn khởi động mục mới.
+#[tauri::command]
+pub fn pause_all_downloads(queue: State<Arc<QueueManager>>) -> AppResult<u32> {
+    Ok(queue.pause_all() as u32)
+}
+
+/// Nút "Tiếp tục tất cả" — chạy lại mọi mục đang tạm dừng/chờ.
+#[tauri::command]
+pub fn resume_all_downloads(queue: State<Arc<QueueManager>>) -> AppResult<u32> {
+    Ok(queue.resume_all() as u32)
+}
+
 /// Nút "Vẫn tải video này" trên mục Bỏ qua — tải bất chấp danh sách đã-tải.
 #[tauri::command]
 pub fn force_download(

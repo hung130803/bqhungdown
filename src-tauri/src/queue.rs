@@ -137,6 +137,10 @@ pub struct QueueManager {
     last_removed: Mutex<Vec<DownloadItem>>,
     /// Ensures shutdown() runs once (tray "quit" + window Destroyed both fire it).
     shutdown_done: std::sync::atomic::AtomicBool,
+    /// "Tạm dừng tất cả": khi true, run_loop_for KHÔNG khởi động mục mới (mục
+    /// đang chờ acquire permit sẽ nhả ra và giữ nguyên Queued). resume_all()
+    /// tắt cờ rồi spawn lại. An toàn với FSM: chỉ dùng transition hợp lệ.
+    paused_all: std::sync::atomic::AtomicBool,
 }
 
 impl QueueManager {
@@ -160,6 +164,7 @@ impl QueueManager {
             queue_path,
             last_removed: Mutex::new(Vec::new()),
             shutdown_done: std::sync::atomic::AtomicBool::new(false),
+            paused_all: std::sync::atomic::AtomicBool::new(false),
         });
         // Periodically save the queue so a crash/power loss doesn't lose more
         // than a few seconds of progress.
@@ -530,6 +535,59 @@ impl QueueManager {
         n
     }
 
+    /// "Tạm dừng tất cả": bật cờ (chặn khởi động mục mới) + tạm dừng mọi mục
+    /// đang tải. Trả số mục đã tạm dừng.
+    pub fn pause_all(self: &Arc<Self>) -> usize {
+        self.paused_all.store(true, std::sync::atomic::Ordering::Relaxed);
+        let ids: Vec<String> = {
+            let map = self.items.read().unwrap();
+            map.iter()
+                .filter(|(_, it)| matches!(it.state, DownloadState::Downloading))
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        let mut n = 0;
+        for id in &ids {
+            if self.pause(id).is_ok() {
+                n += 1;
+            }
+        }
+        self.emit_queue_updated();
+        n
+    }
+
+    /// "Tiếp tục tất cả": tắt cờ + đưa mọi mục Paused/Queued chạy lại. Trả số
+    /// mục đã kích hoạt.
+    pub fn resume_all(self: &Arc<Self>) -> usize {
+        self.paused_all.store(false, std::sync::atomic::Ordering::Relaxed);
+        let ids: Vec<String> = {
+            let map = self.items.read().unwrap();
+            map.iter()
+                .filter(|(_, it)| matches!(it.state, DownloadState::Paused | DownloadState::Queued))
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        let mut n = 0;
+        for id in &ids {
+            // Paused → đưa về Queued (transition Resume hợp lệ); Queued thì
+            // giữ nguyên. Sau đó spawn run_loop_for để chạy.
+            {
+                let mut map = self.items.write().unwrap();
+                if let Some(it) = map.get_mut(id) {
+                    it.state = DownloadState::Queued;
+                }
+            }
+            let me = self.clone();
+            let id_owned = id.clone();
+            tauri::async_runtime::spawn(async move { me.run_loop_for(id_owned).await; });
+            n += 1;
+        }
+        if n > 0 {
+            self.emit_queue_updated();
+        }
+        n
+    }
+
     pub async fn set_concurrency(self: &Arc<Self>, n: u8) {
         let n = n.clamp(1, 100);
         let mut cap = self.current_cap.lock().unwrap();
@@ -582,6 +640,13 @@ impl QueueManager {
             Ok(p) => p,
             Err(_) => return,
         };
+
+        // "Tạm dừng tất cả" đang bật → không khởi động mục mới. Nhả permit,
+        // giữ nguyên trạng thái Queued; resume_all() sẽ spawn lại sau.
+        if self.paused_all.load(std::sync::atomic::Ordering::Relaxed) {
+            drop(permit);
+            return;
+        }
 
         // Mark as Downloading.
         let mut item = match self.get(&id) {
