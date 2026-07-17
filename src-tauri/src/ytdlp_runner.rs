@@ -364,15 +364,30 @@ impl YtDlpRunner {
             BuildMode::Download { resume, force_generic, output_stem, safe_retry: force_clients },
         );
 
-        // Thư mục TẠM riêng cho file .part / mảnh fragment / .ytdl. Nhờ vậy
-        // thư mục tải của user LUÔN SẠCH — chỉ hiện file hoàn chỉnh, không bao
-        // giờ thấy hàng trăm mảnh `.part-FragN` (nhất là video HLS). File tạm
-        // nằm trong cache app; huỷ/lỗi giữa chừng cũng không rác thư mục đích.
-        if let Ok(dd) = self.app.path().app_data_dir() {
-            let tmp = dd.join("dl-temp");
+        // Thư mục TẠM cho file .part / mảnh fragment / .ytdl. Nhờ vậy thư mục
+        // tải của user LUÔN SẠCH — chỉ hiện file hoàn chỉnh, không bao giờ thấy
+        // hàng trăm mảnh `.part-FragN` (nhất là video HLS).
+        //
+        // ĐẶT NGAY TRONG THƯ MỤC ĐÍCH (thư mục con ẩn `.bqd-temp`) — KHÔNG dùng
+        // cache ổ C: — để file tạm và file đích LUÔN CÙNG Ổ ĐĨA. Khi tải xong,
+        // yt-dlp chỉ ĐỔI TÊN (tức thì) thay vì COPY chéo ổ → 0 ảnh hưởng tốc độ
+        // dù user lưu sang ổ D:/ổ ngoài/USB.
+        {
+            let tmp = item.request.save_folder.join(".bqd-temp");
+            let existed = tmp.exists();
             if std::fs::create_dir_all(&tmp).is_ok() {
+                if !existed {
+                    hide_dir(&tmp); // ẩn thư mục con để không lộ trong thư mục tải
+                }
                 args.push("-P".into());
                 args.push(format!("temp:{}", tmp.to_string_lossy()));
+            } else if let Ok(dd) = self.app.path().app_data_dir() {
+                // Không tạo được trong thư mục đích (quyền ghi?) → fallback cache app.
+                let fb = dd.join("dl-temp");
+                if std::fs::create_dir_all(&fb).is_ok() {
+                    args.push("-P".into());
+                    args.push(format!("temp:{}", fb.to_string_lossy()));
+                }
             }
         }
         // "Bỏ qua video đã tải": record finished downloads in an archive file and
@@ -558,6 +573,24 @@ async fn youtube_video_exists(url: &str) -> bool {
     {
         Ok(resp) => resp.status().is_success(),
         Err(_) => false,
+    }
+}
+
+/// Đặt thuộc tính "ẩn" cho thư mục (Windows) — dùng `attrib +h`, best-effort.
+/// Không có API std nên gọi lệnh; CREATE_NO_WINDOW để không hiện cửa sổ đen.
+fn hide_dir(path: &std::path::Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("attrib")
+            .arg("+h")
+            .arg(path)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path; // Trên Linux/macOS, tên bắt đầu bằng "." đã tự ẩn.
     }
 }
 
