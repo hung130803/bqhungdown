@@ -278,6 +278,11 @@ export interface Settings {
    * Nhiều key → key hết quota tự nhảy sang key kế. Rỗng = dùng yt-dlp như cũ.
    */
   youtubeApiKeys?: string[];
+  /**
+   * Độ phân giải TỐI ĐA khi chọn "Tốt nhất". 0 = không giới hạn (vớ 4K/8K).
+   * Mặc định 1080 vì 4K to gấp ~5.5 lần 1080p → tải hàng loạt lâu hơn nhiều.
+   */
+  maxHeight?: number;
 }
 
 export type SettingsPatch = Partial<Settings>;

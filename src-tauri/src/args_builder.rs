@@ -399,9 +399,20 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
                         args.push("-f".into());
                         args.push(format!("{fmt}+bestaudio/best"));
                     } else {
-                        // Best quality available với audio đảm bảo. yt-dlp tự pick.
+                        // Best quality available với audio đảm bảo, GIỚI HẠN theo
+                        // `max_height` (mặc định 1080). 4K to gấp ~5.5 lần 1080p
+                        // nên vớ 4K mặc định làm tải hàng loạt chậm hẳn. Fallback
+                        // cuối `bv*+ba/b` không kèm điều kiện → nếu kênh không có
+                        // mức <=cap vẫn tải được (không bao giờ fail vì cap).
+                        let mh = settings.max_height;
                         args.push("-f".into());
-                        args.push("bv*+ba/b".into());
+                        if mh > 0 {
+                            args.push(format!(
+                                "bv*[height<={mh}]+ba/b[height<={mh}]/bv*+ba/b"
+                            ));
+                        } else {
+                            args.push("bv*+ba/b".into());
+                        }
                     }
                     // Sort thứ tự chọn stream — áp cho CẢ 2 nhánh trên (nhánh
                     // format_id vẫn cần nó để chọn ĐÚNG track audio đem ghép):
@@ -516,13 +527,34 @@ mod tests {
 
     #[test]
     fn video_best_default() {
+        // Mặc định max_height = 1080 → format bị giới hạn <=1080, có fallback.
         let s = Settings::default();
         let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
         let joined = args.join(" ");
-        assert!(joined.contains("-f bv*+ba/b"));
+        assert!(joined.contains("bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b"));
         assert!(joined.contains("-N 32"));
         assert!(joined.contains("%(title)s.%(ext)s"));
         assert!(!joined.contains("--continue"));
+    }
+
+    #[test]
+    fn max_height_zero_means_unlimited() {
+        // 0 = không giới hạn → dùng bv*+ba/b như cũ (vớ 4K nếu có).
+        let mut s = Settings::default();
+        s.max_height = 0;
+        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
+        let joined = args.join(" ");
+        assert!(joined.contains("-f bv*+ba/b"));
+        assert!(!joined.contains("height<="));
+    }
+
+    #[test]
+    fn max_height_1440_caps_format() {
+        let mut s = Settings::default();
+        s.max_height = 1440;
+        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
+        let joined = args.join(" ");
+        assert!(joined.contains("bv*[height<=1440]+ba/b[height<=1440]/bv*+ba/b"));
     }
 
     #[test]

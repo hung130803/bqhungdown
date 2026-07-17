@@ -168,6 +168,23 @@ export function SettingsPage() {
         />
       </Field>
 
+      <Field label={t("settings.maxHeight")}>
+        <div className="space-y-1">
+          <select
+            value={settings.maxHeight ?? 1080}
+            onChange={e => set("maxHeight", parseInt(e.target.value, 10))}
+            className="px-3 py-2 rounded-md bg-surface border border-border text-fg"
+          >
+            <option value={720}>720p</option>
+            <option value={1080}>1080p (Full HD) — {t("settings.maxHeightRecommended")}</option>
+            <option value={1440}>1440p (2K)</option>
+            <option value={2160}>2160p (4K)</option>
+            <option value={0}>{t("settings.maxHeightUnlimited")}</option>
+          </select>
+          <p className="text-xs text-muted">{t("settings.maxHeightHint")}</p>
+        </div>
+      </Field>
+
       <Field label={t("settings.defaultFolder")}>
         <div className="flex gap-2">
           <input readOnly value={settings.defaultFolder} className="flex-1 px-3 py-2 rounded-md bg-surface border border-border text-fg" />

@@ -449,6 +449,12 @@ pub struct Settings {
     /// kế tiếp. Rỗng = dùng yt-dlp như cũ.
     #[serde(default)]
     pub youtube_api_keys: Vec<String>,
+    /// Độ phân giải TỐI ĐA khi chọn "Tốt nhất" (format_id = None). 0 = không
+    /// giới hạn (vớ luôn 4K/8K nếu có). Mặc định 1080 vì 4K to gấp ~5.5 lần
+    /// 1080p → tải hàng loạt lâu hơn nhiều dù mạng nhanh. User muốn 4K thì đặt
+    /// 2160 (hoặc 0) hoặc chọn tay chất lượng cao trong ô Chất lượng.
+    #[serde(default = "default_max_height")]
+    pub max_height: u32,
 }
 
 fn default_cooldown() -> u32 {
@@ -461,6 +467,10 @@ fn default_true() -> bool {
 
 fn default_watch_interval() -> u32 {
     60
+}
+
+fn default_max_height() -> u32 {
+    1080
 }
 
 impl Default for Settings {
@@ -497,6 +507,7 @@ impl Default for Settings {
             minimize_to_tray: true,
             youtube_api_key: None,
             youtube_api_keys: Vec::new(),
+            max_height: 1080,
         }
     }
 }
@@ -528,6 +539,7 @@ pub struct SettingsPatch {
     #[serde(default, deserialize_with = "deserialize_optional_optional_string")]
     pub youtube_api_key: Option<Option<String>>,
     pub youtube_api_keys: Option<Vec<String>>,
+    pub max_height: Option<u32>,
 }
 
 /// Custom serde deserializer that distinguishes:

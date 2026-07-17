@@ -199,6 +199,18 @@ impl SettingsStore {
             if let Some(keys) = patch.youtube_api_keys {
                 s.youtube_api_keys = normalize_api_keys(keys);
             }
+            // max_height: chốt về các mức hợp lệ (0 = không giới hạn). Giá trị
+            // lạ → làm tròn về mức gần nhất để không sinh format-selector vô nghĩa.
+            if let Some(mh) = patch.max_height {
+                s.max_height = match mh {
+                    0 => 0,
+                    v if v <= 480 => 480,
+                    v if v <= 720 => 720,
+                    v if v <= 1080 => 1080,
+                    v if v <= 1440 => 1440,
+                    _ => 2160,
+                };
+            }
             Ok(())
         })
     }

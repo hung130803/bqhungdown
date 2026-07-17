@@ -62,6 +62,10 @@
   "settings": {
     "title": "Cài đặt",
     "maxConcurrency": "Số lượt tải đồng thời tối đa",
+    "maxHeight": "Độ phân giải tối đa (khi chọn \"Tốt nhất\")",
+    "maxHeightRecommended": "khuyến nghị",
+    "maxHeightUnlimited": "Không giới hạn (vớ 4K/8K nếu có)",
+    "maxHeightHint": "4K nặng gấp ~5.5 lần 1080p nên tải lâu hơn nhiều. Để 1080p cho nhanh; vẫn chọn tay chất lượng cao hơn cho từng video được.",
     "defaultFolder": "Thư mục lưu mặc định",
     "theme": "Giao diện",
     "language": "Ngôn ngữ",

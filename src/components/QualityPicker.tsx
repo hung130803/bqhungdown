@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useUrlStore } from "@/stores/useUrlStore";
+import { useSettingsStore } from "@/stores/useSettingsStore";
 import { selectBest } from "@/lib/best-format";
 import { formatBytes } from "@/lib/format";
 import type { QualityFormat } from "@/types/models";
@@ -54,6 +55,7 @@ export function QualityPicker() {
   const mode = useUrlStore(s => s.mode);
   const formatId = useUrlStore(s => s.formatId);
   const setFormatId = useUrlStore(s => s.setFormatId);
+  const maxHeight = useSettingsStore(s => s.settings?.maxHeight ?? 1080);
   if (!md || mode !== "video") return null;
 
   // Loại các format không phải video thật:
@@ -71,7 +73,7 @@ export function QualityPicker() {
     return <p className="text-sm text-muted">Không có định dạng video khả dụng.</p>;
   }
   const levels = dedupeByQuality(videoFormats);
-  const best = selectBest(videoFormats);
+  const best = selectBest(videoFormats, maxHeight);
 
   const fmtLabel = (f: QualityFormat) => {
     const h = f.height ?? 0;

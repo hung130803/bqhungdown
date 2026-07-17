@@ -1,8 +1,14 @@
 import type { QualityFormat } from "@/types/models";
 
-export function selectBest(formats: QualityFormat[]): QualityFormat | null {
-  const candidates = formats.filter(f => !f.isAudioOnly);
+export function selectBest(formats: QualityFormat[], maxHeight = 0): QualityFormat | null {
+  let candidates = formats.filter(f => !f.isAudioOnly);
   if (candidates.length === 0) return null;
+  // Áp trần độ phân giải (khớp backend). Nếu không có mức nào <= trần thì
+  // fallback về toàn bộ để vẫn hiện được "Tốt nhất".
+  if (maxHeight > 0) {
+    const capped = candidates.filter(f => (f.height ?? 0) <= maxHeight);
+    if (capped.length > 0) candidates = capped;
+  }
   return [...candidates].sort((a, b) => {
     const ha = a.height ?? 0, hb = b.height ?? 0;
     if (hb !== ha) return hb - ha;

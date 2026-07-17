@@ -62,6 +62,10 @@
   "settings": {
     "title": "Settings",
     "maxConcurrency": "Max concurrent downloads",
+    "maxHeight": "Max resolution (for \"Best\")",
+    "maxHeightRecommended": "recommended",
+    "maxHeightUnlimited": "Unlimited (grab 4K/8K if available)",
+    "maxHeightHint": "4K is ~5.5x heavier than 1080p so it downloads much slower. Keep 1080p for speed; you can still pick a higher quality per video.",
     "defaultFolder": "Default save folder",
     "theme": "Theme",
     "language": "Language",
