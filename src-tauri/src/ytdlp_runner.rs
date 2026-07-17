@@ -363,6 +363,18 @@ impl YtDlpRunner {
             settings,
             BuildMode::Download { resume, force_generic, output_stem, safe_retry: force_clients },
         );
+
+        // Thư mục TẠM riêng cho file .part / mảnh fragment / .ytdl. Nhờ vậy
+        // thư mục tải của user LUÔN SẠCH — chỉ hiện file hoàn chỉnh, không bao
+        // giờ thấy hàng trăm mảnh `.part-FragN` (nhất là video HLS). File tạm
+        // nằm trong cache app; huỷ/lỗi giữa chừng cũng không rác thư mục đích.
+        if let Ok(dd) = self.app.path().app_data_dir() {
+            let tmp = dd.join("dl-temp");
+            if std::fs::create_dir_all(&tmp).is_ok() {
+                args.push("-P".into());
+                args.push(format!("temp:{}", tmp.to_string_lossy()));
+            }
+        }
         // "Bỏ qua video đã tải": record finished downloads in an archive file and
         // skip anything already listed. yt-dlp accepts options after the URL, so
         // appending here is fine. Only YouTube/most extractors expose a stable id;

@@ -414,8 +414,13 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
                     //               máy. Opus nhét trong mp4 bị CÂM trên nhiều
                     //               player Windows/TV — chính là lỗi "video mất
                     //               tiếng" dù file có audio thật.
+                    //   proto     → ƯU TIÊN https (DASH) hơn m3u8 (HLS). HLS tải
+                    //               ra HÀNG TRĂM mảnh `.part-FragN` rải thư mục;
+                    //               DASH tải 2 file rồi gộp thành 1 mp4 sạch.
+                    //               Đặt sau res/fps nên KHÔNG hạ độ phân giải,
+                    //               chỉ tránh HLS khi có DASH cùng chất lượng.
                     args.push("-S".into());
-                    args.push("lang,quality,res,fps,vcodec:h264,acodec:m4a,tbr".into());
+                    args.push("lang,quality,res,fps,proto,vcodec:h264,acodec:m4a,tbr".into());
                     args.push("--merge-output-format".into());
                     args.push("mp4".into());
                 }
@@ -544,7 +549,7 @@ mod tests {
 
     #[test]
     fn video_sort_prefers_original_lang_and_m4a_in_both_branches() {
-        const SORT: &str = "lang,quality,res,fps,vcodec:h264,acodec:m4a,tbr";
+        const SORT: &str = "lang,quality,res,fps,proto,vcodec:h264,acodec:m4a,tbr";
         // Nhánh mặc định ("Tốt nhất")
         let args = build(
             &req(),
