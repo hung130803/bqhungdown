@@ -107,6 +107,11 @@ pub fn run() {
                 runner.clone(),
                 queue_path.clone(),
             );
+            // Dọn tiến trình tải MỒ CÔI của phiên trước (app crash/bị kill giữa
+            // chừng → yt-dlp/ffmpeg vô chủ giữ khoá file .part, user không xoá
+            // nổi). Phải chạy TRƯỚC restore() để không giết nhầm tiến trình mới.
+            crate::ytdlp_runner::kill_orphan_downloaders();
+
             // Restore a previously saved queue so unfinished downloads resume
             // automatically after the app is closed/reopened (or crashes).
             if let Ok(text) = std::fs::read_to_string(&queue_path) {

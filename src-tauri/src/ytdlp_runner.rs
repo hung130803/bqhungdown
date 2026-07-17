@@ -416,9 +416,15 @@ impl YtDlpRunner {
         const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
         const HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
+        let child_pid = child.pid();
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
+                    // Giết CẢ CÂY tiến trình, không chỉ yt-dlp: trên Windows
+                    // child.kill() KHÔNG giết ffmpeg con nó spawn (đang ghép
+                    // file) → ffmpeg "mồ côi" giữ khoá file .part VĨNH VIỄN,
+                    // user không xoá nổi kể cả trong Explorer (bug thực tế).
+                    kill_process_tree(child_pid);
                     let _ = child.kill();
                     cancelled = true;
                     // Đợi tiến trình yt-dlp/ffmpeg chết HẲN trước khi trả về:
@@ -438,11 +444,13 @@ impl YtDlpRunner {
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {
                     if last_activity.elapsed() > STALL_TIMEOUT {
+                        kill_process_tree(child_pid);
                         let _ = child.kill();
                         stderr_tail.push_str(&format!("\n[watchdog] no activity for {}s, killed yt-dlp", STALL_TIMEOUT.as_secs()));
                         break;
                     }
                     if started_at.elapsed() > HARD_TIMEOUT {
+                        kill_process_tree(child_pid);
                         let _ = child.kill();
                         stderr_tail.push_str("\n[watchdog] hard timeout 30 minutes, killed yt-dlp");
                         break;
@@ -579,6 +587,53 @@ fn now_secs_u64() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Giết CẢ CÂY tiến trình (yt-dlp + mọi con nó spawn: ffmpeg ghép file,
+/// aria2c...). Windows: `taskkill /T` — `child.kill()` thường chỉ giết đúng 1
+/// tiến trình, để lại ffmpeg mồ côi giữ khoá file `.part` khiến cleanup xoá
+/// hụt và user cũng không xoá tay nổi. Chờ taskkill xong (`status()`, ~50-150ms)
+/// để chắc chắn cây chết trước khi bước dọn file chạy.
+fn kill_process_tree(pid: u32) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid; // Unix: kill() của tauri-shell đủ (SIGKILL nhóm mặc định).
+    }
+}
+
+/// Quét & giết tiến trình tải "MỒ CÔI" còn sót từ phiên app trước — xảy ra khi
+/// app crash / bị kill / Windows tắt đột ngột giữa lúc đang tải: yt-dlp/ffmpeg/
+/// aria2c mất cha vẫn chạy vô chủ hàng giờ, vừa chiếm mạng vừa giữ khoá file
+/// `.part` khiến user KHÔNG XOÁ NỔI (bug thực tế: 2 yt-dlp mồ côi giữ file
+/// trong D:\... đến khi bị kill tay).
+///
+/// An toàn: chỉ giết đúng 3 TÊN tiến trình (yt-dlp/ffmpeg/aria2c) VÀ đường dẫn
+/// chứa "bqhungdown" — không bao giờ đụng chính app hay phần mềm khác của user.
+/// Gọi đúng 1 lần lúc khởi động, TRƯỚC khi queue restore spawn tiến trình mới
+/// (chạy đồng bộ để không có cửa sổ đua giết nhầm tiến trình mới).
+pub fn kill_orphan_downloaders() {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = "Get-CimInstance Win32_Process | Where-Object { \
+            ($_.Name -eq 'yt-dlp.exe' -or $_.Name -eq 'ffmpeg.exe' -or $_.Name -eq 'aria2c.exe') \
+            -and $_.ExecutablePath -like '*bqhungdown*' } \
+            | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
 }
 
 /// Lấy cookie `buvid3` từ Bilibili để yt-dlp qua tường lửa 412 khi tải.

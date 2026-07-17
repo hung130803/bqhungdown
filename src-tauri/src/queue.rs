@@ -71,9 +71,11 @@ pub fn cleanup_partials(item: &DownloadItem) {
 /// đúng của mục này (khớp tên) nên KHÔNG ảnh hưởng video khác.
 pub fn cleanup_partials_retry(item: DownloadItem) {
     std::thread::spawn(move || {
-        for i in 0..6 {
+        // 10 lần × 600ms ≈ 6s — đủ cho taskkill /T giết cây tiến trình + Windows
+        // nhả khoá file, kể cả máy chậm. Thread nền, không chặn gì.
+        for i in 0..10 {
             if i > 0 {
-                std::thread::sleep(Duration::from_millis(400));
+                std::thread::sleep(Duration::from_millis(600));
             }
             cleanup_partials_inner(&item, true);
         }
