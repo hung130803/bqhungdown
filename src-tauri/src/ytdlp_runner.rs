@@ -594,11 +594,33 @@ fn hide_dir(path: &std::path::Path) {
     }
 }
 
+/// Cache buvid3 theo domain (tv/com) để KHÔNG xin mới mỗi lần tải. Dùng chung
+/// một "thiết bị" ổn định trông tự nhiên hơn (đỡ bị Bilibili đánh dấu bot) +
+/// giảm số request. Làm mới sau 30 phút.
+static BILI_BUVID_CACHE: std::sync::Mutex<Option<(bool, String, u64)>> =
+    std::sync::Mutex::new(None);
+
+fn now_secs_u64() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Lấy cookie `buvid3` từ Bilibili để yt-dlp qua tường lửa 412 khi tải.
 /// Đúng domain: bilibili.tv (bản quốc tế) vs bilibili.com. Đi qua proxy nếu
-/// có (bilibili.tv chặn theo vùng). Best-effort — None nếu không lấy được.
+/// có (bilibili.tv chặn theo vùng). Có cache 30 phút. Best-effort.
 async fn fetch_bilibili_buvid(url: &str, proxy: &Option<String>) -> Option<String> {
-    let home = if url.to_lowercase().contains("bilibili.tv") {
+    let is_tv = url.to_lowercase().contains("bilibili.tv");
+    // Trả từ cache nếu cùng domain và còn hạn (30 phút).
+    if let Ok(g) = BILI_BUVID_CACHE.lock() {
+        if let Some((cached_tv, ref val, ts)) = *g {
+            if cached_tv == is_tv && now_secs_u64().saturating_sub(ts) < 1800 {
+                return Some(val.clone());
+            }
+        }
+    }
+    let home = if is_tv {
         "https://www.bilibili.tv/en"
     } else {
         "https://www.bilibili.com/"
@@ -621,6 +643,10 @@ async fn fetch_bilibili_buvid(url: &str, proxy: &Option<String>) -> Option<Strin
             if let Some(rest) = s.strip_prefix("buvid3=") {
                 if let Some(val) = rest.split(';').next() {
                     if !val.is_empty() {
+                        // Lưu cache để lần tải sau dùng lại cùng buvid.
+                        if let Ok(mut g) = BILI_BUVID_CACHE.lock() {
+                            *g = Some((is_tv, val.to_string(), now_secs_u64()));
+                        }
                         return Some(val.to_string());
                     }
                 }
