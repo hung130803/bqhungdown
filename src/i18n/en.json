@@ -67,7 +67,7 @@
     "language": "Language",
     "clipboardWatcher": "Auto-detect links from clipboard",
     "notifications": "Show system notifications",
-    "aria2cEnabled": "aria2c boost — 16 parallel connections, much faster when throttled (recommended ON). If downloading very large channels and getting blocked often, you can try turning it off.",
+    "aria2cEnabled": "aria2c boost — 16 parallel connections (measured ~5x faster on large single-file videos; native mode can't parallelize a single file). Recommended ON.",
     "skipDownloaded": "Skip already-downloaded videos (no duplicates)",
     "skipDownloadedHint": "When re-fetching a channel, previously downloaded videos are hidden from the picker and show as \"Skipped\" in the queue. To re-download a skipped video, press \"⬇ Download anyway\" on that row. Turn this off to always download everything.",
     "cookiesBrowser": "Use cookies from browser",

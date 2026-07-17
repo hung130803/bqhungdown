@@ -281,13 +281,13 @@ fn migrate_po_token_default(settings: &mut Settings) {
     }
 }
 
-/// Migration CUỐI: chốt aria2c TẮT — dùng đa luồng native `-N 32` của yt-dlp
-/// (user xác nhận cách này mượt hơn aria2c mà vẫn nhanh). Chạy đúng 1 lần để
-/// gỡ mọi auto-bật của các bản trước; sau đó user tự bật lại thì tôn trọng.
+/// Migration CUỐI (có SỐ LIỆU): BẬT aria2c. Đo thực tế trên video DASH 1 file:
+/// aria2c ~58MB/s vs -N 32 native ~11MB/s (native không song song được với
+/// file liền). Chạy đúng 1 lần; sau đó user tự tắt thì được tôn trọng.
 fn migrate_aria2c_default(settings: &mut Settings) {
-    if !settings.aria2c_default_native {
-        settings.aria2c_enabled = false;
-        settings.aria2c_default_native = true;
+    if !settings.aria2c_speed_measured {
+        settings.aria2c_enabled = true;
+        settings.aria2c_speed_measured = true;
     }
 }
 
@@ -409,27 +409,27 @@ mod tests {
     }
 
     #[test]
-    fn native_multithread_default_aria2c_off_once() {
+    fn enables_aria2c_by_measurement_once() {
         let path = unique_tmp_path();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
 
-        // File bản trước tự bật aria2c (enabled=true, chưa default_native).
+        // File bản trước tắt aria2c (enabled=false, chưa speed_measured).
         let mut old = Settings::default();
-        old.aria2c_enabled = true;
-        old.aria2c_default_native = false;
+        old.aria2c_enabled = false;
+        old.aria2c_speed_measured = false;
         fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
 
         let (store, err) = SettingsStore::load(path.clone());
         assert!(err.is_none());
-        assert!(!store.get().aria2c_enabled, "migration cuối phải TẮT aria2c (dùng -N 32 native)");
-        assert!(store.get().aria2c_default_native);
+        assert!(store.get().aria2c_enabled, "migration cuối phải BẬT aria2c (đo được nhanh gấp ~5 lần)");
+        assert!(store.get().aria2c_speed_measured);
 
-        // User chủ động bật lại sau đó → được tôn trọng.
-        let mut on = store.get();
-        on.aria2c_enabled = true;
-        fs::write(&path, serde_json::to_string(&on).unwrap()).unwrap();
+        // User chủ động tắt sau đó → được tôn trọng.
+        let mut off = store.get();
+        off.aria2c_enabled = false;
+        fs::write(&path, serde_json::to_string(&off).unwrap()).unwrap();
         let (store2, _) = SettingsStore::load(path.clone());
-        assert!(store2.get().aria2c_enabled, "đã default_native → tôn trọng lựa chọn user");
+        assert!(!store2.get().aria2c_enabled, "đã speed_measured → tôn trọng lựa chọn user");
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
