@@ -122,16 +122,63 @@ fn norm_key(s: &str) -> String {
     s.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
 }
 
+/// Rút "khoá gốc" của một tên file yt-dlp: bỏ đuôi tạm (`.part`, `.ytdl`,
+/// `.aria2`, `.part-Frag*`, `.frag`, `.temp`), bỏ MÃ FORMAT `.f<digits>` và bỏ
+/// 1 phần mở rộng, rồi `norm_key`. Nhờ vậy các file của CÙNG một video —
+/// `Title.f401.mp4.part` (video), `Title.f251.webm` (audio), `Title.mp4.part`
+/// (đã gộp dở), `Title.mp4.part-Frag12` (mảnh) — đều rút về CÙNG một khoá
+/// "title". Dùng để so BẰNG NHAU với khoá lấy từ output_path thật của yt-dlp,
+/// nên khớp được cả khi tên quá dài bị yt-dlp cắt ngắn mà KHÔNG đụng video khác.
+fn base_key(name: &str) -> String {
+    let mut s = name.to_string();
+    // 1) Bỏ lặp các đuôi tạm ở cuối (có thể chồng: `.webm.part.aria2`).
+    loop {
+        let l = s.to_lowercase();
+        let before = s.len();
+        if let Some(i) = l.rfind(".part-") {
+            s.truncate(i);
+        } else if l.ends_with(".part") || l.ends_with(".ytdl") || l.ends_with(".frag") {
+            s.truncate(s.len() - 5);
+        } else if l.ends_with(".aria2") {
+            s.truncate(s.len() - 6);
+        } else if l.ends_with(".temp") {
+            s.truncate(s.len() - 5);
+        }
+        if s.len() == before {
+            break;
+        }
+    }
+    // 2) Bỏ 1 phần mở rộng cuối (vd .mp4/.m4a/.webm/.mkv).
+    if let Some(i) = s.rfind('.') {
+        let ext = &s[i + 1..];
+        if !ext.is_empty() && ext.len() <= 4 && ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+            s.truncate(i);
+        }
+    }
+    // 3) Bỏ mã format `.f<digits>` ở cuối (vd ".f401", ".f251").
+    let l = s.to_lowercase();
+    if let Some(i) = l.rfind(".f") {
+        let after = &l[i + 2..];
+        if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit()) {
+            s.truncate(i);
+        }
+    }
+    norm_key(&s)
+}
+
 fn cleanup_partials_inner(item: &DownloadItem, aggressive: bool) {
     let folder = &item.request.save_folder;
     let title_key = norm_key(&crate::filename_resolver::sanitize(&item.title));
-    let stem_key = item
+    // Khoá gốc lấy từ output_path THẬT của yt-dlp (đã rút bỏ .f<id>/đuôi tạm).
+    // Đây là "vân tay" chính xác của video này để so BẰNG NHAU, an toàn tuyệt
+    // đối với video khác kể cả khi tên bị cắt ngắn.
+    let out_base = item
         .output_path
         .as_ref()
-        .and_then(|p| p.file_stem())
+        .and_then(|p| p.file_name())
         .and_then(|s| s.to_str())
-        .map(norm_key)
-        .filter(|s| !s.is_empty());
+        .map(base_key)
+        .filter(|s| s.len() >= 6);
 
     // aggressive: nếu output_path trỏ tới 1 file TẠM (đuôi .part…), xoá nó.
     if aggressive {
@@ -152,9 +199,20 @@ fn cleanup_partials_inner(item: &DownloadItem, aggressive: bool) {
         if !is_ytdlp_temp_file(name) {
             return false;
         }
-        let k = norm_key(name);
-        (want.len() >= 6 && k.starts_with(&want))
-            || stem_key.as_deref().map(|s| s.len() >= 6 && k.starts_with(s)).unwrap_or(false)
+        // (a) Khớp theo TITLE (1 chiều, chống xoá nhầm): tên file bắt đầu bằng
+        //     nguyên khoá title. An toàn vì đòi khớp đủ cả title.
+        if want.len() >= 6 && norm_key(name).starts_with(&want) {
+            return true;
+        }
+        // (b) Khớp "vân tay" BẰNG NHAU với output_path thật: xử lý được file
+        //     audio/video trung gian (.f251/.f401) và cả tên bị cắt ngắn, mà
+        //     KHÔNG bao giờ trùng video khác (đòi base_key bằng đúng nhau).
+        if let Some(ref ob) = out_base {
+            if base_key(name) == *ob {
+                return true;
+            }
+        }
+        false
     };
 
     for dir in [folder.clone(), folder.join(".bqd-temp")] {
@@ -1153,29 +1211,46 @@ mod tests {
     }
 
     #[test]
+    fn base_key_reduces_all_streams_to_same_title() {
+        // Video-only, audio-only, mảnh, đã-gộp-dở → cùng 1 khoá gốc.
+        assert_eq!(base_key("They Told Us….f401.mp4.part"), base_key("They Told Us….f251.webm.part"));
+        assert_eq!(base_key("Clip.f137.mp4"), base_key("Clip.mp4.part"));
+        assert_eq!(base_key("Clip.mp4.part-Frag12"), base_key("Clip.webm.part"));
+        // Video khác → khoá khác.
+        assert_ne!(base_key("Clip A.f401.mp4.part"), base_key("Clip B.f401.mp4.part"));
+    }
+
+    #[test]
     fn cleanup_removes_only_this_items_temp_files() {
         let dir = std::env::temp_dir().join(format!("bqd-cleanup-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0)));
         std::fs::create_dir_all(&dir).unwrap();
         let touch = |name: &str| std::fs::write(dir.join(name), b"x").unwrap();
 
-        // File TẠM của mục này → phải bị xoá.
-        touch("My Great Video.mp4.part");
-        touch("My Great Video.f137.mp4");
-        touch("My Great Video.mp4.part-Frag12");
-        // Video HOÀN CHỈNH của mục này → TUYỆT ĐỐI giữ lại.
-        touch("My Great Video.mp4");
-        // File TẠM của VIDEO KHÁC → không được đụng vào.
-        touch("Another Different Clip.mp4.part");
+        // Kịch bản THẬT: yt-dlp tải video-only trước (.f401), rồi audio-only
+        // (.f251); huỷ giữa chừng để lại cả hai + mảnh. Title có ký tự "…".
+        touch("They Told Us the WRONG Weight….f401.mp4");        // video-only đã xong (temp)
+        touch("They Told Us the WRONG Weight….f251.webm.part");  // audio-only đang tải
+        touch("They Told Us the WRONG Weight….mp4.part-Frag8");  // mảnh
+        touch("They Told Us the WRONG Weight….mp4.part");        // file gộp dở
+        // Video HOÀN CHỈNH của mục này → TUYỆT ĐỐI giữ.
+        touch("They Told Us the WRONG Weight….mp4");
+        // Video KHÁC (cùng vài chữ đầu) → KHÔNG được đụng.
+        touch("They Told A Completely Different Story.mp4.part");
+        touch("Another Clip.f401.mp4.part");
 
-        let item = mk_item(&dir, "My Great Video", Some("My Great Video.mp4.part"));
+        // output_path = luồng yt-dlp đang ghi (audio-only), như thực tế.
+        let item = mk_item(&dir, "They Told Us the WRONG Weight…",
+            Some("They Told Us the WRONG Weight….f251.webm"));
         cleanup_partials_inner(&item, true);
 
         let exists = |n: &str| dir.join(n).exists();
-        assert!(!exists("My Great Video.mp4.part"), "file .part phải bị xoá");
-        assert!(!exists("My Great Video.f137.mp4"), "file .f137 phải bị xoá");
-        assert!(!exists("My Great Video.mp4.part-Frag12"), "mảnh Frag phải bị xoá");
-        assert!(exists("My Great Video.mp4"), "video hoàn chỉnh phải được GIỮ");
-        assert!(exists("Another Different Clip.mp4.part"), "file của video KHÁC không được đụng");
+        assert!(!exists("They Told Us the WRONG Weight….f401.mp4"), "video-only phải bị xoá");
+        assert!(!exists("They Told Us the WRONG Weight….f251.webm.part"), "audio-only phải bị xoá");
+        assert!(!exists("They Told Us the WRONG Weight….mp4.part-Frag8"), "mảnh phải bị xoá");
+        assert!(!exists("They Told Us the WRONG Weight….mp4.part"), "file gộp dở phải bị xoá");
+        assert!(exists("They Told Us the WRONG Weight….mp4"), "video hoàn chỉnh phải được GIỮ");
+        assert!(exists("They Told A Completely Different Story.mp4.part"), "video KHÁC không được đụng");
+        assert!(exists("Another Clip.f401.mp4.part"), "video KHÁC không được đụng");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
