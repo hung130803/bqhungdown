@@ -4,6 +4,7 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import * as cmd from "@/ipc/commands";
 import type { Settings, Theme, Language } from "@/types/models";
 import { setLanguage } from "@/i18n";
+import { UpdateSection } from "@/components/UpdateSection";
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -149,6 +150,8 @@ export function SettingsPage() {
   return (
     <div className="max-w-2xl mx-auto space-y-5">
       <h2 className="text-xl font-medium text-fg">{t("settings.title")}</h2>
+
+      <UpdateSection />
 
       <Field label={t("settings.maxConcurrency")}>
         <input
