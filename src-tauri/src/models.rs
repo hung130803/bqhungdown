@@ -364,9 +364,9 @@ pub struct Settings {
     pub language: Language,
     pub clipboard_watcher: bool,
     pub notifications: bool,
-    /// aria2c BẬT mặc định — ĐÃ ĐO: video DASH 1 file liền chỉ tải nhanh khi
-    /// có aria2c (xé 16 luồng song song ~58MB/s) vì `-N 32` native KHÔNG song
-    /// song được với file liền (~11MB/s, bị bóp 1 luồng). User tự tắt được.
+    /// aria2c TẮT mặc định — user thích đa luồng NATIVE `-N 32` (video HLS
+    /// nhiều mảnh tải song song rất nhanh + hiện nhiều file như "kiểu cũ").
+    /// aria2c là tuỳ chọn cho video DASH 1 file lớn bị bóp băng thông.
     pub aria2c_enabled: bool,
     /// (CŨ) các cờ migration aria2c đời trước — giữ để đọc file cũ, không dùng.
     #[serde(default)]
@@ -377,10 +377,12 @@ pub struct Settings {
     pub aria2c_speed_restored: bool,
     #[serde(default)]
     pub aria2c_default_native: bool,
-    /// Migration CUỐI (có số liệu): BẬT aria2c — đo thực tế nhanh gấp ~5 lần
-    /// trên video DASH 1 file. Chạy 1 lần; sau đó user tự tắt thì tôn trọng.
     #[serde(default)]
     pub aria2c_speed_measured: bool,
+    /// Migration CHỐT theo user: TẮT aria2c, dùng `-N 32` native (user xác nhận
+    /// nhanh hơn cho video HLS). Chạy 1 lần; sau đó user tự bật lại thì tôn trọng.
+    #[serde(default)]
+    pub aria2c_user_native: bool,
     /// Khi != None, yt-dlp được chạy với `--cookies-from-browser <name>`.
     /// Cần cho các site chặn bot mạnh: Douyin, Bilibili, các site châu Á, hay
     /// video YouTube giới hạn tuổi. None = không gửi cookies (mặc định).
@@ -468,12 +470,13 @@ impl Default for Settings {
             language: Language::Vi,
             clipboard_watcher: true,
             notifications: true,
-            aria2c_enabled: true,
+            aria2c_enabled: false,
             aria2c_migrated: true,
             aria2c_reverted: true,
             aria2c_speed_restored: true,
             aria2c_default_native: true,
             aria2c_speed_measured: true,
+            aria2c_user_native: true,
             cookies_browser: None,
             cookies_file: None,
             skip_downloaded: true,
