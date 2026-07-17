@@ -421,6 +421,19 @@ impl YtDlpRunner {
                 _ = cancel.cancelled() => {
                     let _ = child.kill();
                     cancelled = true;
+                    // Đợi tiến trình yt-dlp/ffmpeg chết HẲN trước khi trả về:
+                    // trên Windows tiến trình vừa kill còn giữ khoá file `.part`
+                    // thêm chốc lát → nếu dọn ngay sẽ "file đang được dùng" và
+                    // xoá hụt. Chờ tối đa 5s cho sự kiện Terminated (hoặc kênh
+                    // đóng) rồi mới thoát vòng lặp.
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        async {
+                            while let Some(ev) = rx.recv().await {
+                                if matches!(ev, CommandEvent::Terminated(_)) { break; }
+                            }
+                        },
+                    ).await;
                     break;
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {

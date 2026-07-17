@@ -64,8 +64,20 @@ pub fn cleanup_partials(item: &DownloadItem) {
     cleanup_partials_inner(item, false);
 }
 
-pub fn cleanup_partials_aggressive(item: &DownloadItem) {
-    cleanup_partials_inner(item, true);
+/// Dọn file tạm BỀN BỈ khi huỷ/xoá: chạy trên thread riêng và thử lại nhiều
+/// lần cách nhau ngắn. Lý do: tiến trình yt-dlp/ffmpeg vừa bị kill có thể còn
+/// giữ khoá file `.part` thêm chốc lát trên Windows → lần xoá đầu trượt, lần
+/// sau ăn. Không chặn caller nên KHÔNG ảnh hưởng tốc độ tải; chỉ đụng file tạm
+/// đúng của mục này (khớp tên) nên KHÔNG ảnh hưởng video khác.
+pub fn cleanup_partials_retry(item: DownloadItem) {
+    std::thread::spawn(move || {
+        for i in 0..6 {
+            if i > 0 {
+                std::thread::sleep(Duration::from_millis(400));
+            }
+            cleanup_partials_inner(&item, true);
+        }
+    });
 }
 
 /// True nếu tên file là file TẠM của yt-dlp (đang tải dở), KHÔNG phải video
@@ -369,8 +381,8 @@ impl QueueManager {
         {
             let mut map = self.items.write().unwrap();
             for id in &ids {
-                if let Some(it) = map.get(id) {
-                    cleanup_partials_aggressive(it);
+                if let Some(it) = map.get(id).cloned() {
+                    cleanup_partials_retry(it);
                 }
                 map.shift_remove(id);
             }
@@ -462,9 +474,13 @@ impl QueueManager {
             tok.cancel();
         }
         let removed = self.items.write().unwrap().shift_remove(id);
-        if removed.is_none() {
+        let Some(item) = removed else {
             return Err(AppError::NotFound(id.to_string()));
-        }
+        };
+        // Xoá SẠCH file tải dở của mục vừa bị xoá. Bản cũ KHÔNG dọn ở đây → khi
+        // xoá 1 mục đang tải, file `.part`/mảnh bị mồ côi. Bản bền bỉ thử lại
+        // vài lần (chờ tiến trình nhả khoá) và chỉ khớp đúng file của mục này.
+        cleanup_partials_retry(item);
         self.emit_queue_updated();
         Ok(())
     }
@@ -912,7 +928,7 @@ impl QueueManager {
                 if let Some(it) = snap {
                     // Dọn cache rác khi cancel (đảm bảo state == Cancelled, không phải Paused).
                     if matches!(it.state, DownloadState::Cancelled) {
-                        cleanup_partials_aggressive(&it);
+                        cleanup_partials_retry(it.clone());
                     }
                     self.emit_state(&it);
                     self.emit_queue_updated();
@@ -1099,6 +1115,69 @@ mod tests {
         assert!(!is_ytdlp_temp_file("clip.for.you.mp4"), "\".f\" trong \"for\" KHÔNG được coi là file tạm");
         assert!(!is_ytdlp_temp_file("My.Final.Cut.mp4"));
         assert!(!is_ytdlp_temp_file("movie.flv"));
+    }
+
+    fn mk_item(folder: &std::path::Path, title: &str, output: Option<&str>) -> DownloadItem {
+        use crate::models::{ConflictPolicy, DownloadMode, DownloadRequest};
+        DownloadItem {
+            short_id: "id1".into(),
+            request: DownloadRequest {
+                url: "https://www.youtube.com/watch?v=abc".into(),
+                mode: DownloadMode::Video,
+                format_id: None,
+                save_folder: folder.to_path_buf(),
+                sub_langs: vec![],
+                auto_translate_to: None,
+                on_conflict: ConflictPolicy::Ask,
+                use_aria2c: false,
+                playlist_all: false,
+                polite: false,
+                force_redownload: false,
+            },
+            title: title.into(),
+            thumbnail: None,
+            channel: None,
+            extractor: "youtube".into(),
+            state: Cancelled,
+            bytes_downloaded: 0,
+            bytes_total: None,
+            speed_bps: None,
+            eta_sec: None,
+            attempt: 0,
+            bot_retries: 0,
+            error_message: None,
+            output_path: output.map(|o| folder.join(o)),
+            created_at: Utc::now(),
+            finished_at: None,
+        }
+    }
+
+    #[test]
+    fn cleanup_removes_only_this_items_temp_files() {
+        let dir = std::env::temp_dir().join(format!("bqd-cleanup-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let touch = |name: &str| std::fs::write(dir.join(name), b"x").unwrap();
+
+        // File TẠM của mục này → phải bị xoá.
+        touch("My Great Video.mp4.part");
+        touch("My Great Video.f137.mp4");
+        touch("My Great Video.mp4.part-Frag12");
+        // Video HOÀN CHỈNH của mục này → TUYỆT ĐỐI giữ lại.
+        touch("My Great Video.mp4");
+        // File TẠM của VIDEO KHÁC → không được đụng vào.
+        touch("Another Different Clip.mp4.part");
+
+        let item = mk_item(&dir, "My Great Video", Some("My Great Video.mp4.part"));
+        cleanup_partials_inner(&item, true);
+
+        let exists = |n: &str| dir.join(n).exists();
+        assert!(!exists("My Great Video.mp4.part"), "file .part phải bị xoá");
+        assert!(!exists("My Great Video.f137.mp4"), "file .f137 phải bị xoá");
+        assert!(!exists("My Great Video.mp4.part-Frag12"), "mảnh Frag phải bị xoá");
+        assert!(exists("My Great Video.mp4"), "video hoàn chỉnh phải được GIỮ");
+        assert!(exists("Another Different Clip.mp4.part"), "file của video KHÁC không được đụng");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
