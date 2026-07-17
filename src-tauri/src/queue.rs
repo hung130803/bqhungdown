@@ -101,18 +101,25 @@ fn is_ytdlp_temp_file(name: &str) -> bool {
 /// SỬA LỖI NGHIÊM TRỌNG (từng xoá cả trăm video): bản cũ ở chế độ aggressive
 /// xoá MỌI file cùng tiền tố tên (kênh rap battle cùng tên → mất sạch), và
 /// mẫu `.f` khớp bừa. Giờ chỉ đụng file tạm thật sự.
+/// Chuẩn hoá tên để so "mềm": bỏ ký tự không phải chữ/số, viết thường. Nhờ vậy
+/// khớp được dù dấu `'`, `!`, khoảng trắng bị sanitize khác nhau (đây là lý do
+/// trước hay sót file `.part-Frag`).
+fn norm_key(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
+}
+
 fn cleanup_partials_inner(item: &DownloadItem, aggressive: bool) {
     let folder = &item.request.save_folder;
-    let title_prefix = crate::filename_resolver::sanitize(&item.title);
-    let path_stem = item
+    let title_key = norm_key(&crate::filename_resolver::sanitize(&item.title));
+    let stem_key = item
         .output_path
         .as_ref()
         .and_then(|p| p.file_stem())
         .and_then(|s| s.to_str())
-        .map(String::from);
+        .map(norm_key)
+        .filter(|s| !s.is_empty());
 
     // aggressive: nếu output_path trỏ tới 1 file TẠM (đuôi .part…), xoá nó.
-    // Nếu output_path là video hoàn chỉnh (.mp4/.mp3…) → KHÔNG đụng.
     if aggressive {
         if let Some(ref p) = item.output_path {
             if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
@@ -123,27 +130,30 @@ fn cleanup_partials_inner(item: &DownloadItem, aggressive: bool) {
         }
     }
 
-    let entries = match std::fs::read_dir(folder) {
-        Ok(e) => e,
-        Err(_) => return,
+    // Quét CẢ thư mục đích LẪN thư mục tạm ẩn `.bqd-temp` (nơi bản mới để file
+    // tạm). So tên "mềm" (norm_key) để bắt hết dù dấu đặc biệt bị đổi.
+    // Prefix cần đủ dài (>=6) để không xoá nhầm video khác cùng đầu tên.
+    let want = title_key.clone();
+    let matches = |name: &str| -> bool {
+        if !is_ytdlp_temp_file(name) {
+            return false;
+        }
+        let k = norm_key(name);
+        (want.len() >= 6 && k.starts_with(&want))
+            || stem_key.as_deref().map(|s| s.len() >= 6 && k.starts_with(s)).unwrap_or(false)
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = match entry.file_name().into_string() {
-            Ok(s) => s,
+
+    for dir in [folder.clone(), folder.join(".bqd-temp")] {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
             Err(_) => continue,
         };
-        // BẮT BUỘC là file tạm — không bao giờ xoá file hoàn chỉnh dù trùng tên.
-        if !is_ytdlp_temp_file(&name) {
-            continue;
-        }
-        let matches_prefix = (!title_prefix.is_empty() && name.starts_with(&title_prefix))
-            || path_stem
-                .as_deref()
-                .map(|s| !s.is_empty() && name.starts_with(s))
-                .unwrap_or(false);
-        if matches_prefix {
-            let _ = std::fs::remove_file(&path);
+        for entry in entries.flatten() {
+            if let Ok(name) = entry.file_name().into_string() {
+                if matches(&name) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
         }
     }
 }
@@ -1085,6 +1095,18 @@ mod tests {
         assert!(!is_ytdlp_temp_file("clip.for.you.mp4"), "\".f\" trong \"for\" KHÔNG được coi là file tạm");
         assert!(!is_ytdlp_temp_file("My.Final.Cut.mp4"));
         assert!(!is_ytdlp_temp_file("movie.flv"));
+    }
+
+    #[test]
+    fn norm_key_matches_despite_special_chars() {
+        // Tên tập thật + mảnh fragment có dấu ' và ! — so "mềm" phải khớp.
+        let title = "Turning Unc's Tv Off With a Different Remote!";
+        let frag = "Turning Uncs Tv Off With a Different Remote.mp4.part-Frag176";
+        let tkey = norm_key(title);
+        assert!(tkey.len() >= 6);
+        assert!(norm_key(frag).starts_with(&tkey), "phải khớp dù khác dấu ' !");
+        // Video khác đầu tên → KHÔNG khớp (không xoá nhầm).
+        assert!(!norm_key("Completely Different Video.mp4.part").starts_with(&tkey));
     }
 
     #[test]
