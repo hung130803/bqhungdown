@@ -78,8 +78,10 @@ pub fn cleanup_partials_aggressive(item: &DownloadItem) {
 /// `.f` theo sau bởi CHỮ SỐ.
 fn is_ytdlp_temp_file(name: &str) -> bool {
     let l = name.to_lowercase();
+    // `.aria2` = file điều khiển của aria2c (song hành file .part khi tải đa luồng).
     if l.ends_with(".part") || l.ends_with(".ytdl") || l.ends_with(".frag")
-        || l.contains(".part-") || l.contains(".temp.")
+        || l.ends_with(".aria2") || l.contains(".part-") || l.contains(".temp.")
+        || l.contains(".part.aria2")
     {
         return true;
     }
@@ -1087,6 +1089,8 @@ mod tests {
         assert!(is_ytdlp_temp_file("GEECHI GOTTI vs JOEY.mp4.part-Frag238"));
         assert!(is_ytdlp_temp_file("clip.temp.mp4"));
         assert!(is_ytdlp_temp_file("seg.frag"));
+        assert!(is_ytdlp_temp_file("video.mp4.aria2"), "file dieu khien aria2c");
+        assert!(is_ytdlp_temp_file("video.f251.webm.part.aria2"));
 
         // Video HOÀN CHỈNH → false (TUYỆT ĐỐI không được dọn).
         assert!(!is_ytdlp_temp_file("GEECHI GOTTI vs JOEY LINWOOD Rap Battle BMBL.mp4"));

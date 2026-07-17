@@ -67,7 +67,7 @@
     "language": "Ngôn ngữ",
     "clipboardWatcher": "Tự động phát hiện liên kết từ clipboard",
     "notifications": "Hiện thông báo hệ thống",
-    "aria2cEnabled": "Tăng tốc aria2c — 16 kết nối song song. CHỈ nên bật khi tải 1-2 video LỚN bị chậm. Tải cả kênh (nhiều video) thì TẮT (bật dễ bị YouTube chặn + tiến độ giật)",
+    "aria2cEnabled": "Tăng tốc aria2c — tải 16 luồng song song, nhanh gấp nhiều lần khi bị bóp băng thông (nên BẬT). Nếu tải cả kênh RẤT nhiều video mà hay bị chặn, có thể thử tắt.",
     "skipDownloaded": "Bỏ qua video đã tải (không tải trùng)",
     "skipDownloadedHint": "Khi tải lại 1 kênh, video đã tải xong trước đó sẽ bị ẩn khỏi danh sách chọn và hiện \"Bỏ qua\" trong hàng đợi. Muốn tải lại 1 video bị bỏ qua: bấm nút \"⬇ Vẫn tải video này\" ngay trên mục đó. Tắt công tắc này = luôn tải hết, kể cả trùng.",
     "cookiesBrowser": "Lấy cookies từ trình duyệt",

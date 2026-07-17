@@ -364,16 +364,19 @@ pub struct Settings {
     pub language: Language,
     pub clipboard_watcher: bool,
     pub notifications: bool,
+    /// aria2c BẬT mặc định — tải đa luồng (16 kết nối), nhanh gấp nhiều lần khi
+    /// YouTube bóp từng kết nối. (Từng thử tắt vì tưởng gây lỗi tải-cả-kênh,
+    /// nhưng lỗi đó do nguyên nhân khác; tắt aria2c chỉ làm CHẬM 40 lần → bật lại.)
     pub aria2c_enabled: bool,
-    /// (CŨ) Migration bật aria2c — HOÁ RA SAI: aria2c mở 16 kết nối/video làm
-    /// tải cả kênh (hàng trăm video) bị YouTube chặn NHIỀU hơn + thanh tiến độ
-    /// giật. Giữ field để đọc file cũ; không dùng nữa.
+    /// (CŨ) các cờ migration aria2c đời trước — giữ để đọc file cũ, không dùng.
     #[serde(default)]
     pub aria2c_migrated: bool,
-    /// Migration ĐẢO NGƯỢC một lần: tắt lại aria2c cho ai đã bị bản trước tự
-    /// bật (mặc định aria2c nên TẮT — chỉ bật thủ công khi tải 1-2 video lớn).
     #[serde(default)]
     pub aria2c_reverted: bool,
+    /// Migration một lần: BẬT LẠI aria2c (khôi phục tốc độ) cho ai đã bị bản
+    /// v0.1.70 tắt nhầm. Sau đó user tự tắt thì được tôn trọng.
+    #[serde(default)]
+    pub aria2c_speed_restored: bool,
     /// Khi != None, yt-dlp được chạy với `--cookies-from-browser <name>`.
     /// Cần cho các site chặn bot mạnh: Douyin, Bilibili, các site châu Á, hay
     /// video YouTube giới hạn tuổi. None = không gửi cookies (mặc định).
@@ -461,9 +464,10 @@ impl Default for Settings {
             language: Language::Vi,
             clipboard_watcher: true,
             notifications: true,
-            aria2c_enabled: false,
+            aria2c_enabled: true,
             aria2c_migrated: true,
             aria2c_reverted: true,
+            aria2c_speed_restored: true,
             cookies_browser: None,
             cookies_file: None,
             skip_downloaded: true,

@@ -281,15 +281,14 @@ fn migrate_po_token_default(settings: &mut Settings) {
     }
 }
 
-/// Migration ĐẢO NGƯỢC một lần: TẮT lại aria2c. Bản trước (v0.1.46) tự bật
-/// aria2c cho mọi người, nhưng thực tế nó làm tải cả kênh (hàng trăm video)
-/// bị YouTube chặn nhiều hơn + thanh tiến độ giật/đơ. Mặc định aria2c nên
-/// TẮT — chỉ bật thủ công khi tải 1-2 video lớn trên IP bị bóp băng thông.
-/// Chạy đúng 1 lần; sau đó user tự bật lại thì được tôn trọng.
+/// Migration một lần: BẬT LẠI aria2c để khôi phục tốc độ. Bản v0.1.70 tắt
+/// aria2c (tưởng nó gây lỗi tải-cả-kênh) — hoá ra lỗi do nguyên nhân khác,
+/// còn tắt aria2c làm CHẬM tới 40 lần khi YouTube bóp từng kết nối. Bật lại
+/// đúng 1 lần; sau đó user tự tắt thì được tôn trọng.
 fn migrate_aria2c_default(settings: &mut Settings) {
-    if !settings.aria2c_reverted {
-        settings.aria2c_enabled = false;
-        settings.aria2c_reverted = true;
+    if !settings.aria2c_speed_restored {
+        settings.aria2c_enabled = true;
+        settings.aria2c_speed_restored = true;
     }
 }
 
@@ -411,27 +410,27 @@ mod tests {
     }
 
     #[test]
-    fn reverts_aria2c_to_off_once() {
+    fn restores_aria2c_speed_once() {
         let path = unique_tmp_path();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
 
-        // File bị bản v0.1.46 tự bật aria2c (enabled=true, chưa reverted).
+        // File bị v0.1.70 tắt aria2c (enabled=false, chưa speed_restored).
         let mut old = Settings::default();
-        old.aria2c_enabled = true;
-        old.aria2c_reverted = false;
+        old.aria2c_enabled = false;
+        old.aria2c_speed_restored = false;
         fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
 
         let (store, err) = SettingsStore::load(path.clone());
         assert!(err.is_none());
-        assert!(!store.get().aria2c_enabled, "migration đảo ngược phải TẮT aria2c");
-        assert!(store.get().aria2c_reverted);
+        assert!(store.get().aria2c_enabled, "migration phải BẬT LẠI aria2c (khôi phục tốc độ)");
+        assert!(store.get().aria2c_speed_restored);
 
-        // User chủ động bật lại sau đó → được tôn trọng (không tắt nữa).
-        let mut on = store.get();
-        on.aria2c_enabled = true;
-        fs::write(&path, serde_json::to_string(&on).unwrap()).unwrap();
+        // User chủ động tắt sau đó → được tôn trọng (không bật lại nữa).
+        let mut off = store.get();
+        off.aria2c_enabled = false;
+        fs::write(&path, serde_json::to_string(&off).unwrap()).unwrap();
         let (store2, _) = SettingsStore::load(path.clone());
-        assert!(store2.get().aria2c_enabled, "đã reverted → tôn trọng lựa chọn user");
+        assert!(!store2.get().aria2c_enabled, "đã restored → tôn trọng lựa chọn user");
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
