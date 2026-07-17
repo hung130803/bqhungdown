@@ -364,19 +364,22 @@ pub struct Settings {
     pub language: Language,
     pub clipboard_watcher: bool,
     pub notifications: bool,
-    /// aria2c BẬT mặc định — tải đa luồng (16 kết nối), nhanh gấp nhiều lần khi
-    /// YouTube bóp từng kết nối. (Từng thử tắt vì tưởng gây lỗi tải-cả-kênh,
-    /// nhưng lỗi đó do nguyên nhân khác; tắt aria2c chỉ làm CHẬM 40 lần → bật lại.)
+    /// aria2c mặc định TẮT — app dùng đa luồng NATIVE của yt-dlp (`-N 32`),
+    /// nhanh tương đương mà mượt hơn (thanh tiến độ êm, ít lỗi khi tải cả kênh).
+    /// aria2c là TUỲ CHỌN cho ai muốn thử; user tự bật trong Cài đặt.
     pub aria2c_enabled: bool,
     /// (CŨ) các cờ migration aria2c đời trước — giữ để đọc file cũ, không dùng.
     #[serde(default)]
     pub aria2c_migrated: bool,
     #[serde(default)]
     pub aria2c_reverted: bool,
-    /// Migration một lần: BẬT LẠI aria2c (khôi phục tốc độ) cho ai đã bị bản
-    /// v0.1.70 tắt nhầm. Sau đó user tự tắt thì được tôn trọng.
     #[serde(default)]
     pub aria2c_speed_restored: bool,
+    /// Migration CUỐI: chốt aria2c TẮT (dùng -N 32 native — user xác nhận cách
+    /// này mượt hơn). Chạy 1 lần gỡ mọi auto-bật của các bản trước; sau đó user
+    /// tự bật lại thì được tôn trọng.
+    #[serde(default)]
+    pub aria2c_default_native: bool,
     /// Khi != None, yt-dlp được chạy với `--cookies-from-browser <name>`.
     /// Cần cho các site chặn bot mạnh: Douyin, Bilibili, các site châu Á, hay
     /// video YouTube giới hạn tuổi. None = không gửi cookies (mặc định).
@@ -464,10 +467,11 @@ impl Default for Settings {
             language: Language::Vi,
             clipboard_watcher: true,
             notifications: true,
-            aria2c_enabled: true,
+            aria2c_enabled: false,
             aria2c_migrated: true,
             aria2c_reverted: true,
             aria2c_speed_restored: true,
+            aria2c_default_native: true,
             cookies_browser: None,
             cookies_file: None,
             skip_downloaded: true,

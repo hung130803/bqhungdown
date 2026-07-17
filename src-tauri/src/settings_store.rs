@@ -281,14 +281,13 @@ fn migrate_po_token_default(settings: &mut Settings) {
     }
 }
 
-/// Migration một lần: BẬT LẠI aria2c để khôi phục tốc độ. Bản v0.1.70 tắt
-/// aria2c (tưởng nó gây lỗi tải-cả-kênh) — hoá ra lỗi do nguyên nhân khác,
-/// còn tắt aria2c làm CHẬM tới 40 lần khi YouTube bóp từng kết nối. Bật lại
-/// đúng 1 lần; sau đó user tự tắt thì được tôn trọng.
+/// Migration CUỐI: chốt aria2c TẮT — dùng đa luồng native `-N 32` của yt-dlp
+/// (user xác nhận cách này mượt hơn aria2c mà vẫn nhanh). Chạy đúng 1 lần để
+/// gỡ mọi auto-bật của các bản trước; sau đó user tự bật lại thì tôn trọng.
 fn migrate_aria2c_default(settings: &mut Settings) {
-    if !settings.aria2c_speed_restored {
-        settings.aria2c_enabled = true;
-        settings.aria2c_speed_restored = true;
+    if !settings.aria2c_default_native {
+        settings.aria2c_enabled = false;
+        settings.aria2c_default_native = true;
     }
 }
 
@@ -410,27 +409,27 @@ mod tests {
     }
 
     #[test]
-    fn restores_aria2c_speed_once() {
+    fn native_multithread_default_aria2c_off_once() {
         let path = unique_tmp_path();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
 
-        // File bị v0.1.70 tắt aria2c (enabled=false, chưa speed_restored).
+        // File bản trước tự bật aria2c (enabled=true, chưa default_native).
         let mut old = Settings::default();
-        old.aria2c_enabled = false;
-        old.aria2c_speed_restored = false;
+        old.aria2c_enabled = true;
+        old.aria2c_default_native = false;
         fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
 
         let (store, err) = SettingsStore::load(path.clone());
         assert!(err.is_none());
-        assert!(store.get().aria2c_enabled, "migration phải BẬT LẠI aria2c (khôi phục tốc độ)");
-        assert!(store.get().aria2c_speed_restored);
+        assert!(!store.get().aria2c_enabled, "migration cuối phải TẮT aria2c (dùng -N 32 native)");
+        assert!(store.get().aria2c_default_native);
 
-        // User chủ động tắt sau đó → được tôn trọng (không bật lại nữa).
-        let mut off = store.get();
-        off.aria2c_enabled = false;
-        fs::write(&path, serde_json::to_string(&off).unwrap()).unwrap();
+        // User chủ động bật lại sau đó → được tôn trọng.
+        let mut on = store.get();
+        on.aria2c_enabled = true;
+        fs::write(&path, serde_json::to_string(&on).unwrap()).unwrap();
         let (store2, _) = SettingsStore::load(path.clone());
-        assert!(!store2.get().aria2c_enabled, "đã restored → tôn trọng lựa chọn user");
+        assert!(store2.get().aria2c_enabled, "đã default_native → tôn trọng lựa chọn user");
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
