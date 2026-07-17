@@ -364,9 +364,11 @@ pub struct Settings {
     pub language: Language,
     pub clipboard_watcher: bool,
     pub notifications: bool,
-    /// aria2c TẮT mặc định — user thích đa luồng NATIVE `-N 32` (video HLS
-    /// nhiều mảnh tải song song rất nhanh + hiện nhiều file như "kiểu cũ").
-    /// aria2c là tuỳ chọn cho video DASH 1 file lớn bị bóp băng thông.
+    /// aria2c TẮT mặc định — khôi phục ĐÚNG cấu hình v0.1.77 (user xác nhận
+    /// "nhanh nhất, cực kỳ nhanh"). v0.1.77 = aria2c TẮT + KHÔNG `proto` trong
+    /// sort → native `-N 32` xé song song video HLS nhiều mảnh = nhanh. Thủ phạm
+    /// làm chậm là `proto` (thêm ở v0.1.80) ép video thành DASH 1 file → `-N`
+    /// vô dụng — đã gỡ. aria2c chỉ là tuỳ chọn cho ai muốn, không bật mặc định.
     pub aria2c_enabled: bool,
     /// (CŨ) các cờ migration aria2c đời trước — giữ để đọc file cũ, không dùng.
     #[serde(default)]
@@ -379,10 +381,15 @@ pub struct Settings {
     pub aria2c_default_native: bool,
     #[serde(default)]
     pub aria2c_speed_measured: bool,
-    /// Migration CHỐT theo user: TẮT aria2c, dùng `-N 32` native (user xác nhận
-    /// nhanh hơn cho video HLS). Chạy 1 lần; sau đó user tự bật lại thì tôn trọng.
+    /// (CŨ) migration TẮT aria2c đời trước — giữ để đọc file cũ, không dùng.
     #[serde(default)]
     pub aria2c_user_native: bool,
+    /// Migration CHỐT (2026-07-17): ÉP TẮT aria2c 1 lần cho mọi file settings cũ
+    /// — khôi phục đúng v0.1.77 (native `-N 32`, user xác nhận "nhanh nhất").
+    /// Cần thiết vì ai lỡ cài v0.1.86 (aria2c bật) sẽ còn aria2c=true trên đĩa.
+    /// Sau lần này, user tự bật lại trong Cài đặt thì được tôn trọng.
+    #[serde(default)]
+    pub aria2c_speed_final: bool,
     /// Khi != None, yt-dlp được chạy với `--cookies-from-browser <name>`.
     /// Cần cho các site chặn bot mạnh: Douyin, Bilibili, các site châu Á, hay
     /// video YouTube giới hạn tuổi. None = không gửi cookies (mặc định).
@@ -477,6 +484,7 @@ impl Default for Settings {
             aria2c_default_native: true,
             aria2c_speed_measured: true,
             aria2c_user_native: true,
+            aria2c_speed_final: true,
             cookies_browser: None,
             cookies_file: None,
             skip_downloaded: true,

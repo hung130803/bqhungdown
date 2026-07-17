@@ -281,13 +281,16 @@ fn migrate_po_token_default(settings: &mut Settings) {
     }
 }
 
-/// Migration CHỐT theo yêu cầu user: TẮT aria2c, dùng `-N 32` native (user
-/// xác nhận nhanh hơn cho video HLS + thích "kiểu cũ" hiện nhiều file). Chạy
-/// đúng 1 lần; sau đó user tự bật lại aria2c thì được tôn trọng.
+/// Migration CHỐT (2026-07-17): ÉP TẮT aria2c đúng 1 lần cho mọi file settings
+/// cũ — khôi phục đúng v0.1.77 mà user xác nhận "nhanh nhất, cực kỳ nhanh".
+/// v0.1.77 = aria2c TẮT + KHÔNG `proto` trong sort → native `-N 32` xé song song
+/// video HLS = nhanh. Thủ phạm làm chậm là `proto` (thêm v0.1.80, ép DASH 1 file
+/// khiến `-N` vô dụng) — đã gỡ. Cần ép tắt vì ai lỡ cài v0.1.86 (aria2c bật) sẽ
+/// còn aria2c=true trên đĩa. Sau lần này, user tự bật lại thì được tôn trọng.
 fn migrate_aria2c_default(settings: &mut Settings) {
-    if !settings.aria2c_user_native {
+    if !settings.aria2c_speed_final {
         settings.aria2c_enabled = false;
-        settings.aria2c_user_native = true;
+        settings.aria2c_speed_final = true;
     }
 }
 
@@ -409,27 +412,27 @@ mod tests {
     }
 
     #[test]
-    fn native_multithread_final_aria2c_off_once() {
+    fn migrates_aria2c_off_once_then_respects_user() {
         let path = unique_tmp_path();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
 
-        // File bản trước bật aria2c (enabled=true, chưa aria2c_user_native).
+        // File bản trước lỡ BẬT aria2c (v0.1.86), chưa có aria2c_speed_final.
         let mut old = Settings::default();
         old.aria2c_enabled = true;
-        old.aria2c_user_native = false;
+        old.aria2c_speed_final = false;
         fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
 
         let (store, err) = SettingsStore::load(path.clone());
         assert!(err.is_none());
-        assert!(!store.get().aria2c_enabled, "migration chốt phải TẮT aria2c (dùng -N 32 native)");
-        assert!(store.get().aria2c_user_native);
+        assert!(!store.get().aria2c_enabled, "migration chốt phải ÉP TẮT aria2c (khôi phục v0.1.77 native)");
+        assert!(store.get().aria2c_speed_final);
 
-        // User chủ động bật lại aria2c → được tôn trọng.
+        // User chủ động bật lại aria2c sau migration → được tôn trọng.
         let mut on = store.get();
         on.aria2c_enabled = true;
         fs::write(&path, serde_json::to_string(&on).unwrap()).unwrap();
         let (store2, _) = SettingsStore::load(path.clone());
-        assert!(store2.get().aria2c_enabled, "đã user_native → tôn trọng lựa chọn user");
+        assert!(store2.get().aria2c_enabled, "đã speed_final → tôn trọng lựa chọn user");
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
