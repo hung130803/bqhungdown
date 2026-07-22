@@ -199,6 +199,18 @@ impl SettingsStore {
             if let Some(keys) = patch.youtube_api_keys {
                 s.youtube_api_keys = normalize_api_keys(keys);
             }
+            // watch_groups: nhóm kênh theo dõi — trim, bỏ rỗng, bỏ trùng,
+            // GIỮ THỨ TỰ user đặt (khác api_keys nên không dùng chung hàm).
+            if let Some(groups) = patch.watch_groups {
+                let mut out: Vec<String> = Vec::new();
+                for g in groups {
+                    let g = g.trim().to_string();
+                    if !g.is_empty() && !out.iter().any(|x| x == &g) {
+                        out.push(g);
+                    }
+                }
+                s.watch_groups = out;
+            }
             // max_height: chốt về các mức hợp lệ (0 = không giới hạn). Giá trị
             // lạ → làm tròn về mức gần nhất để không sinh format-selector vô nghĩa.
             if let Some(mh) = patch.max_height {

@@ -306,6 +306,9 @@ export interface Settings {
    * Nhiều key → key hết quota tự nhảy sang key kế. Rỗng = dùng yt-dlp như cũ.
    */
   youtubeApiKeys?: string[];
+  /** Danh sách NHÓM kênh theo dõi user tự đặt (Mỹ, Hàn…) — thêm/sửa/xóa
+   *  trong trang Theo dõi; kênh gán nhóm bằng chọn từ danh sách này. */
+  watchGroups?: string[];
   /**
    * Độ phân giải TỐI ĐA khi chọn "Tốt nhất". 0 = không giới hạn (vớ 4K/8K).
    * Mặc định 1080 vì 4K to gấp ~5.5 lần 1080p → tải hàng loạt lâu hơn nhiều.

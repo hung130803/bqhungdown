@@ -208,6 +208,55 @@ export function WatchPage() {
     }
   };
 
+  // ── Quản lý NHÓM (thêm/sửa/xóa) — danh sách lưu trong Settings ──
+  const [showGroups, setShowGroups] = useState(false);
+  const [newGroup, setNewGroup] = useState("");
+
+  const savedGroups = settings?.watchGroups ?? [];
+
+  const addGroup = async () => {
+    const g = newGroup.trim();
+    if (!g) return;
+    if (savedGroups.includes(g)) {
+      setNewGroup("");
+      return;
+    }
+    await updateSettings({ watchGroups: [...savedGroups, g] });
+    setNewGroup("");
+  };
+
+  const renameGroup = async (oldName: string, newName: string) => {
+    const n = newName.trim();
+    if (!n || n === oldName) return;
+    try {
+      await updateSettings({
+        watchGroups: savedGroups.map((g) => (g === oldName ? n : g)),
+      });
+      // Đổi tên lan sang mọi kênh đang mang nhóm cũ.
+      for (const c of channels.filter((c) => c.group === oldName)) {
+        await cmd.setWatchedGroup(c.id, n);
+      }
+      if (groupFilter === oldName) setGroupFilter(n);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
+  const deleteGroup = async (name: string) => {
+    try {
+      await updateSettings({ watchGroups: savedGroups.filter((g) => g !== name) });
+      // Kênh thuộc nhóm bị xóa → về "chưa phân nhóm" (không đụng gì khác).
+      for (const c of channels.filter((c) => c.group === name)) {
+        await cmd.setWatchedGroup(c.id, null);
+      }
+      if (groupFilter === name) setGroupFilter("");
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
   const checkNow = async () => {
     if (checking) return;
     setChecking(true);
@@ -223,8 +272,13 @@ export function WatchPage() {
 
   const interval = settings?.watchIntervalMin ?? 60;
 
-  // Danh sách nhóm (quốc gia) hiện có + bộ lọc + tìm kiếm cho nhiều kênh.
-  const groups = [...new Set(channels.map((c) => c.group?.trim()).filter(Boolean))].sort() as string[];
+  // Nhóm = danh sách user đặt (Settings) ∪ nhóm cũ còn dính trên kênh.
+  const groups = [
+    ...new Set([
+      ...savedGroups,
+      ...(channels.map((c) => c.group?.trim()).filter(Boolean) as string[]),
+    ]),
+  ];
   const term = search.trim().toLowerCase();
   const visible = channels
     .filter((c) => !groupFilter || (groupFilter === "__none" ? !c.group : c.group === groupFilter))
@@ -314,6 +368,13 @@ export function WatchPage() {
           ))}
           <option value="__none">Chưa phân nhóm</option>
         </select>
+        <button
+          onClick={() => setShowGroups(true)}
+          className="px-2.5 py-1.5 rounded-md bg-surface-2 border border-border text-fg"
+          title="Quản lý nhóm: thêm / đổi tên / xóa"
+        >
+          🏷 Nhóm
+        </button>
         <label className="flex items-center gap-1.5 text-muted">
           <span>mỗi</span>
           <input
@@ -375,21 +436,29 @@ export function WatchPage() {
               >
                 {c.title || c.url}
               </div>
-              {/* Nhóm/quốc gia — gõ rồi rời ô hoặc Enter là lưu */}
-              <input
-                key={`${c.id}:${c.group ?? ""}`}
-                type="text"
-                defaultValue={c.group ?? ""}
-                placeholder="nhóm…"
-                onBlur={(e) => {
-                  if (e.target.value.trim() !== (c.group ?? "")) void setGroup(c.id, e.target.value);
+              {/* Nhóm/quốc gia — chọn từ danh sách đã đặt (🏷 Nhóm để thêm/sửa/xóa) */}
+              <select
+                value={c.group ?? ""}
+                onChange={(e) => {
+                  if (e.target.value === "__manage") {
+                    setShowGroups(true);
+                    return;
+                  }
+                  void setGroup(c.id, e.target.value);
                 }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                }}
-                className="w-20 px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0 placeholder:text-muted"
-                title="Nhóm/quốc gia của kênh (Mỹ, Hàn…) — để lọc khi nhiều kênh"
-              />
+                className={`px-1.5 py-1 rounded-md border text-xs shrink-0 max-w-[110px] ${
+                  c.group
+                    ? "bg-accent/15 text-fg border-accent"
+                    : "bg-surface-2 text-muted border-border"
+                }`}
+                title="Nhóm/quốc gia của kênh — quản lý danh sách bằng nút 🏷 Nhóm"
+              >
+                <option value="">— nhóm —</option>
+                {groups.map((g) => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+                <option value="__manage">➕ Quản lý nhóm…</option>
+              </select>
               {/* Chế độ nguồn khi kênh không đăng video mới */}
               <select
                 value={c.sourceMode ?? "new"}
@@ -471,17 +540,19 @@ export function WatchPage() {
                   <span className="text-warning">· ⚠ HẾT hàng chờ — bấm 🎯 tích thêm</span>
                 ))}
               {(c.sourceMode ?? "new") === "auto" && <span>· 🤖 tự vét kho theo view</span>}
-              {c.destDir && (
-                <span className="truncate max-w-[45%]" title={c.destDir}>
-                  · 📁 {shortDir(c.destDir)}
+              {c.destDir ? (
+                <span className="truncate max-w-[55%]" title={`Thư mục trung chuyển: ${c.destDir}`}>
+                  · <span className="text-accent font-medium">→ làm kênh: {baseName(c.destDir)}</span>
                   <button
                     onClick={() => void clearDest(c.id)}
                     className="ml-1 text-danger hover:underline"
-                    title="Bỏ thư mục riêng — video về thư mục tải mặc định"
+                    title="Bỏ thư mục riêng — video về thư mục tải mặc định, tool cắt sẽ KHÔNG thấy"
                   >
                     ✕
                   </button>
                 </span>
+              ) : (
+                <span className="text-warning">· ⚠ chưa gán kênh đích — bấm 📁 chọn thư mục kênh</span>
               )}
               {c.lastError && (
                 <span className="text-danger truncate max-w-full" title={c.lastError}>
@@ -522,6 +593,75 @@ export function WatchPage() {
           </div>
         ))}
       </div>
+
+      {/* Dialog QUẢN LÝ NHÓM — thêm / đổi tên / xóa */}
+      {showGroups && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-surface border border-border rounded-lg w-full max-w-md max-h-[80vh] flex flex-col">
+            <div className="p-3 border-b border-border">
+              <div className="text-sm font-medium text-fg">🏷 Quản lý nhóm kênh</div>
+              <div className="text-xs text-muted mt-0.5">
+                Đặt nhóm theo quốc gia/loại (Mỹ, Hàn, TikTok beta…) rồi gán cho kênh.
+                Đổi tên nhóm sẽ đổi trên MỌI kênh; xóa nhóm thì kênh về "chưa phân nhóm".
+              </div>
+            </div>
+            <div className="p-3 flex gap-2">
+              <input
+                type="text"
+                value={newGroup}
+                onChange={(e) => setNewGroup(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") void addGroup(); }}
+                placeholder="Tên nhóm mới…"
+                className="flex-1 px-3 py-1.5 rounded-md bg-surface-2 border border-border text-fg text-sm placeholder:text-muted"
+              />
+              <button
+                onClick={() => void addGroup()}
+                disabled={!newGroup.trim()}
+                className="px-3 py-1.5 rounded-md bg-accent text-accent-fg text-sm font-medium disabled:opacity-50"
+              >
+                + Thêm
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {groups.length === 0 && (
+                <div className="p-4 text-center text-sm text-muted">Chưa có nhóm nào.</div>
+              )}
+              {groups.map((g) => {
+                const n = channels.filter((c) => c.group === g).length;
+                return (
+                  <div key={g} className="flex items-center gap-2 px-3 py-2 border-t border-border">
+                    <input
+                      key={`g:${g}`}
+                      type="text"
+                      defaultValue={g}
+                      onBlur={(e) => void renameGroup(g, e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                      className="flex-1 px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-sm"
+                      title="Sửa tên rồi Enter/rời ô — đổi trên mọi kênh đang mang nhóm này"
+                    />
+                    <span className="text-xs text-muted shrink-0">{n} kênh</span>
+                    <button
+                      onClick={() => void deleteGroup(g)}
+                      className="px-2 py-1 rounded-md border border-border text-danger text-xs shrink-0 hover:bg-surface-2"
+                      title={`Xóa nhóm "${g}" — ${n} kênh về "chưa phân nhóm"`}
+                    >
+                      Xóa
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="p-3 border-t border-border flex justify-end">
+              <button
+                onClick={() => setShowGroups(false)}
+                className="px-4 py-1.5 rounded-md bg-accent text-accent-fg text-sm font-medium"
+              >
+                Xong
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Dialog KHO VIDEO kênh nguồn — tích chọn "hàng chờ làm" */}
       {pickerFor && (
@@ -621,10 +761,11 @@ function videoIdOf(url: string): string {
   return url;
 }
 
-/** Rút gọn đường dẫn còn 2 khúc cuối: `D:\A\B\C` -> `…\B\C`. */
-function shortDir(p: string): string {
+/** Khúc CUỐI đường dẫn = tên kênh đích trong tool cắt (INTEGRATION.md:
+ *  thư mục trung chuyển đặt đúng tên kênh). `D:\TC\Kênh A` -> `Kênh A`. */
+function baseName(p: string): string {
   const parts = p.replace(/[/\\]+$/, "").split(/[/\\]/);
-  return parts.length <= 2 ? p : `…\\${parts.slice(-2).join("\\")}`;
+  return parts[parts.length - 1] || p;
 }
 
 function formatViews(n: number): string {
