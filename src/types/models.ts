@@ -250,6 +250,8 @@ export interface WatchedChannel {
   dripCount?: number;
   /** Id video đã tự tải — dialog kho đánh dấu "đã làm". */
   doneIds?: string[];
+  /** true = kho nguồn ĐÃ CẠN (quét 🤖 không còn video chưa làm) — đổi key. */
+  sourceEmpty?: boolean;
 }
 
 /** Một video trong hàng chờ làm của kênh theo dõi. */

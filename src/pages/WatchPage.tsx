@@ -4,6 +4,16 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import type { ChannelVideo, PickedVideo, WatchedChannel } from "@/types/models";
 import { EmptyState } from "@/components/EmptyState";
 
+/** 1 KÊNH đích của user (kênh TikTok) = nhiều key nguồn chung tên kênh.
+ *  `rep` = key đầu tiên, đại diện cấu hình mức kênh (nhóm/chế độ/thư mục). */
+type Kenh = {
+  key: string;
+  name: string;
+  group: string;
+  keys: WatchedChannel[];
+  rep: WatchedChannel;
+};
+
 /**
  * "Theo dõi kênh" — auto-watch list. The backend monitor periodically checks
  * each enabled channel and auto-enqueues new uploads (baseline-seeded so it
@@ -14,14 +24,22 @@ export function WatchPage() {
   const updateSettings = useSettingsStore((s) => s.update);
 
   const [channels, setChannels] = useState<WatchedChannel[]>([]);
-  const [url, setUrl] = useState("");
-  const [tab, setTab] = useState("all");
-  const [adding, setAdding] = useState(false);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Quản lý nhiều kênh đa quốc gia: tìm nhanh + lọc theo nhóm.
   const [search, setSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
+
+  // ── Dialog "➕ Thêm kênh": tên kênh đích + nhóm + key nguồn đầu tiên ──
+  const [addOpen, setAddOpen] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [addGrp, setAddGrp] = useState("");
+  const [addUrl, setAddUrl] = useState("");
+  const [addTab, setAddTab] = useState("all");
+  const [addDir, setAddDir] = useState("");
+  const [adding, setAdding] = useState(false);
+  // Ô "dán key mới" trong từng thẻ kênh (map theo key của thẻ).
+  const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
 
   const reload = async () => {
     try {
@@ -45,19 +63,65 @@ export function WatchPage() {
     return () => un?.();
   }, []);
 
-  const add = async () => {
-    const u = url.trim();
-    if (!u || adding) return;
+  /** Tạo KÊNH mới: thêm key nguồn đầu tiên rồi gắn tên/nhóm/chế độ 🤖. */
+  const addKenh = async () => {
+    const name = addName.trim();
+    const u = addUrl.trim();
+    if (!name || !u || adding) return;
     setAdding(true);
     setError(null);
     try {
-      await cmd.addWatchedChannel(u, tab);
-      setUrl("");
+      const c = await cmd.addWatchedChannel(u, addTab);
+      await cmd.setWatchedTarget(c.id, name);
+      if (addGrp) await cmd.setWatchedGroup(c.id, addGrp);
+      // Mặc định 🤖 tự vét: có video mới thì lấy mới, không thì vét view
+      // cao nhất chưa làm — đúng quy trình vận hành kênh.
+      await cmd.setWatchedSourceMode(c.id, "auto");
+      if (addDir.trim()) await cmd.setWatchedDestDir(c.id, addDir.trim());
+      setAddOpen(false);
+      setAddName("");
+      setAddUrl("");
+      setAddDir("");
       await reload();
     } catch (e) {
       setError(formatErr(e));
     } finally {
       setAdding(false);
+    }
+  };
+
+  /** Thêm 1 key nguồn nữa vào kênh có sẵn — copy nguyên cấu hình kênh. */
+  const addKeyToKenh = async (k: Kenh) => {
+    const u = (keyInputs[k.key] ?? "").trim();
+    if (!u || adding) return;
+    setAdding(true);
+    setError(null);
+    try {
+      const rep = k.rep;
+      const c = await cmd.addWatchedChannel(u, rep.tab || "all");
+      if (rep.targetName) await cmd.setWatchedTarget(c.id, rep.targetName);
+      await cmd.setWatchedGroup(c.id, rep.group ?? null);
+      await cmd.setWatchedSourceMode(
+        c.id, (rep.sourceMode as "new" | "picked" | "auto") ?? "auto",
+      );
+      await cmd.setWatchedDailyLimit(c.id, rep.dailyLimit ?? 1);
+      if (rep.destDir) await cmd.setWatchedDestDir(c.id, rep.destDir);
+      setKeyInputs((m) => ({ ...m, [k.key]: "" }));
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  /** Áp 1 thao tác cho MỌI key của kênh (cài đặt mức kênh). */
+  const forKenh = async (k: Kenh, fn: (id: string) => Promise<unknown>) => {
+    try {
+      for (const c of k.keys) await fn(c.id);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
     }
   };
 
@@ -73,35 +137,6 @@ export function WatchPage() {
   const toggle = async (id: string, enabled: boolean) => {
     try {
       await cmd.setWatchedEnabled(id, enabled);
-      await reload();
-    } catch (e) {
-      setError(formatErr(e));
-    }
-  };
-
-  const toggleAuto = async (id: string, auto: boolean) => {
-    try {
-      await cmd.setWatchedAutoDownload(id, auto);
-      await reload();
-    } catch (e) {
-      setError(formatErr(e));
-    }
-  };
-
-  const setDest = async (id: string) => {
-    try {
-      const dir = await cmd.pickFolder();
-      if (!dir) return; // hủy hộp thoại -> giữ nguyên
-      await cmd.setWatchedDestDir(id, dir);
-      await reload();
-    } catch (e) {
-      setError(formatErr(e));
-    }
-  };
-
-  const clearDest = async (id: string) => {
-    try {
-      await cmd.setWatchedDestDir(id, null);
       await reload();
     } catch (e) {
       setError(formatErr(e));
@@ -178,42 +213,6 @@ export function WatchPage() {
       setPickerErr(formatErr(e));
     } finally {
       setPickerSaving(false);
-    }
-  };
-
-  const setDaily = async (id: string, limit: number) => {
-    try {
-      await cmd.setWatchedDailyLimit(id, limit);
-      await reload();
-    } catch (e) {
-      setError(formatErr(e));
-    }
-  };
-
-  const setMode = async (id: string, mode: "new" | "picked" | "auto") => {
-    try {
-      await cmd.setWatchedSourceMode(id, mode);
-      await reload();
-    } catch (e) {
-      setError(formatErr(e));
-    }
-  };
-
-  const setGroup = async (id: string, group: string) => {
-    try {
-      await cmd.setWatchedGroup(id, group.trim() || null);
-      await reload();
-    } catch (e) {
-      setError(formatErr(e));
-    }
-  };
-
-  const setTarget = async (id: string, target: string) => {
-    try {
-      await cmd.setWatchedTarget(id, target.trim() || null);
-      await reload();
-    } catch (e) {
-      setError(formatErr(e));
     }
   };
 
@@ -299,40 +298,81 @@ export function WatchPage() {
     ]),
   ];
   const term = search.trim().toLowerCase();
-  const visible = channels
-    .filter((c) => !groupFilter || (groupFilter === "__none" ? !c.group : c.group === groupFilter))
+  // Gom key nguồn thành KÊNH ĐÍCH: mọi key cùng tên kênh (targetName, hoặc
+  // tên thư mục 📁) nằm chung 1 thẻ; key chưa gắn gì đứng thẻ riêng.
+  const kenhMap = new Map<string, Kenh>();
+  for (const c of channels) {
+    const name = c.targetName?.trim() || (c.destDir ? baseName(c.destDir) : "");
+    const key = name || `⁇${c.id}`;
+    const existing = kenhMap.get(key);
+    if (existing) {
+      existing.keys.push(c);
+    } else {
+      kenhMap.set(key, {
+        key,
+        name,
+        group: c.group?.trim() ?? "",
+        keys: [c],
+        rep: c,
+      });
+    }
+  }
+  const kenhAll = [...kenhMap.values()];
+  const kenhVisible = kenhAll
+    .filter((k) => !groupFilter || (groupFilter === "__none" ? !k.group : k.group === groupFilter))
     .filter(
-      (c) =>
+      (k) =>
         !term ||
-        (c.title ?? "").toLowerCase().includes(term) ||
-        c.url.toLowerCase().includes(term) ||
-        (c.group ?? "").toLowerCase().includes(term),
+        k.name.toLowerCase().includes(term) ||
+        k.group.toLowerCase().includes(term) ||
+        k.keys.some(
+          (c) =>
+            (c.title ?? "").toLowerCase().includes(term) ||
+            c.url.toLowerCase().includes(term),
+        ),
     )
-    .sort((a, b) =>
-      (a.group ?? "￿").localeCompare(b.group ?? "￿", "vi") ||
-      (a.title ?? a.url).localeCompare(b.title ?? b.url, "vi"),
+    .sort(
+      (a, b) =>
+        (a.group || "￿").localeCompare(b.group || "￿", "vi") ||
+        a.name.localeCompare(b.name, "vi"),
     );
   const nOn = channels.filter((c) => c.enabled).length;
-  const nEmpty = channels.filter(
-    (c) => c.sourceMode === "picked" && (c.picked?.length ?? 0) === 0,
+  // Kênh cần chú ý: kho cạn (🤖 hết video chưa làm) / hết hàng chờ (🎯).
+  const nDry = kenhAll.filter((k) => k.keys.some((c) => c.sourceEmpty)).length;
+  const nEmpty = kenhAll.filter(
+    (k) =>
+      (k.rep.sourceMode ?? "new") === "picked" &&
+      k.keys.every((c) => (c.picked?.length ?? 0) === 0),
   ).length;
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
-        <h2 className="text-xl font-medium text-fg">Theo dõi kênh</h2>
+        <h2 className="text-xl font-medium text-fg">Kênh của tôi</h2>
         <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 border border-border text-muted">
-          {channels.length} kênh · {nOn} đang bật
+          {kenhAll.length} kênh · {channels.length} key · {nOn} key đang chạy
         </span>
+        {nDry > 0 && (
+          <span className="text-xs px-2 py-0.5 rounded-full bg-danger/15 border border-danger text-danger">
+            🔴 {nDry} kênh HẾT video — đổi key
+          </span>
+        )}
         {nEmpty > 0 && (
           <span className="text-xs px-2 py-0.5 rounded-full bg-warning/15 border border-warning text-warning">
             ⚠ {nEmpty} kênh hết hàng chờ
           </span>
         )}
+        <button
+          onClick={() => setAddOpen(true)}
+          className="ml-auto px-3 py-1.5 rounded-md bg-accent text-accent-fg text-sm font-medium"
+        >
+          ➕ Thêm kênh
+        </button>
       </div>
       <p className="text-sm text-muted -mt-2">
-        Video MỚI đăng luôn tự phát hiện (RSS ~1-2 phút). Kênh không đăng gì vẫn có bài nhờ chế độ
-        nguồn: 🎯 hàng chờ tay hoặc 🤖 tự vét kho theo view — tối đa 1-3 video/ngày mỗi kênh.
+        Mỗi KÊNH = kênh TikTok của anh: đặt tên, gán nhóm, dán key YouTube nguồn. App tự tải video
+        MỚI để đăng; hôm nào nguồn không đăng thì tự vét video NHIỀU VIEW nhất chưa làm, lấy dần —
+        vét cạn kho sẽ báo 🔴 để anh đổi key.
       </p>
 
       {/* Thư mục trung chuyển gốc — gõ tên KÊNH ĐÍCH là video tự về <gốc>\<tên> */}
@@ -354,37 +394,6 @@ export function WatchPage() {
         >
           Chọn…
         </button>
-      </div>
-
-      {/* Add channel */}
-      <div className="space-y-2 p-3 rounded-lg border border-border bg-surface">
-        <div className="flex gap-2 flex-wrap">
-          <input
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
-            placeholder="https://www.youtube.com/@TenKenh hoặc https://www.tiktok.com/@user"
-            className="flex-1 min-w-[240px] px-3 py-2 rounded-md bg-surface-2 border border-border text-fg placeholder:text-muted text-sm"
-          />
-          <select
-            value={tab}
-            onChange={(e) => setTab(e.target.value)}
-            className="px-2 py-2 rounded-md bg-surface-2 border border-border text-fg text-sm"
-            title="Loại video cần theo dõi"
-          >
-            <option value="all">Tất cả</option>
-            <option value="videos">Video dài</option>
-            <option value="shorts">Shorts</option>
-          </select>
-          <button
-            onClick={() => void add()}
-            disabled={!url.trim() || adding}
-            className="px-4 py-2 rounded-md bg-accent text-accent-fg font-medium text-sm disabled:opacity-50"
-          >
-            {adding ? "Đang thêm…" : "Thêm kênh"}
-          </button>
-        </div>
       </div>
 
       {/* Thanh công cụ: tìm + lọc nhóm + chu kỳ + kiểm tra ngay */}
@@ -454,73 +463,74 @@ export function WatchPage() {
             hint="Thêm kênh để app tự kiểm tra video mới định kỳ và tải về giúp bạn — không cần ngồi canh."
           />
         )}
-        {channels.length > 0 && visible.length === 0 && (
+        {channels.length > 0 && kenhVisible.length === 0 && (
           <div className="text-sm text-muted text-center py-6">
             Không kênh nào khớp tìm kiếm/bộ lọc.
           </div>
         )}
-        {visible.map((c, i) => (
-          <Fragment key={c.id}>
-          {(i === 0 || (visible[i - 1].group ?? "") !== (c.group ?? "")) && (
+        {kenhVisible.map((k, i) => {
+          const anyOn = k.keys.some((c) => c.enabled);
+          const dry = k.keys.some((c) => c.sourceEmpty);
+          const mode = (k.rep.sourceMode ?? "new") as string;
+          const pickedTotal = k.keys.reduce((s, c) => s + (c.picked?.length ?? 0), 0);
+          return (
+          <Fragment key={k.key}>
+          {(i === 0 || (kenhVisible[i - 1].group || "") !== (k.group || "")) && (
             <div className="flex items-center gap-2 pt-2 px-1">
               <span className="text-xs font-semibold text-fg uppercase tracking-wide">
-                🏷 {c.group || "Chưa phân nhóm"}
+                🏷 {k.group || "Chưa phân nhóm"}
               </span>
               <span className="text-xs text-muted">
-                {visible.filter((x) => (x.group ?? "") === (c.group ?? "")).length} kênh
+                {kenhVisible.filter((x) => (x.group || "") === (k.group || "")).length} kênh
               </span>
               <div className="flex-1 border-t border-border" />
             </div>
           )}
-          <div className="rounded-lg border border-border bg-surface">
-            {/* Tầng 1: bật/tắt · tên · nhóm · các nút điều khiển */}
+          <div className={`rounded-lg border bg-surface ${dry ? "border-danger" : "border-border"}`}>
+            {/* Đầu thẻ KÊNH: bật/tắt · TÊN KÊNH · nhóm · chế độ · hạn mức · 📁 · ✕ */}
             <div className="flex items-center gap-2 px-3 pt-2.5 flex-wrap">
               <input
                 type="checkbox"
-                checked={c.enabled}
-                onChange={(e) => void toggle(c.id, e.target.checked)}
+                checked={anyOn}
+                onChange={(e) =>
+                  void forKenh(k, (id) => cmd.setWatchedEnabled(id, e.target.checked))
+                }
                 className="h-4 w-4 shrink-0"
-                title={c.enabled ? "Đang theo dõi" : "Đã tạm dừng"}
+                title={anyOn ? "Kênh đang chạy — bỏ tích để tạm dừng mọi key" : "Kênh đang tạm dừng"}
               />
-              <div
-                className={`text-sm font-medium truncate flex-1 min-w-[140px] ${c.enabled ? "text-fg" : "text-muted line-through"}`}
-                title={c.url}
-              >
-                {c.title || c.url}
-              </div>
-              {/* KÊNH ĐÍCH (kênh TikTok của user) — gõ tên là video tự về <gốc>\<tên> */}
               <input
-                key={`${c.id}:t:${c.targetName ?? ""}`}
+                key={`${k.key}:name`}
                 type="text"
-                defaultValue={c.targetName ?? ""}
-                placeholder="kênh đích…"
+                defaultValue={k.name}
+                placeholder="đặt tên kênh…"
                 onBlur={(e) => {
-                  if (e.target.value.trim() !== (c.targetName ?? "")) void setTarget(c.id, e.target.value);
+                  const v = e.target.value.trim();
+                  if (v && v !== k.name) void forKenh(k, (id) => cmd.setWatchedTarget(id, v));
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                 }}
-                className={`w-28 px-2 py-1 rounded-md border text-xs shrink-0 placeholder:text-muted ${
-                  c.targetName ? "bg-accent/15 text-fg border-accent" : "bg-surface-2 text-fg border-border"
+                className={`flex-1 min-w-[140px] px-2 py-1 rounded-md border text-sm font-semibold ${
+                  k.name
+                    ? `bg-transparent border-transparent hover:border-border ${anyOn ? "text-fg" : "text-muted line-through"}`
+                    : "bg-surface-2 border-warning text-fg"
                 }`}
-                title={"Tên KÊNH ĐÍCH (kênh TikTok của anh) mà nguồn này nuôi.\nGõ tên → video tự về <Trung chuyển gốc>\\<tên kênh> — tool cắt nhận đúng kênh.\n(📁 chọn tay vẫn được và ưu tiên hơn)"}
+                title="Tên KÊNH của anh (kênh TikTok đích) — video tự về <Trung chuyển gốc>\tên này. Sửa tên là đổi cho mọi key."
               />
-              {/* Nhóm/quốc gia — chọn từ danh sách đã đặt (🏷 Nhóm để thêm/sửa/xóa) */}
               <select
-                value={c.group ?? ""}
+                value={k.group}
                 onChange={(e) => {
                   if (e.target.value === "__manage") {
                     setShowGroups(true);
                     return;
                   }
-                  void setGroup(c.id, e.target.value);
+                  const v = e.target.value;
+                  void forKenh(k, (id) => cmd.setWatchedGroup(id, v || null));
                 }}
                 className={`px-1.5 py-1 rounded-md border text-xs shrink-0 max-w-[110px] ${
-                  c.group
-                    ? "bg-accent/15 text-fg border-accent"
-                    : "bg-surface-2 text-muted border-border"
+                  k.group ? "bg-accent/15 text-fg border-accent" : "bg-surface-2 text-muted border-border"
                 }`}
-                title="Nhóm/quốc gia của kênh — quản lý danh sách bằng nút 🏷 Nhóm"
+                title="Nhóm/quốc gia — quản lý danh sách bằng nút 🏷 Nhóm"
               >
                 <option value="">— nhóm —</option>
                 {groups.map((g) => (
@@ -528,154 +538,303 @@ export function WatchPage() {
                 ))}
                 <option value="__manage">➕ Quản lý nhóm…</option>
               </select>
-              {/* Chế độ nguồn khi kênh không đăng video mới */}
               <select
-                value={c.sourceMode ?? "new"}
-                onChange={(e) => void setMode(c.id, e.target.value as "new" | "picked" | "auto")}
+                value={mode}
+                onChange={(e) => {
+                  const v = e.target.value as "new" | "picked" | "auto";
+                  void forKenh(k, (id) => cmd.setWatchedSourceMode(id, v));
+                }}
                 className="px-1.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
-                title={"Nguồn video của kênh:\n• Video mới — chỉ tải video mới đăng\n• 🎯 Hàng chờ — tự tải dần video ANH ĐÃ TÍCH trong kho\n• 🤖 Tự vét — app TỰ CHỌN video view cao nhất chưa làm trong kho\n(Video mới đăng luôn được ưu tiên chiếm suất ngày trước)"}
+                title={"Nguồn video của kênh:\n• 🤖 Tự vét — video MỚI trước, không có thì tự lấy video VIEW CAO NHẤT chưa làm (khuyên dùng)\n• 🎯 Hàng chờ — tự tải dần video anh đã tích trong kho\n• Video mới — chỉ tải video mới đăng"}
               >
-                <option value="new">Video mới</option>
-                <option value="picked">🎯 Hàng chờ</option>
                 <option value="auto">🤖 Tự vét</option>
+                <option value="picked">🎯 Hàng chờ</option>
+                <option value="new">Video mới</option>
               </select>
               <select
-                value={c.dailyLimit ?? 1}
-                onChange={(e) => void setDaily(c.id, parseInt(e.target.value, 10))}
+                value={k.rep.dailyLimit ?? 1}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  void forKenh(k, (id) => cmd.setWatchedDailyLimit(id, n));
+                }}
                 className="px-1.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
-                title="Số video TỰ TẢI tối đa mỗi ngày (video mới + hàng chờ/tự vét)"
+                title="Số video TỰ TẢI tối đa mỗi ngày cho kênh này"
               >
                 <option value={1}>1/ngày</option>
                 <option value={2}>2/ngày</option>
                 <option value={3}>3/ngày</option>
               </select>
               <button
-                onClick={() => void openPicker(c)}
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      const dir = await cmd.pickFolder();
+                      if (!dir) return;
+                      await forKenh(k, (id) => cmd.setWatchedDestDir(id, dir));
+                    } catch (e) {
+                      setError(formatErr(e));
+                    }
+                  })();
+                }}
                 className={`px-2 py-1 rounded-md text-xs shrink-0 border ${
-                  (c.picked?.length ?? 0) > 0
-                    ? "bg-accent text-accent-fg border-accent"
-                    : "bg-surface-2 text-fg border-border"
-                }`}
-                title="Mở KHO video kênh nguồn — tích chọn video nên làm (hàng chờ 🎯)"
-              >
-                🎯
-              </button>
-              <button
-                onClick={() => void setDest(c.id)}
-                className={`px-2 py-1 rounded-md text-xs shrink-0 border ${
-                  c.destDir
-                    ? "bg-accent text-accent-fg border-accent"
-                    : "bg-surface-2 text-fg border-border"
+                  k.rep.destDir ? "bg-accent text-accent-fg border-accent" : "bg-surface-2 text-fg border-border"
                 }`}
                 title={
-                  c.destDir
-                    ? `Video lưu vào: ${c.destDir} — bấm để đổi`
-                    : "Chọn THƯ MỤC LƯU RIÊNG cho kênh (nối với tool cắt ghép)"
+                  k.rep.destDir
+                    ? `Thư mục chọn tay: ${k.rep.destDir} — bấm để đổi`
+                    : "Chọn thư mục TAY cho kênh (bình thường không cần — tên kênh tự tạo thư mục)"
                 }
               >
                 📁
               </button>
               <button
-                onClick={() => void toggleAuto(c.id, !c.autoDownload)}
-                className={`px-2 py-1 rounded-md text-xs font-medium shrink-0 border ${
-                  c.autoDownload
-                    ? "bg-accent text-accent-fg border-accent"
-                    : "bg-surface-2 text-fg border-border"
-                }`}
-                title={c.autoDownload ? "Đang TỰ TẢI video mới — bấm để chỉ báo" : "Chỉ BÁO video mới — bấm để tự tải"}
-              >
-                {c.autoDownload ? "Tự tải" : "Chỉ báo"}
-              </button>
-              <button
-                onClick={() => void remove(c.id)}
+                onClick={() => void forKenh(k, (id) => cmd.removeWatchedChannel(id))}
                 className="px-2 py-1 rounded-md border border-border text-fg text-xs shrink-0 hover:bg-surface-2"
-                title="Bỏ theo dõi"
+                title={`XÓA kênh "${k.name || "?"}" cùng toàn bộ ${k.keys.length} key nguồn`}
               >
                 ✕
               </button>
             </div>
-            {/* Tầng 2: thông tin phụ — loại video, kiểm tra gần nhất, hàng chờ, thư mục, lỗi */}
-            <div className="px-3 pb-2.5 pt-1 text-xs text-muted flex items-center gap-x-2 gap-y-0.5 flex-wrap">
-              <span>{tabLabel(c.tab)}</span>
-              <span>·</span>
-              <span>{c.lastChecked ? `kiểm tra ${timeAgo(c.lastChecked)}` : "chưa kiểm tra"}</span>
-              {typeof c.lastNewCount === "number" && c.lastNewCount > 0 && (
-                <span className="text-success">+{c.lastNewCount} mới</span>
-              )}
-              {(c.sourceMode ?? "new") === "picked" &&
-                ((c.picked?.length ?? 0) > 0 ? (
-                  <span>· 🎯 còn {c.picked!.length} chờ làm</span>
-                ) : (
-                  <span className="text-warning">· ⚠ HẾT hàng chờ — bấm 🎯 tích thêm</span>
-                ))}
-              {(c.sourceMode ?? "new") === "auto" && <span>· 🤖 tự vét kho theo view</span>}
-              {c.destDir ? (
-                <span className="truncate max-w-[55%]" title={`Thư mục (chọn tay 📁, ưu tiên hơn tên kênh): ${c.destDir}`}>
-                  · <span className="text-accent font-medium">→ làm kênh: {baseName(c.destDir)}</span> 📁
+            {/* Dòng trạng thái kênh: thư mục + kho cạn + hàng chờ */}
+            <div className="px-3 pb-2 pt-1 text-xs text-muted flex items-center gap-x-2 gap-y-0.5 flex-wrap">
+              {k.rep.destDir ? (
+                <span className="truncate max-w-[60%]" title={`Thư mục chọn tay (ưu tiên hơn tên kênh): ${k.rep.destDir}`}>
+                  📁 {k.rep.destDir}
                   <button
-                    onClick={() => void clearDest(c.id)}
+                    onClick={() => void forKenh(k, (id) => cmd.setWatchedDestDir(id, null))}
                     className="ml-1 text-danger hover:underline"
-                    title="Bỏ thư mục chọn tay — quay về dùng ô Kênh đích (nếu có)"
+                    title="Bỏ thư mục tay — quay về tự tạo theo tên kênh"
                   >
                     ✕
                   </button>
                 </span>
-              ) : c.targetName ? (
-                settings?.watchRoot ? (
-                  <span
-                    className="truncate max-w-[55%]"
-                    title={`Video tự về: ${settings.watchRoot}\\${c.targetName}`}
-                  >
-                    · <span className="text-accent font-medium">→ làm kênh: {c.targetName}</span>
-                  </span>
-                ) : (
-                  <span className="text-danger">
-                    · ⚠ đã đặt kênh đích nhưng CHƯA chọn 📂 Trung chuyển gốc — video sẽ rơi thư mục mặc định!
-                  </span>
-                )
-              ) : (
-                <span className="text-warning">· ⚠ chưa gán kênh đích — gõ ô "kênh đích…" hoặc bấm 📁</span>
-              )}
-              {c.lastError && (
-                <span className="text-danger truncate max-w-full" title={c.lastError}>
-                  ⚠ {c.lastError}
+              ) : k.name && settings?.watchRoot ? (
+                <span className="truncate max-w-[60%]" title="Thư mục tự tạo theo tên kênh — tool cắt nhận đúng kênh này">
+                  📂 {settings.watchRoot}\{k.name}
                 </span>
+              ) : k.name ? (
+                <span className="text-danger">
+                  ⚠ CHƯA chọn 📂 Trung chuyển gốc — video sẽ rơi thư mục mặc định!
+                </span>
+              ) : (
+                <span className="text-warning">⚠ đặt tên kênh để video tự về đúng thư mục</span>
               )}
+              {dry && (
+                <span className="text-danger font-semibold">· 🔴 HẾT video kho — đổi key!</span>
+              )}
+              {mode === "picked" &&
+                (pickedTotal > 0 ? (
+                  <span>· 🎯 còn {pickedTotal} chờ làm</span>
+                ) : (
+                  <span className="text-warning">· ⚠ hết hàng chờ — bấm 🎯 trên key để tích thêm</span>
+                ))}
             </div>
 
-            {/* Video mới phát hiện (chế độ "Chỉ báo") — chờ bấm tải */}
-            {c.pending && c.pending.length > 0 && (
-              <div className="border-t border-border">
-                <div className="px-3 py-1.5 text-xs text-muted bg-surface-2">
-                  {c.pending.length} video mới — bấm "Tải" để lấy về
+            {/* Các KEY nguồn của kênh */}
+            <div className="border-t border-border">
+              {k.keys.map((c) => (
+                <Fragment key={c.id}>
+                <div className="flex items-center gap-2 px-3 py-1.5 border-t first:border-t-0 border-border/60">
+                  <span className="text-xs shrink-0" title={c.enabled ? "key đang chạy" : "key tạm dừng"}>
+                    {c.enabled ? "🔗" : "⏸"}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-fg truncate" title={c.url}>
+                      {c.title || c.url}
+                    </div>
+                    <div className="text-[11px] text-muted truncate">
+                      {tabLabel(c.tab)} · {c.lastChecked ? `kiểm tra ${timeAgo(c.lastChecked)}` : "chưa kiểm tra"}
+                      {typeof c.lastNewCount === "number" && c.lastNewCount > 0 && (
+                        <span className="text-success"> · +{c.lastNewCount} mới</span>
+                      )}
+                      {c.sourceEmpty && <span className="text-danger"> · kho cạn</span>}
+                      {c.lastError && (
+                        <span className="text-danger" title={c.lastError}> · ⚠ {c.lastError}</span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => void openPicker(c)}
+                    className={`px-1.5 py-0.5 rounded text-xs shrink-0 border ${
+                      (c.picked?.length ?? 0) > 0
+                        ? "bg-accent text-accent-fg border-accent"
+                        : "bg-surface-2 text-fg border-border"
+                    }`}
+                    title="Mở KHO video của key này — xem/tích video nên làm"
+                  >
+                    🎯
+                  </button>
+                  <button
+                    onClick={() => void toggle(c.id, !c.enabled)}
+                    className="px-1.5 py-0.5 rounded border border-border text-fg text-xs shrink-0 hover:bg-surface-2"
+                    title={c.enabled ? "Tạm dừng key này" : "Chạy lại key này"}
+                  >
+                    {c.enabled ? "⏸" : "▶"}
+                  </button>
+                  <button
+                    onClick={() => void remove(c.id)}
+                    className="px-1.5 py-0.5 rounded border border-border text-danger text-xs shrink-0 hover:bg-surface-2"
+                    title="Xóa key này khỏi kênh"
+                  >
+                    ✕
+                  </button>
                 </div>
-                {c.pending.map((p) => (
-                  <div key={p.id} className="flex items-center gap-3 px-3 py-2 border-t border-border">
-                    <div className="text-sm text-fg flex-1 min-w-0">
-                      <div className="truncate" title={p.title}>{p.title || p.url}</div>
-                      <div className="text-xs text-muted">đăng {timeAgo(p.published ?? p.detectedAt)}</div>
+                {/* Video chờ tải tay (key ở chế độ Chỉ báo) */}
+                {c.pending && c.pending.length > 0 && c.pending.map((p) => (
+                  <div key={p.id} className="flex items-center gap-2 pl-9 pr-3 py-1 border-t border-border/40">
+                    <div className="text-xs text-fg flex-1 min-w-0 truncate" title={p.title}>
+                      {p.title || p.url}
+                      <span className="text-muted"> · đăng {timeAgo(p.published ?? p.detectedAt)}</span>
                     </div>
                     <button
                       onClick={() => void downloadOne(c.id, p.url)}
-                      className="px-3 py-1 rounded-md bg-accent text-accent-fg text-xs font-medium shrink-0"
+                      className="px-2 py-0.5 rounded bg-accent text-accent-fg text-xs shrink-0"
                     >
                       Tải
                     </button>
                     <button
                       onClick={() => void dismissOne(c.id, p.url)}
-                      className="px-2 py-1 rounded-md border border-border text-fg text-xs shrink-0 hover:bg-surface-2"
-                      title="Bỏ qua, không tải"
+                      className="px-1.5 py-0.5 rounded border border-border text-fg text-xs shrink-0"
                     >
                       Bỏ qua
                     </button>
                   </div>
                 ))}
+                </Fragment>
+              ))}
+              {/* Dán key nguồn mới vào kênh */}
+              <div className="flex gap-2 px-3 py-2 border-t border-border/60">
+                <input
+                  type="url"
+                  value={keyInputs[k.key] ?? ""}
+                  onChange={(e) => setKeyInputs((m) => ({ ...m, [k.key]: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === "Enter") void addKeyToKenh(k); }}
+                  placeholder="＋ dán link key YouTube nguồn mới cho kênh này…"
+                  className="flex-1 min-w-[180px] px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs placeholder:text-muted"
+                />
+                <button
+                  onClick={() => void addKeyToKenh(k)}
+                  disabled={!(keyInputs[k.key] ?? "").trim() || adding}
+                  className="px-2.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs disabled:opacity-40"
+                >
+                  Thêm key
+                </button>
               </div>
-            )}
+            </div>
           </div>
           </Fragment>
-        ))}
+          );
+        })}
       </div>
+
+      {/* Dialog ➕ THÊM KÊNH: tên + nhóm + key nguồn đầu tiên */}
+      {addOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-surface border border-border rounded-lg w-full max-w-md flex flex-col">
+            <div className="p-3 border-b border-border">
+              <div className="text-sm font-medium text-fg">➕ Thêm kênh</div>
+              <div className="text-xs text-muted mt-0.5">
+                Kênh = kênh TikTok của anh. Đặt tên, chọn nhóm, dán key YouTube nguồn — app tự lo phần còn lại
+                (chế độ 🤖: video mới trước, không có thì vét view cao nhất).
+              </div>
+            </div>
+            <div className="p-3 space-y-2.5 text-sm">
+              <div>
+                <div className="text-xs text-muted mb-1">Tên kênh (tên/ID TikTok của anh)</div>
+                <input
+                  type="text"
+                  value={addName}
+                  onChange={(e) => setAddName(e.target.value)}
+                  placeholder="vd: Kênh Mỹ 1"
+                  className="w-full px-3 py-1.5 rounded-md bg-surface-2 border border-border text-fg placeholder:text-muted"
+                />
+              </div>
+              <div>
+                <div className="text-xs text-muted mb-1">Nhóm</div>
+                <select
+                  value={addGrp}
+                  onChange={(e) => setAddGrp(e.target.value)}
+                  className="w-full px-2 py-1.5 rounded-md bg-surface-2 border border-border text-fg"
+                >
+                  <option value="">— chưa phân nhóm —</option>
+                  {groups.map((g) => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div className="text-xs text-muted mb-1">Key nguồn (link kênh YouTube)</div>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={addUrl}
+                    onChange={(e) => setAddUrl(e.target.value)}
+                    placeholder="https://www.youtube.com/@TenKenh"
+                    className="flex-1 px-3 py-1.5 rounded-md bg-surface-2 border border-border text-fg placeholder:text-muted"
+                  />
+                  <select
+                    value={addTab}
+                    onChange={(e) => setAddTab(e.target.value)}
+                    className="px-2 py-1.5 rounded-md bg-surface-2 border border-border text-fg"
+                    title="Loại video theo dõi"
+                  >
+                    <option value="all">Tất cả</option>
+                    <option value="videos">Video dài</option>
+                    <option value="shorts">Shorts</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-muted mb-1">Thư mục lưu (tự tạo theo tên — thường không phải chọn)</div>
+                {addDir ? (
+                  <div className="text-xs text-fg truncate">
+                    📁 {addDir}
+                    <button onClick={() => setAddDir("")} className="ml-1.5 text-danger hover:underline">✕ bỏ, dùng tự tạo</button>
+                  </div>
+                ) : addName.trim() && settings?.watchRoot ? (
+                  <div className="text-xs text-fg truncate" title="Tự tạo theo tên kênh">
+                    📂 {settings.watchRoot}\{addName.trim()}
+                  </div>
+                ) : (
+                  <div className="text-xs text-warning">
+                    {settings?.watchRoot ? "gõ tên kênh là tự có thư mục" : "⚠ chưa chọn 📂 Trung chuyển gốc (đầu trang) — nên chọn trước"}
+                  </div>
+                )}
+                <button
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        const dir = await cmd.pickFolder();
+                        if (dir) setAddDir(dir);
+                      } catch (e) {
+                        setError(formatErr(e));
+                      }
+                    })();
+                  }}
+                  className="mt-1 px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs"
+                >
+                  📁 Chọn tay…
+                </button>
+              </div>
+            </div>
+            <div className="p-3 border-t border-border flex gap-2 justify-end">
+              <button
+                onClick={() => setAddOpen(false)}
+                className="px-3 py-1.5 rounded-md border border-border text-fg text-sm hover:bg-surface-2"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={() => void addKenh()}
+                disabled={!addName.trim() || !addUrl.trim() || adding}
+                className="px-4 py-1.5 rounded-md bg-accent text-accent-fg text-sm font-medium disabled:opacity-50"
+              >
+                {adding ? "Đang tạo…" : "Tạo kênh"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Dialog QUẢN LÝ NHÓM — thêm / đổi tên / xóa */}
       {showGroups && (

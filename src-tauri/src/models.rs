@@ -253,6 +253,11 @@ pub struct WatchedChannel {
     /// "đã làm" để user không tích lại video cũ.
     #[serde(default)]
     pub done_ids: Vec<String>,
+    /// true = lần quét kho gần nhất (chế độ 🤖 tự vét) KHÔNG còn video nào
+    /// chưa làm — kho nguồn ĐÃ CẠN, user cần đổi key. UI hiện badge đỏ.
+    /// Tự về false ngay khi có video mới đăng hoặc tải được video.
+    #[serde(default)]
+    pub source_empty: bool,
 }
 
 fn default_daily_limit() -> u32 {

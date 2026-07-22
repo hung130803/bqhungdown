@@ -246,6 +246,16 @@ async fn apply(
         dripped.truncate(got as usize);
         drip_count += got;
     }
+    // KHO CẠN: quét kho hôm nay mà không moi ra được video nào chưa làm
+    // (và cũng chẳng có video mới) -> báo user đổi key. Có bài trở lại
+    // (video mới hoặc rót được) -> tự gỡ cờ.
+    let source_empty_now: Option<bool> = if new_count > 0 || !dripped.is_empty() {
+        Some(false)
+    } else if auto_scanned {
+        Some(true)
+    } else {
+        None
+    };
     let new_done: Vec<String> = new_fetched
         .iter()
         .filter(|_| auto)
@@ -299,6 +309,9 @@ async fn apply(
         c.drip_count = drip_count;
         if auto_scanned {
             c.auto_fetch_date = Some(today.clone());
+        }
+        if let Some(v) = source_empty_now {
+            c.source_empty = v;
         }
         for p in &dripped {
             c.picked.retain(|x| x.id != p.id);
@@ -538,6 +551,7 @@ mod tests {
             drip_date: None,
             drip_count: 0,
             done_ids: done,
+            source_empty: false,
         }
     }
 
@@ -687,6 +701,7 @@ mod tests {
         assert!(c.group.is_none());
         assert!(c.auto_fetch_date.is_none());
         assert!(c.target_name.is_none());
+        assert!(!c.source_empty);
     }
 }
 
