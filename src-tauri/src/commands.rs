@@ -1037,6 +1037,9 @@ pub async fn add_watched_channel(
         pending: vec![],
         seen_ids: vec![],
         dest_dir: None,
+        group: None,
+        source_mode: "new".into(),
+        auto_fetch_date: None,
         picked: vec![],
         daily_limit: 1,
         drip_date: None,
@@ -1112,6 +1115,38 @@ pub fn set_watched_daily_limit(
     store: State<Arc<WatchlistStore>>,
 ) -> AppResult<Option<WatchedChannel>> {
     store.update(&id, |c| c.daily_limit = limit.clamp(1, 3))
+}
+
+/// Đặt CHẾ ĐỘ NGUỒN của kênh: "new" (chỉ video mới) | "picked" (hàng chờ 🎯)
+/// | "auto" (tự vét kho theo view). Đổi sang "auto" thì xóa auto_fetch_date
+/// để hôm nay được quét kho ngay, không phải chờ mai.
+#[tauri::command]
+pub fn set_watched_source_mode(
+    id: String,
+    mode: String,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    if !matches!(mode.as_str(), "new" | "picked" | "auto") {
+        return Err(AppError::Other(format!("chế độ nguồn không hợp lệ: {mode}")));
+    }
+    store.update(&id, |c| {
+        c.source_mode = mode.clone();
+        if mode == "auto" {
+            c.auto_fetch_date = None;
+        }
+    })
+}
+
+/// Gán nhóm/quốc gia cho kênh theo dõi (trang Theo dõi lọc theo nhãn này).
+/// None/rỗng = bỏ nhóm.
+#[tauri::command]
+pub fn set_watched_group(
+    id: String,
+    group: Option<String>,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    let g = group.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    store.update(&id, |c| c.group = g.clone())
 }
 
 /// Manually download one video that was detected in "notify only" mode, then

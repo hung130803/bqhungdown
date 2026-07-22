@@ -219,6 +219,19 @@ pub struct WatchedChannel {
     /// thư mục tải mặc định chung trong Settings.
     #[serde(default)]
     pub dest_dir: Option<String>,
+    /// Nhóm/quốc gia do user gán ("Mỹ", "Hàn"...) — trang Theo dõi lọc và
+    /// gom theo nhãn này khi quản lý nhiều kênh. Rỗng = chưa phân nhóm.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Nguồn video khi kênh không đăng gì mới (video MỚI luôn ưu tiên):
+    /// "new" = chỉ video mới | "picked" = rót từ hàng chờ user tích 🎯 |
+    /// "auto" = tự vét kho: app tự chọn video view cao nhất CHƯA làm.
+    #[serde(default = "default_source_mode")]
+    pub source_mode: String,
+    /// Ngày (local) đã quét kho cho chế độ "auto" — mỗi ngày chỉ quét 1 lần
+    /// để không giã yt-dlp/API mỗi vòng kiểm tra.
+    #[serde(default)]
+    pub auto_fetch_date: Option<String>,
     /// Hàng chờ làm: video user tích chọn từ kho, tự tải dần mỗi ngày.
     #[serde(default)]
     pub picked: Vec<PickedVideo>,
@@ -239,6 +252,10 @@ pub struct WatchedChannel {
 
 fn default_daily_limit() -> u32 {
     1
+}
+
+fn default_source_mode() -> String {
+    "new".into()
 }
 
 /// Video user đã TÍCH CHỌN từ kho kênh nguồn — "hàng chờ làm". Watcher mỗi

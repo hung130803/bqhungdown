@@ -576,6 +576,26 @@ export async function setWatchedDailyLimit(
   return invoke<WatchedChannel | null>("set_watched_daily_limit", { id, limit });
 }
 
+/** Đặt chế độ nguồn: "new" | "picked" (hàng chờ 🎯) | "auto" (tự vét kho). */
+export async function setWatchedSourceMode(
+  id: string,
+  mode: "new" | "picked" | "auto",
+): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("set_watched_source_mode", { id, mode });
+}
+
+/** Gán nhóm/quốc gia cho kênh theo dõi (null/rỗng = bỏ nhóm). */
+export async function setWatchedGroup(
+  id: string,
+  group: string | null,
+): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("set_watched_group", { id, group });
+}
+
 export async function checkWatchedNow(): Promise<WatchedChannel[]> {
   if (IS_WEB) return [];
   const { invoke } = await import("@tauri-apps/api/core");

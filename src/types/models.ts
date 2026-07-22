@@ -231,6 +231,13 @@ export interface WatchedChannel {
   /** Thư mục lưu RIÊNG cho video mới của kênh (dây chuyền — INTEGRATION.md).
    *  null/undefined = dùng thư mục tải mặc định chung. */
   destDir?: string | null;
+  /** Nhóm/quốc gia user gán ("Mỹ", "Hàn"...). Rỗng = chưa phân nhóm. */
+  group?: string | null;
+  /** Nguồn khi kênh không đăng mới: "new" | "picked" (hàng chờ 🎯) |
+   *  "auto" (tự vét kho theo view). Video MỚI luôn ưu tiên. */
+  sourceMode?: string;
+  /** Ngày local đã quét kho cho chế độ auto (1 lần/ngày). */
+  autoFetchDate?: string | null;
   /** Hàng chờ làm — video đã tích chọn từ kho, tự tải dần mỗi ngày. */
   picked?: PickedVideo[];
   /** Số video tự tải tối đa/ngày (video mới + hàng chờ), 1-3. */

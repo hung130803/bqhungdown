@@ -19,6 +19,9 @@ export function WatchPage() {
   const [adding, setAdding] = useState(false);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Quản lý nhiều kênh đa quốc gia: tìm nhanh + lọc theo nhóm.
+  const [search, setSearch] = useState("");
+  const [groupFilter, setGroupFilter] = useState("");
 
   const reload = async () => {
     try {
@@ -164,6 +167,11 @@ export function WatchPage() {
     setPickerSaving(true);
     try {
       await cmd.setWatchedPicked(pickerFor.id, pickerSel);
+      // Vừa tích hàng chờ mà kênh chưa ở chế độ 🎯 → chuyển luôn để hàng
+      // chờ thực sự chạy (khỏi quên đổi chế độ).
+      if (pickerSel.length > 0 && pickerFor.sourceMode !== "picked") {
+        await cmd.setWatchedSourceMode(pickerFor.id, "picked");
+      }
       setPickerFor(null);
       await reload();
     } catch (e) {
@@ -176,6 +184,24 @@ export function WatchPage() {
   const setDaily = async (id: string, limit: number) => {
     try {
       await cmd.setWatchedDailyLimit(id, limit);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
+  const setMode = async (id: string, mode: "new" | "picked" | "auto") => {
+    try {
+      await cmd.setWatchedSourceMode(id, mode);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
+  const setGroup = async (id: string, group: string) => {
+    try {
+      await cmd.setWatchedGroup(id, group.trim() || null);
       await reload();
     } catch (e) {
       setError(formatErr(e));
@@ -197,16 +223,44 @@ export function WatchPage() {
 
   const interval = settings?.watchIntervalMin ?? 60;
 
+  // Danh sách nhóm (quốc gia) hiện có + bộ lọc + tìm kiếm cho nhiều kênh.
+  const groups = [...new Set(channels.map((c) => c.group?.trim()).filter(Boolean))].sort() as string[];
+  const term = search.trim().toLowerCase();
+  const visible = channels
+    .filter((c) => !groupFilter || (groupFilter === "__none" ? !c.group : c.group === groupFilter))
+    .filter(
+      (c) =>
+        !term ||
+        (c.title ?? "").toLowerCase().includes(term) ||
+        c.url.toLowerCase().includes(term) ||
+        (c.group ?? "").toLowerCase().includes(term),
+    )
+    .sort((a, b) =>
+      (a.group ?? "￿").localeCompare(b.group ?? "￿", "vi") ||
+      (a.title ?? a.url).localeCompare(b.title ?? b.url, "vi"),
+    );
+  const nOn = channels.filter((c) => c.enabled).length;
+  const nEmpty = channels.filter(
+    (c) => c.sourceMode === "picked" && (c.picked?.length ?? 0) === 0,
+  ).length;
+
   return (
-    <div className="max-w-2xl mx-auto space-y-5">
-      <div>
+    <div className="max-w-3xl mx-auto space-y-4">
+      <div className="flex items-center gap-3 flex-wrap">
         <h2 className="text-xl font-medium text-fg">Theo dõi kênh</h2>
-        <p className="text-sm text-muted mt-1">
-          Thêm kênh vào đây — app tự kiểm tra định kỳ và tải video mới đăng (không tải lại video cũ).
-          Với YouTube dùng kiểm tra nhanh qua RSS nên đặt 1-2 phút là phát hiện video mới gần như tức thì.
-          Khi mới thêm, app chỉ ghi nhận video hiện có làm mốc, KHÔNG tải hết kho cũ.
-        </p>
+        <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 border border-border text-muted">
+          {channels.length} kênh · {nOn} đang bật
+        </span>
+        {nEmpty > 0 && (
+          <span className="text-xs px-2 py-0.5 rounded-full bg-warning/15 border border-warning text-warning">
+            ⚠ {nEmpty} kênh hết hàng chờ
+          </span>
+        )}
       </div>
+      <p className="text-sm text-muted -mt-2">
+        Video MỚI đăng luôn tự phát hiện (RSS ~1-2 phút). Kênh không đăng gì vẫn có bài nhờ chế độ
+        nguồn: 🎯 hàng chờ tay hoặc 🤖 tự vét kho theo view — tối đa 1-3 video/ngày mỗi kênh.
+      </p>
 
       {/* Add channel */}
       <div className="space-y-2 p-3 rounded-lg border border-border bg-surface">
@@ -239,25 +293,46 @@ export function WatchPage() {
         </div>
       </div>
 
-      {/* Interval + check now */}
-      <div className="flex items-center gap-3 flex-wrap text-sm">
-        <span className="text-fg">Kiểm tra mỗi</span>
+      {/* Thanh công cụ: tìm + lọc nhóm + chu kỳ + kiểm tra ngay */}
+      <div className="flex items-center gap-2 flex-wrap text-sm">
         <input
-          type="number"
-          min={1}
-          max={1440}
-          value={interval}
-          onChange={(e) => {
-            const n = parseInt(e.target.value, 10);
-            if (Number.isFinite(n) && n >= 1) void updateSettings({ watchIntervalMin: n });
-          }}
-          className="w-20 px-2 py-1.5 rounded-md bg-surface border border-border text-fg"
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="🔍 Tìm kênh / nhóm…"
+          className="flex-1 min-w-[160px] px-3 py-1.5 rounded-md bg-surface border border-border text-fg placeholder:text-muted"
         />
-        <span className="text-fg">phút</span>
+        <select
+          value={groupFilter}
+          onChange={(e) => setGroupFilter(e.target.value)}
+          className="px-2 py-1.5 rounded-md bg-surface border border-border text-fg"
+          title="Lọc theo nhóm/quốc gia"
+        >
+          <option value="">Mọi nhóm</option>
+          {groups.map((g) => (
+            <option key={g} value={g}>{g}</option>
+          ))}
+          <option value="__none">Chưa phân nhóm</option>
+        </select>
+        <label className="flex items-center gap-1.5 text-muted">
+          <span>mỗi</span>
+          <input
+            type="number"
+            min={1}
+            max={1440}
+            value={interval}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              if (Number.isFinite(n) && n >= 1) void updateSettings({ watchIntervalMin: n });
+            }}
+            className="w-16 px-2 py-1.5 rounded-md bg-surface border border-border text-fg"
+          />
+          <span>phút</span>
+        </label>
         <button
           onClick={() => void checkNow()}
           disabled={checking || channels.length === 0}
-          className="ml-auto px-3 py-1.5 rounded-md bg-surface-2 border border-border text-fg disabled:opacity-50"
+          className="px-3 py-1.5 rounded-md bg-accent text-accent-fg font-medium disabled:opacity-50"
         >
           {checking ? "Đang kiểm tra…" : "Kiểm tra ngay"}
         </button>
@@ -278,9 +353,15 @@ export function WatchPage() {
             hint="Thêm kênh để app tự kiểm tra video mới định kỳ và tải về giúp bạn — không cần ngồi canh."
           />
         )}
-        {channels.map((c) => (
+        {channels.length > 0 && visible.length === 0 && (
+          <div className="text-sm text-muted text-center py-6">
+            Không kênh nào khớp tìm kiếm/bộ lọc.
+          </div>
+        )}
+        {visible.map((c) => (
           <div key={c.id} className="rounded-lg border border-border bg-surface">
-            <div className="flex items-center gap-3 p-3">
+            {/* Tầng 1: bật/tắt · tên · nhóm · các nút điều khiển */}
+            <div className="flex items-center gap-2 px-3 pt-2.5 flex-wrap">
               <input
                 type="checkbox"
                 checked={c.enabled}
@@ -288,63 +369,48 @@ export function WatchPage() {
                 className="h-4 w-4 shrink-0"
                 title={c.enabled ? "Đang theo dõi" : "Đã tạm dừng"}
               />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-fg truncate" title={c.url}>
-                  {c.title || c.url}
-                </div>
-                <div className="text-xs text-muted truncate flex items-center gap-2">
-                  <span>{tabLabel(c.tab)}</span>
-                  <span>·</span>
-                  <span>{c.lastChecked ? `Kiểm tra: ${formatTime(c.lastChecked)}` : "Chưa kiểm tra"}</span>
-                  {typeof c.lastNewCount === "number" && c.lastNewCount > 0 && (
-                    <>
-                      <span>·</span>
-                      <span className="text-success">+{c.lastNewCount} video mới</span>
-                    </>
-                  )}
-                </div>
-                {c.lastError && (
-                  <div className="text-xs text-danger truncate mt-0.5" title={c.lastError}>
-                    ⚠ {c.lastError}
-                  </div>
-                )}
-                {c.destDir && (
-                  <div className="text-xs text-muted truncate mt-0.5" title={c.destDir}>
-                    📁 {c.destDir}
-                    <button
-                      onClick={() => void clearDest(c.id)}
-                      className="ml-1.5 text-danger hover:underline"
-                      title="Bỏ thư mục riêng — video mới về thư mục tải mặc định"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                )}
-                {/* Hàng chờ làm: còn bao nhiêu video đã tích, cạn thì cảnh báo */}
-                {(c.picked?.length ?? 0) > 0 ? (
-                  <div className="text-xs text-muted mt-0.5">
-                    🎯 còn {c.picked!.length} video chờ làm · tự tải {c.dailyLimit ?? 1}/ngày
-                  </div>
-                ) : (
-                  c.destDir && (
-                    <div className="text-xs text-warning mt-0.5">
-                      ⚠ Hết hàng chờ — chỉ còn chờ video MỚI. Bấm 🎯 tích thêm video kho.
-                    </div>
-                  )
-                )}
+              <div
+                className={`text-sm font-medium truncate flex-1 min-w-[140px] ${c.enabled ? "text-fg" : "text-muted line-through"}`}
+                title={c.url}
+              >
+                {c.title || c.url}
               </div>
-              {/* Số video tự tải tối đa mỗi ngày (mới + hàng chờ) */}
+              {/* Nhóm/quốc gia — gõ rồi rời ô hoặc Enter là lưu */}
+              <input
+                key={`${c.id}:${c.group ?? ""}`}
+                type="text"
+                defaultValue={c.group ?? ""}
+                placeholder="nhóm…"
+                onBlur={(e) => {
+                  if (e.target.value.trim() !== (c.group ?? "")) void setGroup(c.id, e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                }}
+                className="w-20 px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0 placeholder:text-muted"
+                title="Nhóm/quốc gia của kênh (Mỹ, Hàn…) — để lọc khi nhiều kênh"
+              />
+              {/* Chế độ nguồn khi kênh không đăng video mới */}
+              <select
+                value={c.sourceMode ?? "new"}
+                onChange={(e) => void setMode(c.id, e.target.value as "new" | "picked" | "auto")}
+                className="px-1.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
+                title={"Nguồn video của kênh:\n• Video mới — chỉ tải video mới đăng\n• 🎯 Hàng chờ — tự tải dần video ANH ĐÃ TÍCH trong kho\n• 🤖 Tự vét — app TỰ CHỌN video view cao nhất chưa làm trong kho\n(Video mới đăng luôn được ưu tiên chiếm suất ngày trước)"}
+              >
+                <option value="new">Video mới</option>
+                <option value="picked">🎯 Hàng chờ</option>
+                <option value="auto">🤖 Tự vét</option>
+              </select>
               <select
                 value={c.dailyLimit ?? 1}
                 onChange={(e) => void setDaily(c.id, parseInt(e.target.value, 10))}
                 className="px-1.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
-                title="Số video TỰ TẢI tối đa mỗi ngày (video mới đăng + hàng chờ đã tích)"
+                title="Số video TỰ TẢI tối đa mỗi ngày (video mới + hàng chờ/tự vét)"
               >
                 <option value={1}>1/ngày</option>
                 <option value={2}>2/ngày</option>
                 <option value={3}>3/ngày</option>
               </select>
-              {/* Kho video kênh nguồn — tích chọn video "nên làm" */}
               <button
                 onClick={() => void openPicker(c)}
                 className={`px-2 py-1 rounded-md text-xs shrink-0 border ${
@@ -352,11 +418,10 @@ export function WatchPage() {
                     ? "bg-accent text-accent-fg border-accent"
                     : "bg-surface-2 text-fg border-border"
                 }`}
-                title="Mở KHO video kênh nguồn — tích chọn video nên làm, app tự tải dần mỗi ngày"
+                title="Mở KHO video kênh nguồn — tích chọn video nên làm (hàng chờ 🎯)"
               >
                 🎯
               </button>
-              {/* Thư mục lưu RIÊNG của kênh (dây chuyền cắt ghép — INTEGRATION.md) */}
               <button
                 onClick={() => void setDest(c.id)}
                 className={`px-2 py-1 rounded-md text-xs shrink-0 border ${
@@ -366,16 +431,15 @@ export function WatchPage() {
                 }`}
                 title={
                   c.destDir
-                    ? `Video mới lưu vào: ${c.destDir} — bấm để đổi`
-                    : "Chọn THƯ MỤC LƯU RIÊNG cho video mới của kênh này (nối với tool cắt ghép)"
+                    ? `Video lưu vào: ${c.destDir} — bấm để đổi`
+                    : "Chọn THƯ MỤC LƯU RIÊNG cho kênh (nối với tool cắt ghép)"
                 }
               >
                 📁
               </button>
-              {/* Tự tải vs Chỉ báo */}
               <button
                 onClick={() => void toggleAuto(c.id, !c.autoDownload)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium shrink-0 border ${
+                className={`px-2 py-1 rounded-md text-xs font-medium shrink-0 border ${
                   c.autoDownload
                     ? "bg-accent text-accent-fg border-accent"
                     : "bg-surface-2 text-fg border-border"
@@ -386,11 +450,44 @@ export function WatchPage() {
               </button>
               <button
                 onClick={() => void remove(c.id)}
-                className="px-2 py-1 rounded-md border border-border text-fg shrink-0 hover:bg-surface-2"
+                className="px-2 py-1 rounded-md border border-border text-fg text-xs shrink-0 hover:bg-surface-2"
                 title="Bỏ theo dõi"
               >
                 ✕
               </button>
+            </div>
+            {/* Tầng 2: thông tin phụ — loại video, kiểm tra gần nhất, hàng chờ, thư mục, lỗi */}
+            <div className="px-3 pb-2.5 pt-1 text-xs text-muted flex items-center gap-x-2 gap-y-0.5 flex-wrap">
+              <span>{tabLabel(c.tab)}</span>
+              <span>·</span>
+              <span>{c.lastChecked ? `kiểm tra ${timeAgo(c.lastChecked)}` : "chưa kiểm tra"}</span>
+              {typeof c.lastNewCount === "number" && c.lastNewCount > 0 && (
+                <span className="text-success">+{c.lastNewCount} mới</span>
+              )}
+              {(c.sourceMode ?? "new") === "picked" &&
+                ((c.picked?.length ?? 0) > 0 ? (
+                  <span>· 🎯 còn {c.picked!.length} chờ làm</span>
+                ) : (
+                  <span className="text-warning">· ⚠ HẾT hàng chờ — bấm 🎯 tích thêm</span>
+                ))}
+              {(c.sourceMode ?? "new") === "auto" && <span>· 🤖 tự vét kho theo view</span>}
+              {c.destDir && (
+                <span className="truncate max-w-[45%]" title={c.destDir}>
+                  · 📁 {shortDir(c.destDir)}
+                  <button
+                    onClick={() => void clearDest(c.id)}
+                    className="ml-1 text-danger hover:underline"
+                    title="Bỏ thư mục riêng — video về thư mục tải mặc định"
+                  >
+                    ✕
+                  </button>
+                </span>
+              )}
+              {c.lastError && (
+                <span className="text-danger truncate max-w-full" title={c.lastError}>
+                  ⚠ {c.lastError}
+                </span>
+              )}
             </div>
 
             {/* Video mới phát hiện (chế độ "Chỉ báo") — chờ bấm tải */}
@@ -524,6 +621,12 @@ function videoIdOf(url: string): string {
   return url;
 }
 
+/** Rút gọn đường dẫn còn 2 khúc cuối: `D:\A\B\C` -> `…\B\C`. */
+function shortDir(p: string): string {
+  const parts = p.replace(/[/\\]+$/, "").split(/[/\\]/);
+  return parts.length <= 2 ? p : `…\\${parts.slice(-2).join("\\")}`;
+}
+
 function formatViews(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
@@ -534,14 +637,6 @@ function tabLabel(tab: string): string {
   if (tab === "videos") return "Video dài";
   if (tab === "shorts") return "Shorts";
   return "Tất cả";
-}
-
-function formatTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString("vi-VN");
-  } catch {
-    return iso;
-  }
 }
 
 /** "vừa xong" / "X phút trước" / "X giờ trước" / "X ngày trước". Accepts ISO or

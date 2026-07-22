@@ -149,14 +149,39 @@ async fn apply(
         }
     }
 
-    // Hàng chờ làm: nếu hôm nay còn suất, rót tiếp từ danh sách đã tích chọn
+    // Còn suất hôm nay thì lấy thêm video theo CHẾ ĐỘ NGUỒN của kênh
     // (video mới đăng vừa enqueue ở trên đã chiếm suất trước). Không rót ở
     // lượt baseline — kênh vừa thêm, đợi vòng quét kế cho ổn định.
-    let mut dripped: Vec<PickedVideo> = if is_baseline {
-        Vec::new()
-    } else {
-        plan_drip(channel, drip_count)
-    };
+    let mut dripped: Vec<PickedVideo> = Vec::new();
+    let mut auto_scanned = false;
+    if !is_baseline {
+        match channel.source_mode.as_str() {
+            // Hàng chờ tay 🎯: rót từ đầu danh sách user đã tích.
+            "picked" => dripped = plan_drip(channel, drip_count),
+            // Tự vét kho 🤖: quét danh sách kênh TỐI ĐA 1 LẦN/NGÀY, chọn
+            // video view cao nhất chưa làm. Ghi auto_fetch_date kể cả khi
+            // quét lỗi — không giã yt-dlp/API mỗi vòng 1-2 phút.
+            "auto" => {
+                let limit = channel.daily_limit.clamp(1, 3);
+                if drip_count < limit
+                    && channel.auto_fetch_date.as_deref() != Some(today.as_str())
+                {
+                    auto_scanned = true;
+                    let tab = if channel.tab.is_empty() { "all".to_string() } else { channel.tab.clone() };
+                    if let Ok((_i, videos)) = crate::channel_fetcher::fetch_channel(
+                        app, &channel.url, 300, false, &tab, &settings, false,
+                    ).await
+                    {
+                        dripped = pick_auto_candidates(
+                            &videos, &channel.done_ids, (limit - drip_count) as usize,
+                        );
+                    }
+                }
+            }
+            // "new": chỉ video mới, không rót gì thêm.
+            _ => {}
+        }
+    }
     if !dripped.is_empty() {
         let vids: Vec<ChannelVideo> = dripped.iter().map(picked_to_channel_video).collect();
         let got = enqueue_new(app, queue, settings_store, history, &channel.title,
@@ -215,6 +240,9 @@ async fn apply(
         // Chốt hạn mức ngày + rút video đã rót khỏi hàng chờ, ghi "đã làm".
         c.drip_date = Some(today.clone());
         c.drip_count = drip_count;
+        if auto_scanned {
+            c.auto_fetch_date = Some(today.clone());
+        }
         for p in &dripped {
             c.picked.retain(|x| x.id != p.id);
             if !c.seen_ids.contains(&p.id) {
@@ -252,6 +280,41 @@ fn plan_drip(channel: &WatchedChannel, drip_count: u32) -> Vec<PickedVideo> {
         .filter(|p| !channel.done_ids.contains(&p.id))
         .take(slots)
         .cloned()
+        .collect()
+}
+
+/// Tự vét kho 🤖 — chọn `n` video làm hôm nay: bỏ post ảnh + video đã làm
+/// (`done_ids`), xếp view CAO NHẤT trước (thiếu số view thì đứng cuối, giữ
+/// thứ tự kênh = mới trước), khử trùng id. Hàm thuần để unit-test.
+fn pick_auto_candidates(
+    videos: &[ChannelVideo],
+    done_ids: &[String],
+    n: usize,
+) -> Vec<PickedVideo> {
+    let mut cands: Vec<(String, &ChannelVideo)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for v in videos {
+        if v.is_photo {
+            continue;
+        }
+        let id = video_id_of(&v.url);
+        if done_ids.contains(&id) || !seen.insert(id.clone()) {
+            continue;
+        }
+        cands.push((id, v));
+    }
+    // sort_by ổn định: cùng view (hoặc cùng thiếu view) giữ thứ tự kênh.
+    cands.sort_by(|a, b| b.1.view_count.unwrap_or(0).cmp(&a.1.view_count.unwrap_or(0)));
+    cands
+        .into_iter()
+        .take(n)
+        .map(|(id, v)| PickedVideo {
+            id,
+            url: v.url.clone(),
+            title: v.title.clone(),
+            view_count: v.view_count,
+            thumbnail: v.thumbnail.clone(),
+        })
         .collect()
 }
 
@@ -414,11 +477,28 @@ mod tests {
             pending: vec![],
             seen_ids: vec!["base1".into()],
             dest_dir: Some("D:\\TrungChuyen\\K".into()),
+            group: None,
+            source_mode: "picked".into(),
+            auto_fetch_date: None,
             picked,
             daily_limit: daily,
             drip_date: None,
             drip_count: 0,
             done_ids: done,
+        }
+    }
+
+    fn cv(id: &str, views: Option<u64>, photo: bool) -> ChannelVideo {
+        ChannelVideo {
+            url: format!("https://www.youtube.com/watch?v={id}"),
+            title: id.into(),
+            duration_sec: None,
+            view_count: views,
+            upload_date: None,
+            thumbnail: None,
+            is_photo: photo,
+            is_short: false,
+            hashtags: Vec::new(),
         }
     }
 
@@ -465,6 +545,35 @@ mod tests {
         assert!(plan_drip(&c, 0).is_empty());
     }
 
+    #[test]
+    fn auto_chon_view_cao_nhat_chua_lam() {
+        let videos = vec![
+            cv("moi", Some(100), false),      // view thấp
+            cv("hot", Some(9_000), false),    // view cao nhất -> chọn trước
+            cv("dalam", Some(50_000), true),  // post ảnh -> bỏ
+            cv("done1", Some(99_999), false), // đã làm -> bỏ
+            cv("kha", Some(5_000), false),
+        ];
+        let got = pick_auto_candidates(&videos, &["done1".to_string()], 2);
+        assert_eq!(
+            got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            ["hot", "kha"]
+        );
+    }
+
+    #[test]
+    fn auto_thieu_view_giu_thu_tu_kenh_va_khu_trung() {
+        // Không có số view (yt-dlp flat đôi khi thiếu) -> giữ thứ tự kênh
+        // (video mới đứng trước); id trùng chỉ lấy 1 lần.
+        let videos = vec![
+            cv("a", None, false),
+            cv("a", None, false),
+            cv("b", None, false),
+        ];
+        let got = pick_auto_candidates(&videos, &[], 5);
+        assert_eq!(got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+    }
+
     /// File watchlist.json ĐỜI CŨ (trước khi có picked/daily_limit/...) phải
     /// đọc được nguyên vẹn với giá trị mặc định — không được vỡ dữ liệu user.
     #[test]
@@ -483,6 +592,11 @@ mod tests {
         assert!(c.drip_date.is_none());
         assert!(c.done_ids.is_empty());
         assert_eq!(c.seen_ids.len(), 2);
+        // Kênh cũ mặc định "new" — GIỮ NGUYÊN hành vi trước giờ (chỉ video
+        // mới), không tự dưng đi vét kho của user.
+        assert_eq!(c.source_mode, "new");
+        assert!(c.group.is_none());
+        assert!(c.auto_fetch_date.is_none());
     }
 }
 
