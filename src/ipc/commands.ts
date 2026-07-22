@@ -540,6 +540,15 @@ export async function removeWatchedChannel(id: string): Promise<void> {
   return invoke<void>("remove_watched_channel", { id });
 }
 
+export async function setWatchedDestDir(
+  id: string,
+  destDir: string | null,
+): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("set_watched_dest_dir", { id, destDir });
+}
+
 export async function setWatchedEnabled(id: string, enabled: boolean): Promise<WatchedChannel | null> {
   if (IS_WEB) return null;
   const { invoke } = await import("@tauri-apps/api/core");

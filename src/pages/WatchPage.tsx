@@ -85,6 +85,26 @@ export function WatchPage() {
     }
   };
 
+  const setDest = async (id: string) => {
+    try {
+      const dir = await cmd.pickFolder();
+      if (!dir) return; // hủy hộp thoại -> giữ nguyên
+      await cmd.setWatchedDestDir(id, dir);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
+  const clearDest = async (id: string) => {
+    try {
+      await cmd.setWatchedDestDir(id, null);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
   const downloadOne = async (id: string, videoUrl: string) => {
     try {
       await cmd.downloadPending(id, videoUrl);
@@ -229,7 +249,35 @@ export function WatchPage() {
                     ⚠ {c.lastError}
                   </div>
                 )}
+                {c.destDir && (
+                  <div className="text-xs text-muted truncate mt-0.5" title={c.destDir}>
+                    📁 {c.destDir}
+                    <button
+                      onClick={() => void clearDest(c.id)}
+                      className="ml-1.5 text-danger hover:underline"
+                      title="Bỏ thư mục riêng — video mới về thư mục tải mặc định"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
               </div>
+              {/* Thư mục lưu RIÊNG của kênh (dây chuyền cắt ghép — INTEGRATION.md) */}
+              <button
+                onClick={() => void setDest(c.id)}
+                className={`px-2 py-1 rounded-md text-xs shrink-0 border ${
+                  c.destDir
+                    ? "bg-accent text-accent-fg border-accent"
+                    : "bg-surface-2 text-fg border-border"
+                }`}
+                title={
+                  c.destDir
+                    ? `Video mới lưu vào: ${c.destDir} — bấm để đổi`
+                    : "Chọn THƯ MỤC LƯU RIÊNG cho video mới của kênh này (nối với tool cắt ghép)"
+                }
+              >
+                📁
+              </button>
               {/* Tự tải vs Chỉ báo */}
               <button
                 onClick={() => void toggleAuto(c.id, !c.autoDownload)}

@@ -131,7 +131,8 @@ async fn apply(
 
         if auto {
             let vids: Vec<ChannelVideo> = new_fetched.iter().map(|f| f.video.clone()).collect();
-            enqueue_new(app, queue, settings_store, history, &channel.title, &vids, &settings).await;
+            enqueue_new(app, queue, settings_store, history, &channel.title,
+                        &channel.dest_dir, &vids, &settings).await;
         }
     }
 
@@ -260,6 +261,7 @@ async fn enqueue_new(
     _settings_store: &Arc<SettingsStore>,
     history: &Arc<HistoryStore>,
     channel_title: &Option<String>,
+    dest_dir: &Option<String>,
     videos: &[ChannelVideo],
     settings: &crate::models::Settings,
 ) -> u32 {
@@ -267,7 +269,14 @@ async fn enqueue_new(
         return 0;
     }
     let _ = app; // reserved for future per-item resolution
-    let folder = settings.default_folder.clone();
+    // Thư mục RIÊNG của kênh theo dõi (dây chuyền: mỗi kênh 1 thư mục —
+    // INTEGRATION.md); trống -> thư mục tải mặc định chung như cũ.
+    let folder: std::path::PathBuf = dest_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| settings.default_folder.clone());
 
     let mut taken = history.known_short_ids().unwrap_or_default();
     for it in queue.list() {

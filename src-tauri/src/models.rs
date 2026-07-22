@@ -214,6 +214,11 @@ pub struct WatchedChannel {
     /// Video ids already handled (baseline + everything enqueued since).
     #[serde(default)]
     pub seen_ids: Vec<String>,
+    /// Thư mục lưu RIÊNG cho video mới của kênh này (dây chuyền 2 tool: mỗi
+    /// kênh 1 thư mục trung chuyển — xem INTEGRATION.md). None/rỗng = dùng
+    /// thư mục tải mặc định chung trong Settings.
+    #[serde(default)]
+    pub dest_dir: Option<String>,
 }
 
 /// A saved channel/video the user wants to come back to (download or watch

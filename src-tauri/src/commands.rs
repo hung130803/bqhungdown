@@ -1036,6 +1036,7 @@ pub async fn add_watched_channel(
         auto_download: true,
         pending: vec![],
         seen_ids: vec![],
+        dest_dir: None,
     };
     store.add(channel)?;
     // Baseline pass: records current videos as "seen" and enqueues NOTHING
@@ -1071,6 +1072,21 @@ pub fn set_watched_auto_download(
     store.update(&id, |c| c.auto_download = auto)
 }
 
+/// Đặt THƯ MỤC LƯU RIÊNG cho 1 kênh theo dõi (dây chuyền 2 tool: video mới
+/// của kênh rơi vào đúng thư mục trung chuyển của kênh — INTEGRATION.md).
+/// None/rỗng = quay về thư mục tải mặc định chung.
+#[tauri::command]
+pub fn set_watched_dest_dir(
+    id: String,
+    dest_dir: Option<String>,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    let d = dest_dir
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty());
+    store.update(&id, |c| c.dest_dir = d.clone())
+}
+
 /// Manually download one video that was detected in "notify only" mode, then
 /// drop it from the channel's pending list.
 #[tauri::command]
@@ -1088,10 +1104,18 @@ pub async fn download_pending(
         None => return Ok(store.get(&id)),
     };
     let s = settings.get();
+    // Thư mục RIÊNG của kênh (dây chuyền — INTEGRATION.md); trống -> mặc định.
+    let folder: std::path::PathBuf = channel
+        .dest_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| s.default_folder.clone());
     let options = DownloadOptions {
         mode: DownloadMode::Video,
         format_id: None,
-        save_folder: s.default_folder.clone(),
+        save_folder: folder,
         sub_langs: vec![],
         auto_translate_to: None,
         on_conflict: ConflictPolicy::Rename,

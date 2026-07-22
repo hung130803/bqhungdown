@@ -304,6 +304,7 @@ pub fn run() {
             commands::remove_watched_channel,
             commands::set_watched_enabled,
             commands::set_watched_auto_download,
+            commands::set_watched_dest_dir,
             commands::download_pending,
             commands::dismiss_pending,
             commands::check_watched_now,

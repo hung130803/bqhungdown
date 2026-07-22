@@ -228,6 +228,9 @@ export interface WatchedChannel {
   /** Videos detected in notify-only mode, awaiting manual download. */
   pending?: DetectedVideo[];
   seenIds?: string[];
+  /** Thư mục lưu RIÊNG cho video mới của kênh (dây chuyền — INTEGRATION.md).
+   *  null/undefined = dùng thư mục tải mặc định chung. */
+  destDir?: string | null;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
