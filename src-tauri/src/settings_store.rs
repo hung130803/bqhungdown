@@ -199,6 +199,10 @@ impl SettingsStore {
             if let Some(keys) = patch.youtube_api_keys {
                 s.youtube_api_keys = normalize_api_keys(keys);
             }
+            // watch_root: thư mục trung chuyển gốc — trim, rỗng/null = bỏ.
+            if let Some(opt) = patch.watch_root {
+                s.watch_root = opt.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+            }
             // watch_groups: nhóm kênh theo dõi — trim, bỏ rỗng, bỏ trùng,
             // GIỮ THỨ TỰ user đặt (khác api_keys nên không dùng chung hàm).
             if let Some(groups) = patch.watch_groups {

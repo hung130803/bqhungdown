@@ -219,6 +219,11 @@ pub struct WatchedChannel {
     /// thư mục tải mặc định chung trong Settings.
     #[serde(default)]
     pub dest_dir: Option<String>,
+    /// TÊN KÊNH ĐÍCH (kênh TikTok của user) mà nguồn này nuôi. Khi đặt +
+    /// có `Settings.watch_root`, video tự về `<watch_root>\<target_name>`
+    /// (xem `resolve_watch_folder`). `dest_dir` đặt tay vẫn ưu tiên hơn.
+    #[serde(default)]
+    pub target_name: Option<String>,
     /// Nhóm/quốc gia do user gán ("Mỹ", "Hàn"...) — trang Theo dõi lọc và
     /// gom theo nhãn này khi quản lý nhiều kênh. Rỗng = chưa phân nhóm.
     #[serde(default)]
@@ -511,6 +516,11 @@ pub struct Settings {
     /// dõi quản lý thêm/sửa/xóa; kênh gán nhóm bằng chọn từ danh sách này.
     #[serde(default)]
     pub watch_groups: Vec<String>,
+    /// THƯ MỤC TRUNG CHUYỂN GỐC của dây chuyền (INTEGRATION.md). Khi kênh
+    /// theo dõi có `target_name`, video tự về `<watch_root>\<target_name>`
+    /// — user chỉ gõ tên kênh đích, không phải chọn thư mục từng kênh.
+    #[serde(default)]
+    pub watch_root: Option<String>,
     /// Độ phân giải TỐI ĐA khi chọn "Tốt nhất" (format_id = None). 0 = không
     /// giới hạn (vớ luôn 4K/8K nếu có). Mặc định 1080 vì 4K to gấp ~5.5 lần
     /// 1080p → tải hàng loạt lâu hơn nhiều dù mạng nhanh. User muốn 4K thì đặt
@@ -570,6 +580,7 @@ impl Default for Settings {
             youtube_api_key: None,
             youtube_api_keys: Vec::new(),
             watch_groups: Vec::new(),
+            watch_root: None,
             max_height: 1080,
         }
     }
@@ -603,6 +614,9 @@ pub struct SettingsPatch {
     pub youtube_api_key: Option<Option<String>>,
     pub youtube_api_keys: Option<Vec<String>>,
     pub watch_groups: Option<Vec<String>>,
+    /// `Some(None)` = bỏ gốc trung chuyển; `Some(Some(path))` = đặt.
+    #[serde(default, deserialize_with = "deserialize_optional_optional_string")]
+    pub watch_root: Option<Option<String>>,
     pub max_height: Option<u32>,
 }
 

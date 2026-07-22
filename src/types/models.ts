@@ -231,6 +231,9 @@ export interface WatchedChannel {
   /** Thư mục lưu RIÊNG cho video mới của kênh (dây chuyền — INTEGRATION.md).
    *  null/undefined = dùng thư mục tải mặc định chung. */
   destDir?: string | null;
+  /** TÊN KÊNH ĐÍCH (kênh TikTok của user) — video tự về
+   *  `<watchRoot>\<tên>`; destDir đặt tay vẫn ưu tiên hơn. */
+  targetName?: string | null;
   /** Nhóm/quốc gia user gán ("Mỹ", "Hàn"...). Rỗng = chưa phân nhóm. */
   group?: string | null;
   /** Nguồn khi kênh không đăng mới: "new" | "picked" (hàng chờ 🎯) |
@@ -309,6 +312,9 @@ export interface Settings {
   /** Danh sách NHÓM kênh theo dõi user tự đặt (Mỹ, Hàn…) — thêm/sửa/xóa
    *  trong trang Theo dõi; kênh gán nhóm bằng chọn từ danh sách này. */
   watchGroups?: string[];
+  /** Thư mục TRUNG CHUYỂN GỐC của dây chuyền — kênh có targetName thì
+   *  video tự về `<watchRoot>\<targetName>`. */
+  watchRoot?: string | null;
   /**
    * Độ phân giải TỐI ĐA khi chọn "Tốt nhất". 0 = không giới hạn (vớ 4K/8K).
    * Mặc định 1080 vì 4K to gấp ~5.5 lần 1080p → tải hàng loạt lâu hơn nhiều.

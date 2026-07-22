@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import * as cmd from "@/ipc/commands";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import type { ChannelVideo, PickedVideo, WatchedChannel } from "@/types/models";
@@ -208,6 +208,25 @@ export function WatchPage() {
     }
   };
 
+  const setTarget = async (id: string, target: string) => {
+    try {
+      await cmd.setWatchedTarget(id, target.trim() || null);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
+  const pickRoot = async () => {
+    try {
+      const dir = await cmd.pickFolder();
+      if (!dir) return;
+      await updateSettings({ watchRoot: dir });
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
   // ── Quản lý NHÓM (thêm/sửa/xóa) — danh sách lưu trong Settings ──
   const [showGroups, setShowGroups] = useState(false);
   const [newGroup, setNewGroup] = useState("");
@@ -316,6 +335,27 @@ export function WatchPage() {
         nguồn: 🎯 hàng chờ tay hoặc 🤖 tự vét kho theo view — tối đa 1-3 video/ngày mỗi kênh.
       </p>
 
+      {/* Thư mục trung chuyển gốc — gõ tên KÊNH ĐÍCH là video tự về <gốc>\<tên> */}
+      <div className="flex items-center gap-2 text-sm flex-wrap px-3 py-2 rounded-lg border border-border bg-surface">
+        <span className="shrink-0">📂 Trung chuyển gốc:</span>
+        {settings?.watchRoot ? (
+          <span className="text-fg font-medium truncate flex-1 min-w-[120px]" title={settings.watchRoot}>
+            {settings.watchRoot}
+          </span>
+        ) : (
+          <span className="text-warning flex-1 min-w-[120px]">
+            chưa chọn — cần cho ô "Kênh đích" tự tạo thư mục
+          </span>
+        )}
+        <button
+          onClick={() => void pickRoot()}
+          className="px-3 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
+          title="Thư mục chứa toàn bộ thư mục kênh của dây chuyền — gõ tên Kênh đích là video tự về <gốc>\<tên kênh>"
+        >
+          Chọn…
+        </button>
+      </div>
+
       {/* Add channel */}
       <div className="space-y-2 p-3 rounded-lg border border-border bg-surface">
         <div className="flex gap-2 flex-wrap">
@@ -419,8 +459,20 @@ export function WatchPage() {
             Không kênh nào khớp tìm kiếm/bộ lọc.
           </div>
         )}
-        {visible.map((c) => (
-          <div key={c.id} className="rounded-lg border border-border bg-surface">
+        {visible.map((c, i) => (
+          <Fragment key={c.id}>
+          {(i === 0 || (visible[i - 1].group ?? "") !== (c.group ?? "")) && (
+            <div className="flex items-center gap-2 pt-2 px-1">
+              <span className="text-xs font-semibold text-fg uppercase tracking-wide">
+                🏷 {c.group || "Chưa phân nhóm"}
+              </span>
+              <span className="text-xs text-muted">
+                {visible.filter((x) => (x.group ?? "") === (c.group ?? "")).length} kênh
+              </span>
+              <div className="flex-1 border-t border-border" />
+            </div>
+          )}
+          <div className="rounded-lg border border-border bg-surface">
             {/* Tầng 1: bật/tắt · tên · nhóm · các nút điều khiển */}
             <div className="flex items-center gap-2 px-3 pt-2.5 flex-wrap">
               <input
@@ -436,6 +488,23 @@ export function WatchPage() {
               >
                 {c.title || c.url}
               </div>
+              {/* KÊNH ĐÍCH (kênh TikTok của user) — gõ tên là video tự về <gốc>\<tên> */}
+              <input
+                key={`${c.id}:t:${c.targetName ?? ""}`}
+                type="text"
+                defaultValue={c.targetName ?? ""}
+                placeholder="kênh đích…"
+                onBlur={(e) => {
+                  if (e.target.value.trim() !== (c.targetName ?? "")) void setTarget(c.id, e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                }}
+                className={`w-28 px-2 py-1 rounded-md border text-xs shrink-0 placeholder:text-muted ${
+                  c.targetName ? "bg-accent/15 text-fg border-accent" : "bg-surface-2 text-fg border-border"
+                }`}
+                title={"Tên KÊNH ĐÍCH (kênh TikTok của anh) mà nguồn này nuôi.\nGõ tên → video tự về <Trung chuyển gốc>\\<tên kênh> — tool cắt nhận đúng kênh.\n(📁 chọn tay vẫn được và ưu tiên hơn)"}
+              />
               {/* Nhóm/quốc gia — chọn từ danh sách đã đặt (🏷 Nhóm để thêm/sửa/xóa) */}
               <select
                 value={c.group ?? ""}
@@ -541,18 +610,31 @@ export function WatchPage() {
                 ))}
               {(c.sourceMode ?? "new") === "auto" && <span>· 🤖 tự vét kho theo view</span>}
               {c.destDir ? (
-                <span className="truncate max-w-[55%]" title={`Thư mục trung chuyển: ${c.destDir}`}>
-                  · <span className="text-accent font-medium">→ làm kênh: {baseName(c.destDir)}</span>
+                <span className="truncate max-w-[55%]" title={`Thư mục (chọn tay 📁, ưu tiên hơn tên kênh): ${c.destDir}`}>
+                  · <span className="text-accent font-medium">→ làm kênh: {baseName(c.destDir)}</span> 📁
                   <button
                     onClick={() => void clearDest(c.id)}
                     className="ml-1 text-danger hover:underline"
-                    title="Bỏ thư mục riêng — video về thư mục tải mặc định, tool cắt sẽ KHÔNG thấy"
+                    title="Bỏ thư mục chọn tay — quay về dùng ô Kênh đích (nếu có)"
                   >
                     ✕
                   </button>
                 </span>
+              ) : c.targetName ? (
+                settings?.watchRoot ? (
+                  <span
+                    className="truncate max-w-[55%]"
+                    title={`Video tự về: ${settings.watchRoot}\\${c.targetName}`}
+                  >
+                    · <span className="text-accent font-medium">→ làm kênh: {c.targetName}</span>
+                  </span>
+                ) : (
+                  <span className="text-danger">
+                    · ⚠ đã đặt kênh đích nhưng CHƯA chọn 📂 Trung chuyển gốc — video sẽ rơi thư mục mặc định!
+                  </span>
+                )
               ) : (
-                <span className="text-warning">· ⚠ chưa gán kênh đích — bấm 📁 chọn thư mục kênh</span>
+                <span className="text-warning">· ⚠ chưa gán kênh đích — gõ ô "kênh đích…" hoặc bấm 📁</span>
               )}
               {c.lastError && (
                 <span className="text-danger truncate max-w-full" title={c.lastError}>
@@ -591,6 +673,7 @@ export function WatchPage() {
               </div>
             )}
           </div>
+          </Fragment>
         ))}
       </div>
 

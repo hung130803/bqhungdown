@@ -309,6 +309,7 @@ pub fn run() {
             commands::set_watched_daily_limit,
             commands::set_watched_source_mode,
             commands::set_watched_group,
+            commands::set_watched_target,
             commands::download_pending,
             commands::dismiss_pending,
             commands::check_watched_now,

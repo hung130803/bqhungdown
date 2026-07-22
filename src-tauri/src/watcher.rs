@@ -33,6 +33,55 @@ fn video_id_of(url: &str) -> String {
     crate::channel_fetcher::extract_video_id(url).unwrap_or_else(|| url.to_string())
 }
 
+/// Làm sạch tên kênh đích thành tên thư mục Windows hợp lệ: thay ký tự cấm
+/// `<>:"/\|?*` + ký tự điều khiển bằng khoảng trắng, gộp khoảng trắng thừa,
+/// bỏ chấm/khoảng trắng cuối (Windows cấm). Rỗng sau khi lọc -> None.
+pub fn sanitize_folder_name(name: &str) -> Option<String> {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if "<>:\"/\\|?*".contains(c) || (c as u32) < 0x20 {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let mut out = String::new();
+    for w in cleaned.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(w);
+    }
+    let out = out.trim_end_matches(['.', ' ']).to_string();
+    if out.is_empty() { None } else { Some(out) }
+}
+
+/// Thư mục lưu video của 1 kênh theo dõi — MỘT nơi quyết định duy nhất cho
+/// mọi đường tải (video mới / hàng chờ / tự vét / tải tay pending), chốt
+/// NGAY LÚC ENQUEUE nên nhiều kênh tải song song không thể lẫn thư mục:
+/// 1. `dest_dir` user chọn tay 📁 (ưu tiên — giữ tương thích kênh cũ)
+/// 2. `<watch_root>\<target_name đã làm sạch>` khi user gõ tên kênh đích
+/// 3. thư mục tải mặc định chung (kèm theo: tool cắt sẽ KHÔNG thấy).
+pub fn resolve_watch_folder(
+    dest_dir: &Option<String>,
+    target_name: &Option<String>,
+    watch_root: &Option<String>,
+    default_folder: &std::path::Path,
+) -> std::path::PathBuf {
+    if let Some(d) = dest_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        return std::path::PathBuf::from(d);
+    }
+    if let (Some(root), Some(name)) = (
+        watch_root.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        target_name.as_deref().and_then(sanitize_folder_name),
+    ) {
+        return std::path::Path::new(root).join(name);
+    }
+    default_folder.to_path_buf()
+}
+
 /// A fetched video plus its dedup id and publish time (for "đăng X phút trước").
 struct Fetched {
     id: String,
@@ -143,8 +192,12 @@ async fn apply(
 
         if auto {
             let vids: Vec<ChannelVideo> = new_fetched.iter().map(|f| f.video.clone()).collect();
+            let folder = resolve_watch_folder(
+                &channel.dest_dir, &channel.target_name,
+                &settings.watch_root, &settings.default_folder,
+            );
             let got = enqueue_new(app, queue, settings_store, history, &channel.title,
-                                  &channel.dest_dir, &vids, &settings).await;
+                                  folder, &vids, &settings).await;
             drip_count += got;
         }
     }
@@ -184,8 +237,12 @@ async fn apply(
     }
     if !dripped.is_empty() {
         let vids: Vec<ChannelVideo> = dripped.iter().map(picked_to_channel_video).collect();
+        let folder = resolve_watch_folder(
+            &channel.dest_dir, &channel.target_name,
+            &settings.watch_root, &settings.default_folder,
+        );
         let got = enqueue_new(app, queue, settings_store, history, &channel.title,
-                              &channel.dest_dir, &vids, &settings).await;
+                              folder, &vids, &settings).await;
         dripped.truncate(got as usize);
         drip_count += got;
     }
@@ -405,7 +462,7 @@ async fn enqueue_new(
     _settings_store: &Arc<SettingsStore>,
     history: &Arc<HistoryStore>,
     channel_title: &Option<String>,
-    dest_dir: &Option<String>,
+    folder: std::path::PathBuf,
     videos: &[ChannelVideo],
     settings: &crate::models::Settings,
 ) -> u32 {
@@ -413,14 +470,9 @@ async fn enqueue_new(
         return 0;
     }
     let _ = app; // reserved for future per-item resolution
-    // Thư mục RIÊNG của kênh theo dõi (dây chuyền: mỗi kênh 1 thư mục —
-    // INTEGRATION.md); trống -> thư mục tải mặc định chung như cũ.
-    let folder: std::path::PathBuf = dest_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| settings.default_folder.clone());
+    // Thư mục đã được resolve_watch_folder chốt cho KÊNH NÀY — tạo sẵn
+    // (best-effort) để yt-dlp không vấp thư mục thiếu khi tải song song.
+    let _ = std::fs::create_dir_all(&folder);
 
     let mut taken = history.known_short_ids().unwrap_or_default();
     for it in queue.list() {
@@ -477,6 +529,7 @@ mod tests {
             pending: vec![],
             seen_ids: vec!["base1".into()],
             dest_dir: Some("D:\\TrungChuyen\\K".into()),
+            target_name: None,
             group: None,
             source_mode: "picked".into(),
             auto_fetch_date: None,
@@ -546,6 +599,42 @@ mod tests {
     }
 
     #[test]
+    fn thu_muc_uu_tien_dung_thu_tu_va_khong_lan() {
+        let def = std::path::PathBuf::from("D:\\Down");
+        // 1. dest_dir tay thắng tất
+        let f = resolve_watch_folder(
+            &Some("E:\\Tay".into()), &Some("Kênh A".into()),
+            &Some("D:\\TC".into()), &def,
+        );
+        assert_eq!(f, std::path::PathBuf::from("E:\\Tay"));
+        // 2. gốc + tên kênh đích
+        let f = resolve_watch_folder(&None, &Some("Kênh A".into()), &Some("D:\\TC".into()), &def);
+        assert_eq!(f, std::path::PathBuf::from("D:\\TC").join("Kênh A"));
+        // 3. thiếu gốc -> mặc định; thiếu tên -> mặc định
+        assert_eq!(resolve_watch_folder(&None, &Some("K".into()), &None, &def), def);
+        assert_eq!(resolve_watch_folder(&None, &None, &Some("D:\\TC".into()), &def), def);
+        // 2 kênh đích khác nhau -> 2 thư mục khác nhau (tải song song không lẫn)
+        let a = resolve_watch_folder(&None, &Some("Kênh A".into()), &Some("D:\\TC".into()), &def);
+        let b = resolve_watch_folder(&None, &Some("Kênh B".into()), &Some("D:\\TC".into()), &def);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn ten_thu_muc_duoc_lam_sach_ky_tu_cam() {
+        assert_eq!(sanitize_folder_name("kênh: mỹ/1 *hot*?"), Some("kênh mỹ 1 hot".into()));
+        assert_eq!(sanitize_folder_name("Kênh A."), Some("Kênh A".into()));
+        assert_eq!(sanitize_folder_name("  @user.tiktok  "), Some("@user.tiktok".into()));
+        assert_eq!(sanitize_folder_name("<>:\\|?*"), None);
+        assert_eq!(sanitize_folder_name("   "), None);
+        // Tên sạch qua resolve không nổ đường dẫn
+        let f = resolve_watch_folder(
+            &None, &Some("kênh: mỹ/1".into()), &Some("D:\\TC".into()),
+            std::path::Path::new("D:\\Down"),
+        );
+        assert_eq!(f, std::path::PathBuf::from("D:\\TC").join("kênh mỹ 1"));
+    }
+
+    #[test]
     fn auto_chon_view_cao_nhat_chua_lam() {
         let videos = vec![
             cv("moi", Some(100), false),      // view thấp
@@ -597,6 +686,7 @@ mod tests {
         assert_eq!(c.source_mode, "new");
         assert!(c.group.is_none());
         assert!(c.auto_fetch_date.is_none());
+        assert!(c.target_name.is_none());
     }
 }
 

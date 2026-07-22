@@ -1037,6 +1037,7 @@ pub async fn add_watched_channel(
         pending: vec![],
         seen_ids: vec![],
         dest_dir: None,
+        target_name: None,
         group: None,
         source_mode: "new".into(),
         auto_fetch_date: None,
@@ -1137,6 +1138,25 @@ pub fn set_watched_source_mode(
     })
 }
 
+/// Đặt TÊN KÊNH ĐÍCH (kênh TikTok của user) cho kênh theo dõi — video tự
+/// về `<watch_root>\<tên>` (resolve_watch_folder). None/rỗng = bỏ.
+#[tauri::command]
+pub fn set_watched_target(
+    id: String,
+    target: Option<String>,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    let t = target.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    // Tên phải ra được thư mục hợp lệ sau khi làm sạch — báo lỗi sớm cho UI
+    // thay vì âm thầm rơi về thư mục mặc định.
+    if let Some(name) = &t {
+        if crate::watcher::sanitize_folder_name(name).is_none() {
+            return Err(AppError::Other(format!("Tên kênh không hợp lệ: {name}")));
+        }
+    }
+    store.update(&id, |c| c.target_name = t.clone())
+}
+
 /// Gán nhóm/quốc gia cho kênh theo dõi (trang Theo dõi lọc theo nhãn này).
 /// None/rỗng = bỏ nhóm.
 #[tauri::command]
@@ -1166,14 +1186,12 @@ pub async fn download_pending(
         None => return Ok(store.get(&id)),
     };
     let s = settings.get();
-    // Thư mục RIÊNG của kênh (dây chuyền — INTEGRATION.md); trống -> mặc định.
-    let folder: std::path::PathBuf = channel
-        .dest_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|x| !x.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| s.default_folder.clone());
+    // Thư mục của kênh — CÙNG một chỗ quyết định với watcher (dây chuyền,
+    // INTEGRATION.md) để tải tay hay tự tải đều về đúng 1 thư mục.
+    let folder = crate::watcher::resolve_watch_folder(
+        &channel.dest_dir, &channel.target_name, &s.watch_root, &s.default_folder,
+    );
+    let _ = std::fs::create_dir_all(&folder);
     let options = DownloadOptions {
         mode: DownloadMode::Video,
         format_id: None,
