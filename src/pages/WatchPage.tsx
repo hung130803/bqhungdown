@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import * as cmd from "@/ipc/commands";
 import { useSettingsStore } from "@/stores/useSettingsStore";
-import type { WatchedChannel } from "@/types/models";
+import type { ChannelVideo, PickedVideo, WatchedChannel } from "@/types/models";
 import { EmptyState } from "@/components/EmptyState";
 
 /**
@@ -117,6 +117,65 @@ export function WatchPage() {
   const dismissOne = async (id: string, videoUrl: string) => {
     try {
       await cmd.dismissPending(id, videoUrl);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    }
+  };
+
+  // ── Hàng chờ làm: dialog kho video kênh nguồn, tích chọn video sẽ tự tải dần ──
+  const [pickerFor, setPickerFor] = useState<WatchedChannel | null>(null);
+  const [pickerVideos, setPickerVideos] = useState<ChannelVideo[]>([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerErr, setPickerErr] = useState<string | null>(null);
+  // Thứ tự tích = thứ tự tự tải (video tích trước được làm trước).
+  const [pickerSel, setPickerSel] = useState<PickedVideo[]>([]);
+  const [pickerSaving, setPickerSaving] = useState(false);
+
+  const openPicker = async (c: WatchedChannel) => {
+    setPickerFor(c);
+    setPickerVideos([]);
+    setPickerErr(null);
+    setPickerSel(c.picked ?? []);
+    setPickerLoading(true);
+    try {
+      const res = await cmd.fetchChannelVideos(c.url, 300, false, (c.tab as "all" | "videos" | "shorts") || "all", false);
+      // Nhiều view nhất lên đầu (không có số view thì giữ nguyên thứ tự mới→cũ).
+      const vids = [...res.videos].sort((a, b) => (b.viewCount ?? -1) - (a.viewCount ?? -1));
+      setPickerVideos(vids);
+    } catch (e) {
+      setPickerErr(formatErr(e));
+    } finally {
+      setPickerLoading(false);
+    }
+  };
+
+  const togglePick = (v: ChannelVideo) => {
+    const id = videoIdOf(v.url);
+    setPickerSel((sel) =>
+      sel.some((p) => p.id === id)
+        ? sel.filter((p) => p.id !== id)
+        : [...sel, { id, url: v.url, title: v.title, viewCount: v.viewCount ?? null, thumbnail: v.thumbnail ?? null }],
+    );
+  };
+
+  const savePicker = async () => {
+    if (!pickerFor || pickerSaving) return;
+    setPickerSaving(true);
+    try {
+      await cmd.setWatchedPicked(pickerFor.id, pickerSel);
+      setPickerFor(null);
+      await reload();
+    } catch (e) {
+      setPickerErr(formatErr(e));
+    } finally {
+      setPickerSaving(false);
+    }
+  };
+
+  const setDaily = async (id: string, limit: number) => {
+    try {
+      await cmd.setWatchedDailyLimit(id, limit);
       await reload();
     } catch (e) {
       setError(formatErr(e));
@@ -261,7 +320,42 @@ export function WatchPage() {
                     </button>
                   </div>
                 )}
+                {/* Hàng chờ làm: còn bao nhiêu video đã tích, cạn thì cảnh báo */}
+                {(c.picked?.length ?? 0) > 0 ? (
+                  <div className="text-xs text-muted mt-0.5">
+                    🎯 còn {c.picked!.length} video chờ làm · tự tải {c.dailyLimit ?? 1}/ngày
+                  </div>
+                ) : (
+                  c.destDir && (
+                    <div className="text-xs text-warning mt-0.5">
+                      ⚠ Hết hàng chờ — chỉ còn chờ video MỚI. Bấm 🎯 tích thêm video kho.
+                    </div>
+                  )
+                )}
               </div>
+              {/* Số video tự tải tối đa mỗi ngày (mới + hàng chờ) */}
+              <select
+                value={c.dailyLimit ?? 1}
+                onChange={(e) => void setDaily(c.id, parseInt(e.target.value, 10))}
+                className="px-1.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
+                title="Số video TỰ TẢI tối đa mỗi ngày (video mới đăng + hàng chờ đã tích)"
+              >
+                <option value={1}>1/ngày</option>
+                <option value={2}>2/ngày</option>
+                <option value={3}>3/ngày</option>
+              </select>
+              {/* Kho video kênh nguồn — tích chọn video "nên làm" */}
+              <button
+                onClick={() => void openPicker(c)}
+                className={`px-2 py-1 rounded-md text-xs shrink-0 border ${
+                  (c.picked?.length ?? 0) > 0
+                    ? "bg-accent text-accent-fg border-accent"
+                    : "bg-surface-2 text-fg border-border"
+                }`}
+                title="Mở KHO video kênh nguồn — tích chọn video nên làm, app tự tải dần mỗi ngày"
+              >
+                🎯
+              </button>
               {/* Thư mục lưu RIÊNG của kênh (dây chuyền cắt ghép — INTEGRATION.md) */}
               <button
                 onClick={() => void setDest(c.id)}
@@ -331,8 +425,109 @@ export function WatchPage() {
           </div>
         ))}
       </div>
+
+      {/* Dialog KHO VIDEO kênh nguồn — tích chọn "hàng chờ làm" */}
+      {pickerFor && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-surface border border-border rounded-lg w-full max-w-2xl max-h-[85vh] flex flex-col">
+            <div className="p-3 border-b border-border">
+              <div className="text-sm font-medium text-fg truncate">
+                🎯 Kho video: {pickerFor.title || pickerFor.url}
+              </div>
+              <div className="text-xs text-muted mt-0.5">
+                Tích video "nên làm" — app tự tải dần mỗi ngày ({pickerFor.dailyLimit ?? 1}/ngày,
+                video MỚI đăng chiếm suất trước). Thứ tự tích = thứ tự làm. Đã tích {pickerSel.length} video.
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {pickerLoading && (
+                <div className="p-6 text-center text-sm text-muted">Đang lấy kho video…</div>
+              )}
+              {pickerErr && (
+                <div className="m-3 px-3 py-2 rounded-md bg-danger/10 border border-danger text-danger text-sm">
+                  {pickerErr}
+                </div>
+              )}
+              {!pickerLoading && !pickerErr && pickerVideos.length === 0 && (
+                <div className="p-6 text-center text-sm text-muted">Không lấy được video nào.</div>
+              )}
+              {pickerVideos.map((v) => {
+                const id = videoIdOf(v.url);
+                const done = pickerFor.doneIds?.includes(id) ?? false;
+                const sel = pickerSel.some((p) => p.id === id);
+                const order = sel ? pickerSel.findIndex((p) => p.id === id) + 1 : 0;
+                return (
+                  <label
+                    key={id}
+                    className={`flex items-center gap-3 px-3 py-2 border-t border-border text-sm ${
+                      done ? "opacity-50" : "cursor-pointer hover:bg-surface-2"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={sel}
+                      disabled={done}
+                      onChange={() => togglePick(v)}
+                      className="h-4 w-4 shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate text-fg" title={v.title}>{v.title || v.url}</div>
+                      <div className="text-xs text-muted">
+                        {v.viewCount != null && <>👁 {formatViews(v.viewCount)} · </>}
+                        {v.uploadDate && <>{timeAgo(v.uploadDate)} · </>}
+                        {done ? "✅ đã làm" : sel ? `#${order} trong hàng chờ` : ""}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="p-3 border-t border-border flex gap-2 justify-end">
+              <button
+                onClick={() => setPickerFor(null)}
+                className="px-3 py-1.5 rounded-md border border-border text-fg text-sm hover:bg-surface-2"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={() => void savePicker()}
+                disabled={pickerSaving}
+                className="px-4 py-1.5 rounded-md bg-accent text-accent-fg text-sm font-medium disabled:opacity-50"
+              >
+                {pickerSaving ? "Đang lưu…" : `Lưu hàng chờ (${pickerSel.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+/** Rút id video từ URL — PHẢI khớp từng bước với backend
+ *  `channel_fetcher::extract_video_id` (lệch là vỡ chống trùng giữa hàng chờ
+ *  và seen_ids/done_ids): ?v=/&v= trước, rồi /shorts/ /embed/ /video/ /v/,
+ *  không khớp thì dùng nguyên URL làm id (giống watcher::video_id_of). */
+function videoIdOf(url: string): string {
+  const vIdx = url.indexOf("?v=") >= 0 ? url.indexOf("?v=") : url.indexOf("&v=");
+  if (vIdx >= 0) {
+    const id = url.slice(vIdx + 3).split("&")[0];
+    if (id) return id;
+  }
+  for (const marker of ["/shorts/", "/embed/", "/video/", "/v/"]) {
+    const i = url.indexOf(marker);
+    if (i >= 0) {
+      const id = url.slice(i + marker.length).split(/[/?#]/)[0];
+      if (id) return id;
+    }
+  }
+  return url;
+}
+
+function formatViews(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  return String(n);
 }
 
 function tabLabel(tab: string): string {

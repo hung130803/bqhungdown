@@ -231,6 +231,24 @@ export interface WatchedChannel {
   /** Thư mục lưu RIÊNG cho video mới của kênh (dây chuyền — INTEGRATION.md).
    *  null/undefined = dùng thư mục tải mặc định chung. */
   destDir?: string | null;
+  /** Hàng chờ làm — video đã tích chọn từ kho, tự tải dần mỗi ngày. */
+  picked?: PickedVideo[];
+  /** Số video tự tải tối đa/ngày (video mới + hàng chờ), 1-3. */
+  dailyLimit?: number;
+  /** Ngày local YYYY-MM-DD + số video đã tự tải hôm đó. */
+  dripDate?: string | null;
+  dripCount?: number;
+  /** Id video đã tự tải — dialog kho đánh dấu "đã làm". */
+  doneIds?: string[];
+}
+
+/** Một video trong hàng chờ làm của kênh theo dõi. */
+export interface PickedVideo {
+  id: string;
+  url: string;
+  title: string;
+  viewCount?: number | null;
+  thumbnail?: string | null;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

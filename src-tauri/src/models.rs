@@ -219,6 +219,42 @@ pub struct WatchedChannel {
     /// thư mục tải mặc định chung trong Settings.
     #[serde(default)]
     pub dest_dir: Option<String>,
+    /// Hàng chờ làm: video user tích chọn từ kho, tự tải dần mỗi ngày.
+    #[serde(default)]
+    pub picked: Vec<PickedVideo>,
+    /// Số video TỰ TẢI tối đa mỗi ngày (video mới + hàng chờ). Clamp 1..=3.
+    #[serde(default = "default_daily_limit")]
+    pub daily_limit: u32,
+    /// Ngày local `YYYY-MM-DD` của lần tự tải gần nhất + số đã tải hôm đó —
+    /// để hạn mức ngày không reset khi app khởi động lại.
+    #[serde(default)]
+    pub drip_date: Option<String>,
+    #[serde(default)]
+    pub drip_count: u32,
+    /// Id video đã tự tải qua theo dõi/hàng chờ — dialog kho đánh dấu
+    /// "đã làm" để user không tích lại video cũ.
+    #[serde(default)]
+    pub done_ids: Vec<String>,
+}
+
+fn default_daily_limit() -> u32 {
+    1
+}
+
+/// Video user đã TÍCH CHỌN từ kho kênh nguồn — "hàng chờ làm". Watcher mỗi
+/// ngày tự lấy tối đa `daily_limit` video từ đầu hàng tải về `dest_dir`
+/// (video MỚI đăng chiếm hạn mức trước) — dây chuyền luôn có bài kể cả khi
+/// kênh nguồn không đăng gì. Xem INTEGRATION.md.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedVideo {
+    pub id: String,
+    pub url: String,
+    pub title: String,
+    #[serde(default)]
+    pub view_count: Option<u64>,
+    #[serde(default)]
+    pub thumbnail: Option<String>,
 }
 
 /// A saved channel/video the user wants to come back to (download or watch

@@ -78,3 +78,17 @@ Nhật ký ghi file `logs/pipeline_YYYYMMDD.log`.
 Tool tải không cần biết gì về cắt/xuất/đăng — chỉ cần: tải video mới của
 kênh theo dõi vào đúng thư mục đã gán, file hoàn chỉnh mới mang tên thật.
 Hết trách nhiệm. (Việc file "biến mất" sau đó là bình thường — tool cắt xóa.)
+
+## 9. Hàng chờ làm (tool tải) — nguồn không đăng vẫn có bài
+
+- Mỗi kênh theo dõi có `picked` = danh sách video user TÍCH CHỌN từ kho
+  kênh nguồn (nút 🎯) và `daily_limit` (1-3, mặc định 1).
+- Mỗi ngày (theo ngày local, đếm `drip_date`/`drip_count` bền qua restart)
+  watcher tự tải tối đa `daily_limit` video: video MỚI đăng chiếm suất
+  trước, còn suất thì rót tiếp từ ĐẦU hàng `picked` (thứ tự user tích).
+- Video đã rót: rút khỏi `picked`, ghi vào `seen_ids` + `done_ids`
+  (dialog kho đánh dấu "✅ đã làm" — không bao giờ tải trùng).
+- Id video 2 bên UI/backend rút CÙNG MỘT CÁCH (`extract_video_id`:
+  ?v= → /shorts/ /embed/ /video/ /v/ → nguyên URL) — sửa 1 nơi phải sửa nơi kia.
+- Tool cắt KHÔNG cần biết video đến từ hàng chờ hay video mới — với nó
+  mọi file trong thư mục kênh như nhau (mục 2-5 giữ nguyên).

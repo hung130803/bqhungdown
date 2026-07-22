@@ -15,7 +15,10 @@ use chrono::Utc;
 use tauri::{AppHandle, Emitter};
 
 use crate::history_store::HistoryStore;
-use crate::models::{ChannelVideo, ConflictPolicy, DetectedVideo, DownloadMode, DownloadOptions};
+use crate::models::{
+    ChannelVideo, ConflictPolicy, DetectedVideo, DownloadMode, DownloadOptions, PickedVideo,
+    WatchedChannel,
+};
 use crate::queue::QueueManager;
 use crate::settings_store::SettingsStore;
 use crate::watchlist_store::WatchlistStore;
@@ -124,6 +127,15 @@ async fn apply(
     let settings = settings_store.get();
     let auto = channel.auto_download;
 
+    // Hạn mức tự tải trong ngày (video mới + hàng chờ đã tích). Giữ số đếm
+    // theo ngày local để restart app không reset hạn mức.
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let mut drip_count = if channel.drip_date.as_deref() == Some(today.as_str()) {
+        channel.drip_count
+    } else {
+        0
+    };
+
     if new_count > 0 {
         let chan_name = channel.title.clone().unwrap_or_else(|| channel.url.clone());
         let first = new_fetched.first().map(|f| f.video.title.clone()).unwrap_or_default();
@@ -131,10 +143,33 @@ async fn apply(
 
         if auto {
             let vids: Vec<ChannelVideo> = new_fetched.iter().map(|f| f.video.clone()).collect();
-            enqueue_new(app, queue, settings_store, history, &channel.title,
-                        &channel.dest_dir, &vids, &settings).await;
+            let got = enqueue_new(app, queue, settings_store, history, &channel.title,
+                                  &channel.dest_dir, &vids, &settings).await;
+            drip_count += got;
         }
     }
+
+    // Hàng chờ làm: nếu hôm nay còn suất, rót tiếp từ danh sách đã tích chọn
+    // (video mới đăng vừa enqueue ở trên đã chiếm suất trước). Không rót ở
+    // lượt baseline — kênh vừa thêm, đợi vòng quét kế cho ổn định.
+    let mut dripped: Vec<PickedVideo> = if is_baseline {
+        Vec::new()
+    } else {
+        plan_drip(channel, drip_count)
+    };
+    if !dripped.is_empty() {
+        let vids: Vec<ChannelVideo> = dripped.iter().map(picked_to_channel_video).collect();
+        let got = enqueue_new(app, queue, settings_store, history, &channel.title,
+                              &channel.dest_dir, &vids, &settings).await;
+        dripped.truncate(got as usize);
+        drip_count += got;
+    }
+    let new_done: Vec<String> = new_fetched
+        .iter()
+        .filter(|_| auto)
+        .map(|f| f.id.clone())
+        .chain(dripped.iter().map(|p| p.id.clone()))
+        .collect();
 
     let now = Utc::now();
     // In "notify only" mode, remember the new videos so the UI can list them
@@ -177,15 +212,61 @@ async fn apply(
         if c.pending.len() > 200 {
             c.pending.truncate(200);
         }
+        // Chốt hạn mức ngày + rút video đã rót khỏi hàng chờ, ghi "đã làm".
+        c.drip_date = Some(today.clone());
+        c.drip_count = drip_count;
+        for p in &dripped {
+            c.picked.retain(|x| x.id != p.id);
+            if !c.seen_ids.contains(&p.id) {
+                c.seen_ids.push(p.id.clone());
+            }
+        }
+        for did in &new_done {
+            if !c.done_ids.contains(did) {
+                c.done_ids.push(did.clone());
+            }
+        }
     });
 
-    if new_count > 0 {
+    if new_count > 0 || !dripped.is_empty() {
         let _ = app.emit(
             crate::events::EV_WATCH_UPDATED,
             crate::events::WatchUpdatedPayload { channel_id: id.to_string(), new_count },
         );
     }
     new_count
+}
+
+/// Hàng chờ làm — chọn video sẽ rót hôm nay: lấy từ ĐẦU hàng `picked` (đúng
+/// thứ tự user tích) tối đa `daily_limit - đã_tải_hôm_nay` video, bỏ video
+/// đã nằm trong `done_ids` (phòng tích trùng). Hàm thuần để unit-test.
+fn plan_drip(channel: &WatchedChannel, drip_count: u32) -> Vec<PickedVideo> {
+    let limit = channel.daily_limit.clamp(1, 3);
+    if drip_count >= limit || channel.picked.is_empty() {
+        return Vec::new();
+    }
+    let slots = (limit - drip_count) as usize;
+    channel
+        .picked
+        .iter()
+        .filter(|p| !channel.done_ids.contains(&p.id))
+        .take(slots)
+        .cloned()
+        .collect()
+}
+
+fn picked_to_channel_video(p: &PickedVideo) -> ChannelVideo {
+    ChannelVideo {
+        url: p.url.clone(),
+        title: p.title.clone(),
+        duration_sec: None,
+        view_count: p.view_count,
+        upload_date: None,
+        thumbnail: p.thumbnail.clone(),
+        is_photo: false,
+        is_short: false,
+        hashtags: Vec::new(),
+    }
 }
 
 /// Fetch a YouTube channel's RSS feed (newest ~15 uploads) and parse out the
@@ -311,6 +392,98 @@ async fn enqueue_new(
         }
     }
     count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chan(picked: Vec<PickedVideo>, daily: u32, done: Vec<String>) -> WatchedChannel {
+        WatchedChannel {
+            id: "t".into(),
+            url: "https://youtube.com/@t".into(),
+            title: None,
+            enabled: true,
+            tab: "all".into(),
+            added_at: Utc::now(),
+            last_checked: None,
+            last_new_count: None,
+            last_error: None,
+            channel_id: None,
+            auto_download: true,
+            pending: vec![],
+            seen_ids: vec!["base1".into()],
+            dest_dir: Some("D:\\TrungChuyen\\K".into()),
+            picked,
+            daily_limit: daily,
+            drip_date: None,
+            drip_count: 0,
+            done_ids: done,
+        }
+    }
+
+    fn pv(id: &str) -> PickedVideo {
+        PickedVideo {
+            id: id.into(),
+            url: format!("https://youtube.com/watch?v={id}"),
+            title: id.into(),
+            view_count: Some(1000),
+            thumbnail: None,
+        }
+    }
+
+    #[test]
+    fn drip_lay_dung_han_muc_theo_thu_tu() {
+        let c = chan(vec![pv("a"), pv("b"), pv("c")], 2, vec![]);
+        let got = plan_drip(&c, 0);
+        assert_eq!(got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+    }
+
+    #[test]
+    fn drip_video_moi_da_chiem_suat() {
+        let c = chan(vec![pv("a"), pv("b")], 2, vec![]);
+        // 1 video mới đăng đã tải hôm nay -> chỉ còn 1 suất cho hàng chờ.
+        assert_eq!(plan_drip(&c, 1).len(), 1);
+        // đủ hạn mức -> không rót.
+        assert!(plan_drip(&c, 2).is_empty());
+    }
+
+    #[test]
+    fn drip_bo_video_da_lam_va_han_muc_kep() {
+        let c = chan(vec![pv("done1"), pv("x")], 1, vec!["done1".into()]);
+        let got = plan_drip(&c, 0);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "x");
+        // daily_limit ngoài khoảng bị kẹp về 1..=3.
+        let c9 = chan((0..9).map(|i| pv(&format!("v{i}"))).collect(), 9, vec![]);
+        assert_eq!(plan_drip(&c9, 0).len(), 3);
+    }
+
+    #[test]
+    fn drip_hang_rong_khong_rot() {
+        let c = chan(vec![], 2, vec![]);
+        assert!(plan_drip(&c, 0).is_empty());
+    }
+
+    /// File watchlist.json ĐỜI CŨ (trước khi có picked/daily_limit/...) phải
+    /// đọc được nguyên vẹn với giá trị mặc định — không được vỡ dữ liệu user.
+    #[test]
+    fn doc_file_watchlist_cu_khong_vo() {
+        let old = r#"{
+            "id":"abc","url":"https://youtube.com/@k","title":"K",
+            "enabled":true,"tab":"all","addedAt":"2026-07-01T00:00:00Z",
+            "lastChecked":null,"lastNewCount":null,"lastError":null,
+            "channelId":"UCx","autoDownload":true,"pending":[],
+            "seenIds":["v1","v2"],"destDir":"D:\\T\\K"
+        }"#;
+        let c: WatchedChannel = serde_json::from_str(old).expect("file cũ phải đọc được");
+        assert!(c.picked.is_empty());
+        assert_eq!(c.daily_limit, 1);
+        assert_eq!(c.drip_count, 0);
+        assert!(c.drip_date.is_none());
+        assert!(c.done_ids.is_empty());
+        assert_eq!(c.seen_ids.len(), 2);
+    }
 }
 
 /// Check every enabled channel once, sequentially. Returns the refreshed list.

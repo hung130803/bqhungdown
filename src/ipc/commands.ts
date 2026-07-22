@@ -21,6 +21,7 @@ import type {
   ExtractorInfo,
   ChannelFetchResult,
   WatchedChannel,
+  PickedVideo,
   Bookmark,
 } from "@/types/models";
 
@@ -553,6 +554,26 @@ export async function setWatchedEnabled(id: string, enabled: boolean): Promise<W
   if (IS_WEB) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<WatchedChannel | null>("set_watched_enabled", { id, enabled });
+}
+
+/** Lưu HÀNG CHỜ LÀM (video đã tích chọn từ kho) của kênh theo dõi. */
+export async function setWatchedPicked(
+  id: string,
+  picked: PickedVideo[],
+): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("set_watched_picked", { id, picked });
+}
+
+/** Đặt số video tự tải tối đa mỗi ngày (1-3) cho kênh theo dõi. */
+export async function setWatchedDailyLimit(
+  id: string,
+  limit: number,
+): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("set_watched_daily_limit", { id, limit });
 }
 
 export async function checkWatchedNow(): Promise<WatchedChannel[]> {

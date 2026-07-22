@@ -1037,6 +1037,11 @@ pub async fn add_watched_channel(
         pending: vec![],
         seen_ids: vec![],
         dest_dir: None,
+        picked: vec![],
+        daily_limit: 1,
+        drip_date: None,
+        drip_count: 0,
+        done_ids: vec![],
     };
     store.add(channel)?;
     // Baseline pass: records current videos as "seen" and enqueues NOTHING
@@ -1085,6 +1090,28 @@ pub fn set_watched_dest_dir(
         .map(|x| x.trim().to_string())
         .filter(|x| !x.is_empty());
     store.update(&id, |c| c.dest_dir = d.clone())
+}
+
+/// Lưu HÀNG CHỜ LÀM của kênh theo dõi — danh sách video user tích chọn từ
+/// kho kênh nguồn. Watcher mỗi ngày tự rót tối đa `daily_limit` video từ đầu
+/// hàng về thư mục riêng của kênh (INTEGRATION.md).
+#[tauri::command]
+pub fn set_watched_picked(
+    id: String,
+    picked: Vec<crate::models::PickedVideo>,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    store.update(&id, |c| c.picked = picked.clone())
+}
+
+/// Đặt số video TỰ TẢI tối đa mỗi ngày cho kênh theo dõi (kẹp 1..=3).
+#[tauri::command]
+pub fn set_watched_daily_limit(
+    id: String,
+    limit: u32,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    store.update(&id, |c| c.daily_limit = limit.clamp(1, 3))
 }
 
 /// Manually download one video that was detected in "notify only" mode, then

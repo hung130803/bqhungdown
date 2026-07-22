@@ -305,6 +305,8 @@ pub fn run() {
             commands::set_watched_enabled,
             commands::set_watched_auto_download,
             commands::set_watched_dest_dir,
+            commands::set_watched_picked,
+            commands::set_watched_daily_limit,
             commands::download_pending,
             commands::dismiss_pending,
             commands::check_watched_now,
