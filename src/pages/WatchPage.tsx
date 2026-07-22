@@ -378,22 +378,23 @@ export function WatchPage() {
         vét cạn kho sẽ báo 🔴 để anh đổi key.
       </p>
 
-      {/* Thư mục trung chuyển gốc — gõ tên KÊNH ĐÍCH là video tự về <gốc>\<tên> */}
-      <div className="flex items-center gap-2 text-sm flex-wrap px-3 py-2 rounded-lg border border-border bg-surface">
-        <span className="shrink-0">📂 Trung chuyển gốc:</span>
+      {/* Trung chuyển gốc — KHÔNG bắt buộc: chỉ là lối tắt khỏi phải 📁 chọn
+          tay từng kênh (đã chọn tay thì bỏ qua dòng này). */}
+      <div className="flex items-center gap-2 text-xs text-muted flex-wrap px-1 -mt-1">
+        <span className="shrink-0">📂 Trung chuyển gốc (không bắt buộc):</span>
         {settings?.watchRoot ? (
-          <span className="text-fg font-medium truncate flex-1 min-w-[120px]" title={settings.watchRoot}>
+          <span className="text-fg truncate flex-1 min-w-[120px]" title={settings.watchRoot}>
             {settings.watchRoot}
           </span>
         ) : (
-          <span className="text-warning flex-1 min-w-[120px]">
-            chưa chọn — cần cho ô "Kênh đích" tự tạo thư mục
+          <span className="flex-1 min-w-[120px]">
+            chưa dùng — anh đang 📁 chọn thư mục tay từng kênh thì kệ nó
           </span>
         )}
         <button
           onClick={() => void pickRoot()}
-          className="px-3 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
-          title="Thư mục chứa toàn bộ thư mục kênh của dây chuyền — gõ tên Kênh đích là video tự về <gốc>\<tên kênh>"
+          className="px-2 py-0.5 rounded-md bg-surface-2 border border-border text-fg shrink-0"
+          title="Lối tắt: chọn 1 thư mục gốc, từ đó kênh mới chỉ cần gõ tên là tự có thư mục <gốc>\<tên> — khỏi bấm chọn 50 lần"
         >
           Chọn…
         </button>
@@ -446,8 +447,9 @@ export function WatchPage() {
           onClick={() => void checkNow()}
           disabled={checking || channels.length === 0}
           className="px-3 py-1.5 rounded-md bg-accent text-accent-fg font-medium disabled:opacity-50"
+          title={"Quét MỌI kênh ngay 1 phát: kênh có video mới → tải; không có mà để 🤖 → tự lấy video view cao nhất chưa làm.\n(App mở là tự chạy mỗi chu kỳ bên cạnh — nút này chỉ để khỏi chờ.)"}
         >
-          {checking ? "Đang kiểm tra…" : "Kiểm tra ngay"}
+          {checking ? "Đang chạy…" : "▶ Chạy tất cả"}
         </button>
       </div>
 
@@ -524,10 +526,11 @@ export function WatchPage() {
                 title={anyOn ? "Kênh đang chạy — bỏ tích để tạm dừng mọi key" : "Kênh đang tạm dừng"}
               />
               <span
-                className={`text-sm font-semibold truncate ${anyOn ? "text-fg" : "text-muted line-through"}`}
+                className={`text-sm font-semibold truncate ${anyOn ? "text-fg" : "text-muted"}`}
               >
                 {k.name || "(chưa đặt tên)"}
               </span>
+              {!anyOn && <span className="text-xs text-muted shrink-0">⏸ tạm dừng</span>}
               <span className="text-xs text-muted shrink-0">{k.keys.length} key</span>
               {dry && <span className="text-xs text-danger font-semibold shrink-0">🔴 HẾT video — đổi key</span>}
               {!dry && mode === "picked" && pickedTotal === 0 && (
@@ -560,7 +563,7 @@ export function WatchPage() {
                 }}
                 className={`flex-1 min-w-[140px] px-2 py-1 rounded-md border text-sm font-semibold ${
                   k.name
-                    ? `bg-transparent border-transparent hover:border-border ${anyOn ? "text-fg" : "text-muted line-through"}`
+                    ? `bg-transparent border-transparent hover:border-border ${anyOn ? "text-fg" : "text-muted"}`
                     : "bg-surface-2 border-warning text-fg"
                 }`}
                 title="Tên KÊNH của anh (kênh TikTok đích) — video tự về <Trung chuyển gốc>\tên này. Sửa tên là đổi cho mọi key."
