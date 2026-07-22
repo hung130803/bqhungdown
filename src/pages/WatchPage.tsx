@@ -40,6 +40,9 @@ export function WatchPage() {
   const [adding, setAdding] = useState(false);
   // Ô "dán key mới" trong từng thẻ kênh (map theo key của thẻ).
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
+  // 50-300 kênh: nhóm GẬP/MỞ được + thẻ kênh THU GỌN 1 dòng, bấm mới xổ.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const [openKenh, setOpenKenh] = useState<Record<string, boolean>>({});
 
   const reload = async () => {
     try {
@@ -473,31 +476,76 @@ export function WatchPage() {
           const dry = k.keys.some((c) => c.sourceEmpty);
           const mode = (k.rep.sourceMode ?? "new") as string;
           const pickedTotal = k.keys.reduce((s, c) => s + (c.picked?.length ?? 0), 0);
+          const g = k.group || "";
+          // Ít kênh thì mở sẵn hết cho dễ nhìn; nhiều kênh (50-300) thì gập
+          // theo nhóm, đang tìm/lọc thì luôn mở để thấy kết quả.
+          const defaultOpen = kenhAll.length <= 8;
+          const gOpen = term || groupFilter ? true : (openGroups[g] ?? defaultOpen);
+          const kOpen = openKenh[k.key] ?? !k.name; // thẻ chưa đặt tên tự xổ
+          const isFirstInGroup = i === 0 || (kenhVisible[i - 1].group || "") !== g;
+          const inGroup = kenhVisible.filter((x) => (x.group || "") === g);
+          const gDry = inGroup.filter((x) => x.keys.some((c) => c.sourceEmpty)).length;
+          const dirOk = !!k.rep.destDir || (!!k.name && !!settings?.watchRoot);
           return (
           <Fragment key={k.key}>
-          {(i === 0 || (kenhVisible[i - 1].group || "") !== (k.group || "")) && (
-            <div className="flex items-center gap-2 pt-2 px-1">
+          {isFirstInGroup && (
+            <button
+              onClick={() => setOpenGroups((m) => ({ ...m, [g]: !gOpen }))}
+              className="w-full flex items-center gap-2 pt-2 px-1 text-left"
+              title={gOpen ? "Gập nhóm" : "Mở nhóm"}
+            >
+              <span className="text-xs text-muted w-3">{gOpen ? "▾" : "▸"}</span>
               <span className="text-xs font-semibold text-fg uppercase tracking-wide">
-                🏷 {k.group || "Chưa phân nhóm"}
+                🏷 {g || "Chưa phân nhóm"}
               </span>
-              <span className="text-xs text-muted">
-                {kenhVisible.filter((x) => (x.group || "") === (k.group || "")).length} kênh
-              </span>
+              <span className="text-xs text-muted">{inGroup.length} kênh</span>
+              {gDry > 0 && (
+                <span className="text-xs text-danger font-medium">🔴 {gDry} hết video</span>
+              )}
               <div className="flex-1 border-t border-border" />
-            </div>
+            </button>
           )}
+          {gOpen && (
           <div className={`rounded-lg border bg-surface ${dry ? "border-danger" : "border-border"}`}>
-            {/* Đầu thẻ KÊNH: bật/tắt · TÊN KÊNH · nhóm · chế độ · hạn mức · 📁 · ✕ */}
-            <div className="flex items-center gap-2 px-3 pt-2.5 flex-wrap">
+            {/* Dòng THU GỌN của kênh — bấm để xổ chi tiết */}
+            <div
+              className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-2/50"
+              onClick={() => setOpenKenh((m) => ({ ...m, [k.key]: !kOpen }))}
+            >
+              <span className="text-xs text-muted w-3 shrink-0">{kOpen ? "▾" : "▸"}</span>
               <input
                 type="checkbox"
                 checked={anyOn}
+                onClick={(e) => e.stopPropagation()}
                 onChange={(e) =>
                   void forKenh(k, (id) => cmd.setWatchedEnabled(id, e.target.checked))
                 }
                 className="h-4 w-4 shrink-0"
                 title={anyOn ? "Kênh đang chạy — bỏ tích để tạm dừng mọi key" : "Kênh đang tạm dừng"}
               />
+              <span
+                className={`text-sm font-semibold truncate ${anyOn ? "text-fg" : "text-muted line-through"}`}
+              >
+                {k.name || "(chưa đặt tên)"}
+              </span>
+              <span className="text-xs text-muted shrink-0">{k.keys.length} key</span>
+              {dry && <span className="text-xs text-danger font-semibold shrink-0">🔴 HẾT video — đổi key</span>}
+              {!dry && mode === "picked" && pickedTotal === 0 && (
+                <span className="text-xs text-warning shrink-0">⚠ hết hàng chờ</span>
+              )}
+              {!dirOk && <span className="text-xs text-warning shrink-0">⚠ thiếu thư mục</span>}
+              {k.keys.some((c) => c.lastError) && (
+                <span className="text-xs text-danger shrink-0">⚠ lỗi key</span>
+              )}
+              <span className="flex-1" />
+              <span className="text-[11px] text-muted shrink-0">
+                {mode === "auto" ? "🤖" : mode === "picked" ? "🎯" : "🆕"} · {k.rep.dailyLimit ?? 1}/ngày
+              </span>
+            </div>
+            {kOpen && (
+            <>
+            {/* Cài đặt kênh: TÊN · nhóm · chế độ · hạn mức · 📁 · ✕ */}
+            <div className="flex items-center gap-2 px-3 pt-1 flex-wrap border-t border-border/60">
               <input
                 key={`${k.key}:name`}
                 type="text"
@@ -721,7 +769,10 @@ export function WatchPage() {
                 </button>
               </div>
             </div>
+            </>
+            )}
           </div>
+          )}
           </Fragment>
           );
         })}
@@ -739,8 +790,53 @@ export function WatchPage() {
               </div>
             </div>
             <div className="p-3 space-y-2.5 text-sm">
+              {/* BƯỚC 1 — THƯ MỤC TRƯỚC: không có chỗ lưu chuẩn thì không cho tạo */}
+              <div className={`p-2 rounded-md border ${settings?.watchRoot || addDir ? "border-border bg-surface-2/50" : "border-danger bg-danger/5"}`}>
+                <div className="text-xs font-medium text-fg mb-1">1️⃣ Thư mục lưu (bắt buộc chọn trước)</div>
+                {addDir ? (
+                  <div className="text-xs text-fg truncate">
+                    📁 {addDir}
+                    <button onClick={() => setAddDir("")} className="ml-1.5 text-danger hover:underline">✕ bỏ</button>
+                  </div>
+                ) : settings?.watchRoot ? (
+                  <div className="text-xs text-fg truncate">
+                    📂 {settings.watchRoot}\{addName.trim() || "<tên kênh>"}{" "}
+                    <span className="text-muted">(tự tạo theo tên kênh)</span>
+                  </div>
+                ) : (
+                  <div className="text-xs text-danger">
+                    ⚠ Chưa có chỗ lưu — chọn 1 trong 2 nút dưới rồi mới tạo được kênh.
+                  </div>
+                )}
+                <div className="flex gap-2 mt-1.5">
+                  {!settings?.watchRoot && (
+                    <button
+                      onClick={() => void pickRoot()}
+                      className="px-2 py-1 rounded-md bg-accent text-accent-fg text-xs font-medium"
+                      title="Chọn 1 LẦN cho tất cả kênh — mỗi kênh tự có thư mục con theo tên"
+                    >
+                      📂 Chọn Trung chuyển gốc (khuyên dùng)
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      void (async () => {
+                        try {
+                          const dir = await cmd.pickFolder();
+                          if (dir) setAddDir(dir);
+                        } catch (e) {
+                          setError(formatErr(e));
+                        }
+                      })();
+                    }}
+                    className="px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs"
+                  >
+                    📁 Chọn tay riêng kênh này…
+                  </button>
+                </div>
+              </div>
               <div>
-                <div className="text-xs text-muted mb-1">Tên kênh (tên/ID TikTok của anh)</div>
+                <div className="text-xs text-muted mb-1">2️⃣ Tên kênh (tên/ID TikTok của anh)</div>
                 <input
                   type="text"
                   value={addName}
@@ -750,7 +846,7 @@ export function WatchPage() {
                 />
               </div>
               <div>
-                <div className="text-xs text-muted mb-1">Nhóm</div>
+                <div className="text-xs text-muted mb-1">3️⃣ Nhóm</div>
                 <select
                   value={addGrp}
                   onChange={(e) => setAddGrp(e.target.value)}
@@ -763,7 +859,7 @@ export function WatchPage() {
                 </select>
               </div>
               <div>
-                <div className="text-xs text-muted mb-1">Key nguồn (link kênh YouTube)</div>
+                <div className="text-xs text-muted mb-1">4️⃣ Key nguồn (link kênh YouTube)</div>
                 <div className="flex gap-2">
                   <input
                     type="url"
@@ -784,38 +880,6 @@ export function WatchPage() {
                   </select>
                 </div>
               </div>
-              <div>
-                <div className="text-xs text-muted mb-1">Thư mục lưu (tự tạo theo tên — thường không phải chọn)</div>
-                {addDir ? (
-                  <div className="text-xs text-fg truncate">
-                    📁 {addDir}
-                    <button onClick={() => setAddDir("")} className="ml-1.5 text-danger hover:underline">✕ bỏ, dùng tự tạo</button>
-                  </div>
-                ) : addName.trim() && settings?.watchRoot ? (
-                  <div className="text-xs text-fg truncate" title="Tự tạo theo tên kênh">
-                    📂 {settings.watchRoot}\{addName.trim()}
-                  </div>
-                ) : (
-                  <div className="text-xs text-warning">
-                    {settings?.watchRoot ? "gõ tên kênh là tự có thư mục" : "⚠ chưa chọn 📂 Trung chuyển gốc (đầu trang) — nên chọn trước"}
-                  </div>
-                )}
-                <button
-                  onClick={() => {
-                    void (async () => {
-                      try {
-                        const dir = await cmd.pickFolder();
-                        if (dir) setAddDir(dir);
-                      } catch (e) {
-                        setError(formatErr(e));
-                      }
-                    })();
-                  }}
-                  className="mt-1 px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs"
-                >
-                  📁 Chọn tay…
-                </button>
-              </div>
             </div>
             <div className="p-3 border-t border-border flex gap-2 justify-end">
               <button
@@ -826,7 +890,15 @@ export function WatchPage() {
               </button>
               <button
                 onClick={() => void addKenh()}
-                disabled={!addName.trim() || !addUrl.trim() || adding}
+                disabled={
+                  !addName.trim() || !addUrl.trim() || adding ||
+                  (!settings?.watchRoot && !addDir.trim())
+                }
+                title={
+                  !settings?.watchRoot && !addDir.trim()
+                    ? "Chọn thư mục lưu trước (bước 1️⃣) rồi mới tạo được"
+                    : undefined
+                }
                 className="px-4 py-1.5 rounded-md bg-accent text-accent-fg text-sm font-medium disabled:opacity-50"
               >
                 {adding ? "Đang tạo…" : "Tạo kênh"}
