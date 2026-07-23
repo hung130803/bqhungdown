@@ -476,7 +476,7 @@ fn parse_archive_ids(text: &str) -> std::collections::HashSet<String> {
 /// từ bản cũ / lúc tắt bỏ-qua không được ghi sổ) -> lịch sử là nguồn sự thật
 /// thứ 2 phủ nốt. MỌI đường chọn video (video mới / hàng chờ / vét / ➕ Tải
 /// thêm) PHẢI loại theo bộ này — video từng tải = không bao giờ lấy lại.
-fn downloaded_ids(
+pub(crate) fn downloaded_ids(
     app: &AppHandle,
     history: &HistoryStore,
     settings: &crate::models::Settings,
@@ -492,6 +492,66 @@ fn downloaded_ids(
         }
     }
     set
+}
+
+/// Các dòng archive CÒN THIẾU cho danh sách (extractor, url) đã tải xong —
+/// bỏ id đã có trong archive + khử trùng. Hàm THUẦN để unit-test.
+pub(crate) fn missing_archive_lines(
+    existing: &str,
+    done: &[(String, String)],
+) -> Vec<String> {
+    let have = parse_archive_ids(existing);
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (extractor, url) in done {
+        let id = video_id_of(url);
+        if id.is_empty() || have.contains(&id) || !seen.insert(id.clone()) {
+            continue;
+        }
+        let ex = extractor.trim().to_lowercase();
+        let ex = if ex.is_empty() { "youtube".to_string() } else { ex };
+        out.push(format!("{ex} {id}"));
+    }
+    out
+}
+
+/// BACKFILL sổ đã-tải khi mở app: nạp LỊCH SỬ Completed vào
+/// download_archive.txt. Máy nhân viên có cả nghìn video tải từ BẢN CŨ
+/// (trước khi có archive) -> archive trống -> không "Bỏ qua", kho không
+/// hiện "đã tải". Sau backfill: yt-dlp tự né + kho hiện badge đủ. Chỉ ghi
+/// phần THIẾU nên chạy mỗi lần mở cũng nhẹ. Trả số dòng đã bổ sung.
+pub fn backfill_archive_from_history(app: &AppHandle, history: &HistoryStore) -> usize {
+    use tauri::Manager;
+    let Some(path) = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("download_archive.txt"))
+    else {
+        return 0;
+    };
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let done: Vec<(String, String)> = history
+        .list(None, 50_000, 0)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.status == crate::models::HistoryStatus::Completed)
+        .map(|e| (e.extractor.clone(), e.url.clone()))
+        .collect();
+    let lines = missing_archive_lines(&existing, &done);
+    if lines.is_empty() {
+        return 0;
+    }
+    let mut text = existing;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&lines.join("\n"));
+    text.push('\n');
+    if std::fs::write(&path, text).is_err() {
+        return 0;
+    }
+    lines.len()
 }
 
 pub(crate) fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
@@ -815,6 +875,26 @@ mod tests {
         let got = parse_archive_ids(text);
         assert_eq!(got.len(), 2);
         assert!(got.contains("aaa") && got.contains("bbb"));
+    }
+
+    #[test]
+    fn backfill_chi_ghi_phan_thieu_va_khu_trung() {
+        // Máy nhân viên: archive đã có "aaa"; lịch sử có aaa (trùng),
+        // bbb (thiếu, extractor hoa), ccc (thiếu, extractor rỗng -> youtube),
+        // bbb lần 2 (khử trùng).
+        let existing = "youtube aaa\n";
+        let done = vec![
+            ("youtube".to_string(), "https://www.youtube.com/watch?v=aaa".to_string()),
+            ("Youtube".to_string(), "https://www.youtube.com/watch?v=bbb".to_string()),
+            (String::new(), "https://www.youtube.com/watch?v=ccc".to_string()),
+            ("youtube".to_string(),
+             "https://www.youtube.com/watch?v=bbb&t=5".to_string()),
+        ];
+        let got = missing_archive_lines(existing, &done);
+        assert_eq!(got, vec!["youtube bbb".to_string(), "youtube ccc".to_string()]);
+        // Không thiếu gì -> rỗng (mở app lần sau không ghi lại).
+        let all = format!("{existing}youtube bbb\nyoutube ccc\n");
+        assert!(missing_archive_lines(&all, &done).is_empty());
     }
 
     #[test]

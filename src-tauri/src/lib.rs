@@ -164,6 +164,16 @@ pub fn run() {
                 );
             }
 
+            // BACKFILL sổ đã-tải: nạp lịch sử Completed CŨ vào
+            // download_archive.txt (video tải từ bản chưa có archive) ->
+            // yt-dlp tự né + Kho video hiện badge "đã tải" đầy đủ.
+            {
+                let n = crate::watcher::backfill_archive_from_history(&handle, &history);
+                if n > 0 {
+                    eprintln!("[archive] backfill {n} video từ lịch sử vào sổ đã-tải");
+                }
+            }
+
             // Manage state.
             app.manage(settings);
             app.manage(history);

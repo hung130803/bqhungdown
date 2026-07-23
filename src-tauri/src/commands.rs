@@ -1276,11 +1276,19 @@ pub fn reconcile_watched(
     Ok(())
 }
 
-/// Danh sách ID video ĐÃ TẢI (đọc download-archive của yt-dlp) — để UI đánh
-/// dấu video đã tải trong "Kho video" (tô khác màu, không cho tích lại).
+/// Danh sách ID video ĐÃ TẢI (download-archive ∪ LỊCH SỬ Completed) — để UI
+/// đánh dấu "đã tải" trong Kho video. Dùng đúng bộ loại-trùng của watcher
+/// nên badge LUÔN khớp hành vi bỏ-qua thật.
 #[tauri::command]
-pub fn archived_video_ids(app: tauri::AppHandle) -> Vec<String> {
-    crate::watcher::load_archive_ids(&app).into_iter().collect()
+pub fn archived_video_ids(
+    app: tauri::AppHandle,
+    settings: State<Arc<SettingsStore>>,
+    history: State<Arc<HistoryStore>>,
+) -> Vec<String> {
+    let st = settings.get();
+    crate::watcher::downloaded_ids(&app, history.inner(), &st)
+        .into_iter()
+        .collect()
 }
 
 /// THAY link key nguồn bằng link mới nhưng GIỮ NGUYÊN kênh (tên, nhóm,
