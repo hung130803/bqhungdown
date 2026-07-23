@@ -1106,7 +1106,14 @@ pub async fn force_one_more(
     got
 }
 
-/// Check every enabled channel once, sequentially. Returns the refreshed list.
+/// Bao nhiêu kênh được QUÉT NGUỒN cùng lúc khi bấm ▶ Chạy tất cả. 3 =
+/// nhanh hơn hẳn chạy nối đuôi mà vẫn nhẹ, không làm YouTube nghi bot.
+/// (Việc TẢI video vẫn theo hạn mức tải song song riêng của hàng đợi.)
+const CHECK_CONCURRENCY: usize = 3;
+
+/// Quét MỌI kênh đang bật — chạy SONG SONG tối đa `CHECK_CONCURRENCY` kênh
+/// một lúc (trước đây nối đuôi từng kênh → kênh sau phải đợi kênh trước
+/// quét xong mới chạy, rất lâu với nhiều kênh). Trả về danh sách đã cập nhật.
 pub async fn check_all(
     app: &AppHandle,
     store: &Arc<WatchlistStore>,
@@ -1114,11 +1121,30 @@ pub async fn check_all(
     settings_store: &Arc<SettingsStore>,
     history: &Arc<HistoryStore>,
 ) -> Vec<crate::models::WatchedChannel> {
-    for c in store.list() {
-        if c.enabled {
-            check_channel(app, store, queue, settings_store, history, &c.id).await;
-        }
+    use tokio::sync::Semaphore;
+    use tokio::task::JoinSet;
+
+    let ids: Vec<String> = store
+        .list()
+        .into_iter()
+        .filter(|c| c.enabled)
+        .map(|c| c.id)
+        .collect();
+    let sem = Arc::new(Semaphore::new(CHECK_CONCURRENCY));
+    let mut set: JoinSet<()> = JoinSet::new();
+    for id in ids {
+        let app = app.clone();
+        let store = store.clone();
+        let queue = queue.clone();
+        let settings_store = settings_store.clone();
+        let history = history.clone();
+        let sem = sem.clone();
+        set.spawn(async move {
+            let _permit = sem.acquire_owned().await.ok();
+            check_channel(&app, &store, &queue, &settings_store, &history, &id).await;
+        });
     }
+    while set.join_next().await.is_some() {}
     store.list()
 }
 
