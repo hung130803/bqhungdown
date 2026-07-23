@@ -216,18 +216,28 @@ export function WatchPage() {
   // Lọc theo tên + sắp xếp trong kho (view cao nhất / mới nhất).
   const [pickerSearch, setPickerSearch] = useState("");
   const [pickerSort, setPickerSort] = useState<"views" | "newest">("views");
+  // Tuổi kho đã lưu (giây); null = vừa lấy thật từ mạng.
+  const [pickerCacheAge, setPickerCacheAge] = useState<number | null>(null);
 
-  const openPicker = async (c: WatchedChannel) => {
+  const openPicker = async (c: WatchedChannel, forceRefresh = false) => {
     setPickerFor(c);
+    if (!forceRefresh) {
+      setPickerSel(c.picked ?? []);
+      setPickerSearch("");
+    }
     setPickerVideos([]);
     setPickerErr(null);
-    setPickerSel(c.picked ?? []);
-    setPickerSearch("");
+    setPickerCacheAge(null);
     setPickerLoading(true);
     try {
-      const res = await cmd.fetchChannelVideos(c.url, 300, false, (c.tab as "all" | "videos" | "shorts") || "all", false);
+      // limit 0 = lấy CẢ kênh → được lưu KHO trên đĩa: lần sau mở tức thì,
+      // không load lại 1000 video. 🔄 Làm mới (forceRefresh) mới lấy thật.
+      const res = await cmd.fetchChannelVideos(
+        c.url, 0, false, (c.tab as "all" | "videos" | "shorts") || "all", forceRefresh,
+      );
       // Giữ nguyên thứ tự kênh (mới→cũ) — sắp xếp lúc hiển thị theo pickerSort.
       setPickerVideos(res.videos);
+      setPickerCacheAge(res.cachedAgeSecs ?? null);
     } catch (e) {
       setPickerErr(formatErr(e));
     } finally {
@@ -1166,6 +1176,22 @@ export function WatchPage() {
               >
                 ☐ Bỏ tích
               </button>
+              {/* Kho đã lưu → mở tức thì; 🔄 mới đi lấy lại từ mạng */}
+              {pickerCacheAge != null && (
+                <span className="text-[11px] text-muted shrink-0" title="Danh sách lấy từ kho đã lưu trên máy — mở tức thì, không load lại">
+                  ⚡ kho lưu {fmtAgeSecs(pickerCacheAge)}
+                </span>
+              )}
+              <button
+                onClick={() => {
+                  if (pickerFor) void openPicker(pickerFor, true);
+                }}
+                disabled={pickerLoading}
+                className="px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0 disabled:opacity-40"
+                title="Lấy lại danh sách MỚI từ kênh nguồn (cập nhật video mới đăng + số view) — ghi đè kho đã lưu"
+              >
+                🔄 Làm mới
+              </button>
             </div>
             <div className="flex-1 overflow-y-auto">
               {pickerLoading && (
@@ -1273,6 +1299,16 @@ function videoIdOf(url: string): string {
 function baseName(p: string): string {
   const parts = p.replace(/[/\\]+$/, "").split(/[/\\]/);
   return parts[parts.length - 1] || p;
+}
+
+/** Tuổi cache người đọc được: `vừa xong`, `25 phút trước`, `3 giờ trước`. */
+function fmtAgeSecs(sec: number): string {
+  if (sec < 60) return "vừa xong";
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m} phút trước`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} giờ trước`;
+  return `${Math.floor(h / 24)} ngày trước`;
 }
 
 /** Tốc độ tải người đọc được: `3.2 MB/s`, `850 KB/s`. */

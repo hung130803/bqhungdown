@@ -187,6 +187,8 @@ export interface ChannelVideo {
 export interface ChannelFetchResult {
   info: ChannelInfo;
   videos: ChannelVideo[];
+  /** Tuổi cache (giây) khi kết quả lấy từ KHO ĐÃ LƯU; null = vừa lấy thật. */
+  cachedAgeSecs?: number | null;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

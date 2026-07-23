@@ -42,10 +42,17 @@ impl ChannelCache {
 
     /// Đọc danh sách video đã cache. None nếu chưa có / lỗi đọc / id xấu.
     pub fn load(&self, channel_id: &str) -> Option<Vec<ChannelVideo>> {
+        self.load_with_age(channel_id).map(|(v, _)| v)
+    }
+
+    /// Như `load` nhưng kèm TUỔI cache (giây từ lúc lưu) — UI hiện
+    /// "kho lưu X trước" để user biết dữ liệu cũ mới thế nào.
+    pub fn load_with_age(&self, channel_id: &str) -> Option<(Vec<ChannelVideo>, u64)> {
         let path = self.path_for(channel_id)?;
         let text = fs::read_to_string(&path).ok()?;
         let parsed: CachedChannel = serde_json::from_str(&text).ok()?;
-        Some(parsed.videos)
+        let age = now_unix().saturating_sub(parsed.fetched_at);
+        Some((parsed.videos, age))
     }
 
     /// Ghi danh sách video xuống cache (atomic: tmp + rename). Lỗi → bỏ qua
@@ -71,6 +78,19 @@ impl ChannelCache {
             let _ = fs::rename(&tmp, &path);
         }
     }
+}
+
+/// Khóa cache theo (URL kênh + tab) cho đường "lấy CẢ kênh" bất kể nguồn
+/// (API hay yt-dlp) — fnv1a-64 hex, luôn ra tên file an toàn, có prefix
+/// `full_` để không đụng khóa `UC…` của cache API tăng dần.
+pub fn url_key(url: &str, tab: &str) -> String {
+    let s = format!("{}|{}", url.trim().to_lowercase(), tab.trim().to_lowercase());
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("full_{h:016x}")
 }
 
 fn now_unix() -> u64 {
@@ -123,5 +143,29 @@ mod tests {
         assert!(cache.path_for("../etc/passwd").is_none());
         assert!(cache.path_for("a/b").is_none());
         assert!(cache.path_for("UC-valid_123").is_some());
+    }
+
+    #[test]
+    fn url_key_on_dinh_va_an_toan() {
+        let k1 = url_key("https://youtube.com/@Kênh", "videos");
+        // Ổn định (mở lần sau ra cùng file) + không phân biệt hoa thường/khoảng trắng.
+        assert_eq!(k1, url_key("  HTTPS://YOUTUBE.COM/@Kênh ", "VIDEOS"));
+        // Khác tab / khác URL -> khác khóa.
+        assert_ne!(k1, url_key("https://youtube.com/@Kênh", "shorts"));
+        assert_ne!(k1, url_key("https://youtube.com/@Khac", "videos"));
+        // Tên file hợp lệ với path_for.
+        let cache = ChannelCache::new(std::env::temp_dir());
+        assert!(cache.path_for(&k1).is_some());
+    }
+
+    #[test]
+    fn load_with_age_tra_tuoi() {
+        let dir = std::env::temp_dir().join(format!("cctest_age_{}", now_unix()));
+        let cache = ChannelCache::new(dir.clone());
+        cache.save("UCage", &[vid("a")]);
+        let (videos, age) = cache.load_with_age("UCage").unwrap();
+        assert_eq!(videos.len(), 1);
+        assert!(age < 60, "vừa lưu xong tuổi phải ~0, ra {age}");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

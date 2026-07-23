@@ -101,10 +101,49 @@ pub async fn fetch_channel_videos(
     let det = detailed.unwrap_or(false);
     let tab_s = tab.unwrap_or_else(|| "videos".into());
     let force = force_refresh.unwrap_or(false);
+
+    // KHO ĐÃ LƯU: lần "lấy cả kênh" (cap == 0) được cache xuống đĩa theo
+    // (URL + tab) — mở lại kho là HIỆN TỨC THÌ, không load lại 1000 video.
+    // force_refresh (nút 🔄 Làm mới) mới đi lấy thật + ghi đè cache.
+    // Mỗi kênh đúng 1 file JSON, ghi đè khi làm mới — không phình dung lượng.
+    let full_cache = if cap == 0 {
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| crate::channel_cache::ChannelCache::new(d.join("channel_cache")))
+    } else {
+        None
+    };
+    let key = crate::channel_cache::url_key(&url, &tab_s);
+    if !force {
+        if let Some(cache) = &full_cache {
+            if let Some((videos, age)) = cache.load_with_age(&key) {
+                if !videos.is_empty() {
+                    let info = ChannelInfo {
+                        url: url.clone(),
+                        title: String::new(),
+                        thumbnail: None,
+                        video_count: Some(videos.len() as u32),
+                        extractor: "cache".into(),
+                        hidden_downloaded: None,
+                        channel_id: None,
+                        api_note: None,
+                    };
+                    return Ok(ChannelFetchResult { info, videos, cached_age_secs: Some(age) });
+                }
+            }
+        }
+    }
+
     let (info, videos) = crate::channel_fetcher::fetch_channel(
         &app, &url, cap, det, &tab_s, &s, force,
     ).await?;
-    Ok(ChannelFetchResult { info, videos })
+    if let Some(cache) = &full_cache {
+        if !videos.is_empty() {
+            cache.save(&key, &videos);
+        }
+    }
+    Ok(ChannelFetchResult { info, videos, cached_age_secs: None })
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -112,6 +151,8 @@ pub async fn fetch_channel_videos(
 pub struct ChannelFetchResult {
     pub info: ChannelInfo,
     pub videos: Vec<ChannelVideo>,
+    /// Tuổi cache (giây) khi kết quả lấy từ KHO ĐÃ LƯU; None = vừa lấy thật.
+    pub cached_age_secs: Option<u64>,
 }
 
 /// Cancel any in-flight `fetch_channel_videos` call. The yt-dlp child(ren)
