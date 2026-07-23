@@ -560,7 +560,7 @@ export function WatchPage() {
           onClick={() => void checkNow()}
           disabled={checking || channels.length === 0}
           className="px-3 py-1.5 rounded-md bg-accent text-accent-fg font-medium disabled:opacity-50"
-          title={"Quét MỌI kênh ngay 1 phát: kênh có video mới → tải; không có mà để 🤖 → tự lấy video view cao nhất chưa làm.\n(App mở là tự chạy mỗi chu kỳ bên cạnh — nút này chỉ để khỏi chờ.)"}
+          title={"Chạy MỌI kênh đang tích ✓ một phát — mỗi kênh tải cho ĐỦ hạn mức hôm nay của nó (1-3/ngày).\nBấm lại KHÔNG tải trùng: kênh đã đủ suất sẽ đứng yên (đổi hạn mức 1→2 rồi bấm ▶ là tải nốt phần chênh).\nMuốn VƯỢT hạn mức cho 1 kênh: dùng ➕ Tải thêm ở kênh đó (+1 mỗi lần bấm)."}
         >
           {checking ? "Đang chạy…" : "▶ Chạy tất cả"}
         </button>

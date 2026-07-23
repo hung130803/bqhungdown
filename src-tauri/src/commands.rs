@@ -1195,7 +1195,18 @@ pub fn set_watched_daily_limit(
     limit: u32,
     store: State<Arc<WatchlistStore>>,
 ) -> AppResult<Option<WatchedChannel>> {
-    store.update(&id, |c| c.daily_limit = limit.clamp(1, 3))
+    store.update(&id, |c| apply_daily_limit(c, limit))
+}
+
+/// TĂNG hạn mức giữa ngày (vd 1 → 2 sau khi đã tải 1) phải xóa cờ "hôm nay
+/// đã quét kho" — không thì lần ▶ kế tiếp bị chặn vét kho và KHÔNG tải nốt
+/// phần chênh (đã tải 1, hạn mức 2 mà ▶ ra 0). Giảm hạn mức thì giữ cờ.
+pub(crate) fn apply_daily_limit(c: &mut WatchedChannel, limit: u32) {
+    let new = limit.clamp(1, 3);
+    if new > c.daily_limit {
+        c.auto_fetch_date = None;
+    }
+    c.daily_limit = new;
 }
 
 /// Đặt CHẾ ĐỘ NGUỒN của kênh: "new" (chỉ video mới) | "picked" (hàng chờ 🎯)

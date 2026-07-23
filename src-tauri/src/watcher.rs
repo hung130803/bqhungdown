@@ -667,6 +667,26 @@ mod tests {
         }
     }
 
+    /// Tăng hạn mức GIỮA NGÀY (1 → 2 sau khi đã tải 1) phải mở lại quét kho
+    /// ngay — lần ▶ kế tiếp tải nốt phần chênh, không phải chờ sang mai.
+    /// Giảm hạn mức thì giữ nguyên cờ (không có gì để tải thêm).
+    #[test]
+    fn tang_han_muc_giua_ngay_mo_lai_quet_kho() {
+        let mut c = chan(vec![], 1, vec![]);
+        c.auto_fetch_date = Some("2026-07-23".into());
+        crate::commands::apply_daily_limit(&mut c, 2);
+        assert_eq!(c.daily_limit, 2);
+        assert!(c.auto_fetch_date.is_none(), "tăng hạn mức phải xóa cờ quét-hôm-nay");
+        // Giảm: giữ cờ.
+        c.auto_fetch_date = Some("2026-07-23".into());
+        crate::commands::apply_daily_limit(&mut c, 1);
+        assert_eq!(c.daily_limit, 1);
+        assert!(c.auto_fetch_date.is_some(), "giảm hạn mức không cần quét lại");
+        // Kẹp 1..=3.
+        crate::commands::apply_daily_limit(&mut c, 99);
+        assert_eq!(c.daily_limit, 3);
+    }
+
     #[test]
     fn drip_lay_dung_han_muc_theo_thu_tu() {
         let c = chan(vec![pv("a"), pv("b"), pv("c")], 2, vec![]);
