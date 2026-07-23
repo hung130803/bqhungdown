@@ -113,9 +113,12 @@ export function QueuePage() {
   const [undoLabel, setUndoLabel] = useState<string | null>(null);
 
   const removeGroup = async (folder: string, label: string, count: number) => {
-    if (!window.confirm(`Xóa cả kênh "${label}" (${count} mục) khỏi hàng đợi?\nVideo đã tải xong vẫn còn trên máy, chỉ xóa các mục trong danh sách + đang chờ.`)) {
-      return;
-    }
+    // window.confirm không hoạt động trong Tauri WebView — dùng dialog native.
+    const ok = await cmd.confirmDialog(
+      `Xóa cả kênh "${label}" (${count} mục) khỏi hàng đợi?\nVideo đã tải xong vẫn còn trên máy, chỉ xóa các mục trong danh sách + đang chờ.`,
+      "Xóa khỏi hàng đợi?",
+    );
+    if (!ok) return;
     try {
       await cmd.removeQueueGroup(folder);
       setUndoLabel(label);

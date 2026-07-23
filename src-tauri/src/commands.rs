@@ -425,8 +425,23 @@ pub fn resume_download(short_id: String, queue: State<Arc<QueueManager>>) -> App
 }
 
 #[tauri::command]
-pub fn cancel_download(short_id: String, queue: State<Arc<QueueManager>>) -> AppResult<()> {
-    queue.cancel(&short_id)
+pub fn cancel_download(
+    short_id: String,
+    app: AppHandle,
+    queue: State<Arc<QueueManager>>,
+    watchlist: State<Arc<WatchlistStore>>,
+    history: State<Arc<HistoryStore>>,
+) -> AppResult<()> {
+    queue.cancel(&short_id)?;
+    // Hủy = trả suất kênh theo dõi NGAY tại đây (cancel() đã chuyển trạng
+    // thái Cancelled đồng bộ) + phát watch://updated để trang Theo dõi tự
+    // làm mới — bộ đếm "đã tải hôm nay" đúng dù hủy từ bất kỳ trang nào.
+    crate::watcher::reconcile_all(watchlist.inner(), queue.inner(), history.inner());
+    let _ = app.emit(
+        crate::events::EV_WATCH_UPDATED,
+        crate::events::WatchUpdatedPayload { channel_id: String::new(), new_count: 0 },
+    );
+    Ok(())
 }
 
 #[tauri::command]

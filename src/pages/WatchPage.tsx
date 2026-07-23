@@ -710,6 +710,10 @@ export function WatchPage() {
                         void (async () => {
                           try {
                             await cmd.cancelDownload(it.shortId);
+                            // Đọc lại NGAY để bộ đếm "đã tải hôm nay" trả
+                            // suất liền (backend cũng phát watch://updated
+                            // nhưng không đợi event cho chắc).
+                            await reload();
                           } catch (err) {
                             setError(formatErr(err));
                           }
@@ -841,16 +845,16 @@ export function WatchPage() {
               )}
               <button
                 onClick={() => {
-                  if (
-                    !window.confirm(
+                  void (async () => {
+                    const ok = await cmd.confirmDialog(
                       `Xóa CẢ KÊNH "${k.name || "?"}" cùng ${k.keys.length} key nguồn?\n` +
-                      "Tên, thư mục, cấu hình, sổ đã-làm của kênh sẽ mất.\n" +
-                      "Muốn ĐỔI link nguồn mà GIỮ kênh: dán link mới vào ô '＋ dán link…' rồi bấm 🔁.",
-                    )
-                  ) {
-                    return;
-                  }
-                  void forKenh(k, (id) => cmd.removeWatchedChannel(id));
+                        "Tên, thư mục, cấu hình, sổ đã-làm của kênh sẽ mất.\n" +
+                        "Muốn ĐỔI link nguồn mà GIỮ kênh: dán link mới vào ô '＋ dán link…' rồi bấm 🔁.",
+                      "Xóa kênh?",
+                    );
+                    if (!ok) return;
+                    await forKenh(k, (id) => cmd.removeWatchedChannel(id));
+                  })();
                 }}
                 className="px-2 py-1 rounded-md border border-border text-fg text-xs shrink-0 hover:bg-surface-2"
                 title={`XÓA kênh "${k.name || "?"}" cùng toàn bộ ${k.keys.length} key nguồn`}
@@ -978,16 +982,17 @@ export function WatchPage() {
                   </button>
                   <button
                     onClick={() => {
-                      if (
-                        k.keys.length === 1 &&
-                        !window.confirm(
-                          `Đây là key CUỐI CÙNG — xóa sẽ xóa CẢ KÊNH "${k.name}" (tên, thư mục, cấu hình).\n` +
-                          "Muốn ĐỔI sang link khác mà GIỮ kênh: dán link mới vào ô dưới rồi bấm 🔁.\n\nVẫn xóa cả kênh?",
-                        )
-                      ) {
-                        return;
-                      }
-                      void remove(c.id);
+                      void (async () => {
+                        const ok = await cmd.confirmDialog(
+                          k.keys.length === 1
+                            ? `Đây là key CUỐI CÙNG — xóa sẽ xóa CẢ KÊNH "${k.name}" (tên, thư mục, cấu hình).\n` +
+                              "Muốn ĐỔI sang link khác mà GIỮ kênh: dán link mới vào ô dưới rồi bấm 🔁.\n\nVẫn xóa cả kênh?"
+                            : `Xóa key "${c.title || c.url}" khỏi kênh "${k.name || "?"}"?`,
+                          k.keys.length === 1 ? "Xóa key cuối = xóa cả kênh?" : "Xóa key?",
+                        );
+                        if (!ok) return;
+                        await remove(c.id);
+                      })();
                     }}
                     className="px-1.5 py-0.5 rounded border border-border text-danger text-xs shrink-0 hover:bg-surface-2"
                     title={k.keys.length === 1 ? "Key cuối — xóa là mất cả kênh (đổi link thì dùng 🔁)" : "Xóa key này khỏi kênh"}

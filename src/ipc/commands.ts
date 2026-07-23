@@ -354,6 +354,15 @@ export async function pickFolder(): Promise<string | null> {
   return invoke<string | null>("pick_folder");
 }
 
+/** Hộp xác nhận Có/Không. window.confirm KHÔNG hoạt động trong Tauri
+ *  WebView (luôn trả false → hành động bị chặn im lặng) — phải dùng
+ *  dialog native của plugin; web preview mới dùng window.confirm. */
+export async function confirmDialog(message: string, title: string): Promise<boolean> {
+  if (IS_WEB) return window.confirm(`${title}\n\n${message}`);
+  const { ask } = await import("@tauri-apps/plugin-dialog");
+  return ask(message, { title, kind: "warning" });
+}
+
 export async function pickFile(): Promise<string | null> {
   if (IS_WEB) return null;
   const { invoke } = await import("@tauri-apps/api/core");
