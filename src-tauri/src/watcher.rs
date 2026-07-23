@@ -531,21 +531,28 @@ async fn vet_pool(
         // Quét lỗi (mạng/bot) → dùng tạm kho cũ nếu có, đừng mất dữ liệu.
         Err(_) => return cache.and_then(|c| c.load(&key)).unwrap_or_default(),
     };
-    // 3. Probe VIEW THẬT cho top theo view xấp xỉ (cả kênh) rồi gộp vào kho.
-    let top = pick_auto_candidates(&videos, &[], VET_PROBE_WINDOW, tab);
-    let as_cv: Vec<ChannelVideo> = top.iter().map(picked_to_channel_video).collect();
-    if let Ok(probed) = crate::channel_fetcher::probe_views(app, as_cv, settings).await {
-        let exact: std::collections::HashMap<String, u64> = probed
-            .iter()
-            .filter_map(|v| v.view_count.map(|n| (v.url.clone(), n)))
-            .collect();
-        for v in videos.iter_mut() {
-            if let Some(n) = exact.get(&v.url) {
-                v.view_count = Some(*n);
+    // 3. XẾP HẠNG NHANH, ÍT REQUEST (chống bot + nhanh cho 100+ kênh):
+    //    YouTube ĐÃ trả sẵn view XẤP XỈ khi quét cả kênh → dùng luôn để xếp
+    //    "nhiều view nhất", KHÔNG đo lại từng video (mỗi lần đo là 1 request,
+    //    100 kênh × 80 video = quá nhiều → chậm + dễ bị chặn). CHỈ khi kênh
+    //    KHÔNG có view nào (hiếm) mới đo 1 cửa sổ để có cái mà xếp.
+    let has_views = videos.iter().any(|v| v.view_count.is_some());
+    if !has_views {
+        let top = pick_auto_candidates(&videos, &[], VET_PROBE_WINDOW, tab);
+        let as_cv: Vec<ChannelVideo> = top.iter().map(picked_to_channel_video).collect();
+        if let Ok(probed) = crate::channel_fetcher::probe_views(app, as_cv, settings).await {
+            let exact: std::collections::HashMap<String, u64> = probed
+                .iter()
+                .filter_map(|v| v.view_count.map(|n| (v.url.clone(), n)))
+                .collect();
+            for v in videos.iter_mut() {
+                if let Some(n) = exact.get(&v.url) {
+                    v.view_count = Some(*n);
+                }
             }
         }
     }
-    // 4. Lưu kho (kèm view thật) để lần sau lấy thẳng khỏi quét lại.
+    // 4. Lưu kho để lần sau lấy thẳng khỏi quét lại.
     if let Some(c) = &cache {
         c.save(&key, &videos);
     }
