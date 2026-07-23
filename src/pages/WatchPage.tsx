@@ -139,14 +139,20 @@ export function WatchPage() {
     }
   };
 
-  /** 🔄 Video hôm nay không ưng → hoàn suất + tự lấy video KHÁC ngay. */
-  const redoOne = async (k: Kenh) => {
+  /** Lấy THÊM 1 video hôm nay. Backend giống nhau (hoàn 1 suất + vét lấy
+   *  video kế tiếp theo view — video cũ đã ở done_ids nên không lặp).
+   *  mode "more" = giữ video cũ, tải thêm; "replace" = đổi (user tự xóa file cũ). */
+  const redoOne = async (k: Kenh, mode: "more" | "replace") => {
     if (busyKenh[k.key]) return;
     // Hoàn suất trên đúng key đã tải hôm nay (thường là 1).
     const doneKey = k.keys.find(
       (c) => c.dripDate === todayStr && (c.dripCount ?? 0) > 0,
     );
     if (!doneKey) return;
+    if (mode === "replace" &&
+        !window.confirm("Đổi video: sẽ tải 1 video KHÁC. Nhớ tự XÓA file video cũ trong thư mục kênh nếu không dùng. Tiếp tục?")) {
+      return;
+    }
     setBusyKenh((m) => ({ ...m, [k.key]: true }));
     setError(null);
     try {
@@ -610,17 +616,30 @@ export function WatchPage() {
                 </button>
               )}
               {downloadedToday && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void redoOne(k);
-                  }}
-                  disabled={!!busyKenh[k.key]}
-                  className="px-2 py-0.5 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0 disabled:opacity-50"
-                  title={"Video hôm nay KHÔNG ƯNG? Bấm để hoàn suất + tự lấy ngay video KHÁC\n(video không ưng đã ghi sổ, không bao giờ bị lấy lại).\n⚠ Nhớ XÓA file không ưng trong thư mục 📁 trước khi bên cắt chạy."}
-                >
-                  {busyKenh[k.key] ? "…" : "🔄 Video khác"}
-                </button>
+                <>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void redoOne(k, "more");
+                    }}
+                    disabled={!!busyKenh[k.key]}
+                    className="px-2 py-0.5 rounded-md bg-accent/15 border border-accent text-fg text-xs shrink-0 disabled:opacity-50"
+                    title={"TẢI THÊM 1 video nữa cho hôm nay (GIỮ video đã tải, lấy thêm cái kế tiếp theo view).\nDùng khi muốn nhiều hơn 1 video/ngày để làm."}
+                  >
+                    {busyKenh[k.key] ? "…" : "➕ Tải thêm"}
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void redoOne(k, "replace");
+                    }}
+                    disabled={!!busyKenh[k.key]}
+                    className="px-2 py-0.5 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0 disabled:opacity-50"
+                    title={"ĐỔI video: không ưng video hôm nay → lấy ngay video KHÁC thay thế.\n⚠ Nhớ XÓA file không ưng trong thư mục 📁 trước khi bên cắt chạy."}
+                  >
+                    {busyKenh[k.key] ? "…" : "🔄 Đổi video"}
+                  </button>
+                </>
               )}
               {!dry && mode === "picked" && pickedTotal === 0 && (
                 <span className="text-xs text-warning shrink-0">⚠ hết hàng chờ</span>
@@ -668,6 +687,7 @@ export function WatchPage() {
             <>
             {/* Cài đặt kênh: TÊN · nhóm · chế độ · hạn mức · 📁 · ✕ */}
             <div className="flex items-center gap-2 px-3 pt-1 flex-wrap border-t border-border/60">
+              <span className="text-xs text-muted shrink-0">✏ Tên:</span>
               <input
                 key={`${k.key}:name`}
                 type="text"
@@ -680,12 +700,10 @@ export function WatchPage() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                 }}
-                className={`flex-1 min-w-[140px] px-2 py-1 rounded-md border text-sm font-semibold ${
-                  k.name
-                    ? `bg-transparent border-transparent hover:border-border ${anyOn ? "text-fg" : "text-muted"}`
-                    : "bg-surface-2 border-warning text-fg"
+                className={`flex-1 min-w-[140px] px-2 py-1 rounded-md border text-sm font-semibold bg-surface-2 text-fg ${
+                  k.name ? "border-border" : "border-warning"
                 }`}
-                title="Tên KÊNH của anh (kênh TikTok đích). Sửa tên là đổi cho mọi key. Video lưu vào thư mục 📁 của kênh."
+                title="Sửa tên KÊNH của anh (kênh TikTok đích) rồi Enter hoặc bấm ra ngoài để lưu. Áp cho mọi key. Video vẫn nằm ở thư mục 📁 cũ (đổi thư mục ở nút 📁)."
               />
               <select
                 value={k.group}
