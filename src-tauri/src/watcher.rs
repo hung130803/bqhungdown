@@ -237,14 +237,24 @@ async fn apply(
 ) -> u32 {
     let is_baseline = channel.seen_ids.is_empty();
     let seen: std::collections::HashSet<&String> = channel.seen_ids.iter().collect();
-    // New = fetched videos not seen before (none on baseline).
+    let settings = settings_store.get();
+    // Video ĐÃ TẢI (download-archive của yt-dlp) — loại khỏi CẢ "video mới"
+    // LẪN "vét kho" để KHÔNG enqueue lại đồ cũ rồi bị yt-dlp "Bỏ qua" (phí
+    // suất + đếm nhầm). Chỉ đọc khi bật "bỏ qua video đã tải".
+    let archived = if settings.skip_downloaded {
+        load_archive_ids(app)
+    } else {
+        std::collections::HashSet::new()
+    };
+    // New = fetched videos CHƯA thấy VÀ CHƯA tải (none on baseline).
     let new_fetched: Vec<&Fetched> = if is_baseline {
         Vec::new()
     } else {
-        fetched.iter().filter(|f| !seen.contains(&f.id)).collect()
+        fetched.iter()
+            .filter(|f| !seen.contains(&f.id) && !archived.contains(&f.id))
+            .collect()
     };
     let new_count = new_fetched.len() as u32;
-    let settings = settings_store.get();
     let auto = channel.auto_download;
 
     // Hạn mức tự tải trong ngày (video mới + hàng chờ đã tích). Giữ số đếm
@@ -286,16 +296,8 @@ async fn apply(
     // cao nhất CHƯA làm. Bỏ qua video đã tải (done_ids).
     if !is_baseline && channel.source_mode != "new" {
         let limit = channel.daily_limit.clamp(1, 3);
-        // Video ĐÃ TẢI (download-archive của yt-dlp) — loại khỏi vét để KHÔNG
-        // chọn lại video đã tải ở phiên trước / đường tải khác rồi bị yt-dlp
-        // "Bỏ qua" (phí suất ngày + đếm nhầm). Chỉ đọc khi bật "bỏ qua đã tải".
-        let archived = if settings.skip_downloaded {
-            load_archive_ids(app)
-        } else {
-            std::collections::HashSet::new()
-        };
         // 1. Hàng chờ tích trước (video mới đã chiếm suất ở trên nếu có);
-        //    bỏ video đã có trong archive (tránh rót lại đồ cũ).
+        //    bỏ video đã có trong archive (dùng `archived` đã nạp ở trên).
         dripped = plan_drip(channel, drip_count);
         dripped.retain(|p| !archived.contains(&p.id));
         let after_picked = drip_count + dripped.len() as u32;
@@ -775,6 +777,24 @@ mod tests {
         let ids: Vec<&str> = got.iter().map(|p| p.id.as_str()).collect();
         assert!(!ids.contains(&"hi"), "KHÔNG được chọn lại video đã tải (hi)");
         assert_eq!(ids, vec!["new1", "new2"], "chọn video CHƯA tải theo view");
+    }
+
+    #[test]
+    fn vet_video_dai_khong_ron_shorts() {
+        // want="videos" -> KHÔNG chọn video is_short (đã đánh dấu lúc fetch),
+        // dù short nhiều view hơn. Fix ca "đặt Video dài mà lẫn Shorts".
+        let mut sh = cv("short_hot", Some(9999), false); sh.is_short = true;
+        let vids = vec![sh, cv("dai1", Some(100), false), cv("dai2", Some(50), false)];
+        let got = pick_auto_candidates(&vids, &[], 5, "videos");
+        let ids: Vec<&str> = got.iter().map(|p| p.id.as_str()).collect();
+        assert!(!ids.contains(&"short_hot"), "Video dài KHÔNG được rót Shorts");
+        assert_eq!(ids, vec!["dai1", "dai2"]);
+        // want="shorts" thì ngược lại: CHỈ lấy short
+        let mut sh2 = cv("short_hot", Some(9999), false); sh2.is_short = true;
+        let got2 = pick_auto_candidates(
+            &[sh2, cv("dai1", Some(100), false)], &[], 5, "shorts");
+        assert_eq!(got2.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+                   vec!["short_hot"]);
     }
 
     fn chan(picked: Vec<PickedVideo>, daily: u32, done: Vec<String>) -> WatchedChannel {

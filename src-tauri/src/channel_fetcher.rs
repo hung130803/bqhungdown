@@ -262,6 +262,23 @@ fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
 
 /// Normalise a raw channel/user URL so we can append the correct tab suffix.
 /// `tab` is one of: "videos", "shorts", "streams", or empty/other (leave as-is).
+/// Video này CÓ PHẢI SHORTS không (để chế độ "Video dài" không rót nhầm)?
+/// YouTube nay trộn Shorts vào tab /videos nên KHÔNG chỉ dựa tab. Dấu hiệu:
+/// URL có "/shorts/" · thời lượng <=60s · tiêu đề/hashtag có #shorts/#short.
+/// (Với kênh reup, clip <=60s cũng coi như short — quá ngắn để cắt.)
+/// Hàm THUẦN để unit-test.
+fn looks_like_short(v: &ChannelVideo) -> bool {
+    let tl = v.title.to_lowercase();
+    v.url.contains("/shorts/")
+        || v.duration_sec.map(|d| d > 0 && d <= 60).unwrap_or(false)
+        || tl.contains("#shorts")
+        || tl.contains("#short")
+        || v.hashtags.iter().any(|h| {
+            let h = h.trim_start_matches('#').to_lowercase();
+            h == "shorts" || h == "short"
+        })
+}
+
 fn normalise_channel_url(raw: &str, tab: &str) -> String {
     let lower = raw.to_lowercase();
 
@@ -479,7 +496,14 @@ pub async fn fetch_channel(
                 }
                 let mark_short = t == "shorts";
                 for mut v in vids {
-                    if mark_short {
+                    // Đánh dấu SHORTS chắc chắn — không chỉ dựa tab "shorts":
+                    // YouTube nay trộn Shorts vào tab /videos. Dấu hiệu:
+                    //  • lấy từ tab shorts, hoặc URL có "/shorts/"
+                    //  • thời lượng <= 60s (Short cổ điển; clip <=60s với kênh
+                    //    reup coi như short, không đáng cắt)
+                    //  • tiêu đề / hashtag có "#shorts"
+                    // -> để chế độ "Video dài" KHÔNG rót nhầm Shorts.
+                    if mark_short || looks_like_short(&v) {
                         v.is_short = true;
                     }
                     if seen.insert(v.url.clone()) {
@@ -1290,6 +1314,33 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn v(url: &str, title: &str, dur: Option<u64>, tags: &[&str]) -> ChannelVideo {
+        ChannelVideo {
+            url: url.into(), title: title.into(), duration_sec: dur,
+            view_count: None, upload_date: None, thumbnail: None,
+            is_photo: false, is_short: false,
+            hashtags: tags.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn nhan_dien_shorts_du_kieu() {
+        // URL /shorts/
+        assert!(looks_like_short(&v("https://youtube.com/shorts/abc", "x", None, &[])));
+        // thời lượng <= 60s
+        assert!(looks_like_short(&v("https://y/watch?v=1", "clip", Some(45), &[])));
+        // #shorts trong tiêu đề (ca của user: title có #shorts)
+        assert!(looks_like_short(&v("https://y/watch?v=2",
+            "'Why Are Your Pants Half Off?' #shorts #cops", None, &[])));
+        // hashtag "shorts"
+        assert!(looks_like_short(&v("https://y/watch?v=3", "x", None, &["#shorts"])));
+        // VIDEO DÀI thật: watch, dài >60s, không #shorts -> KHÔNG phải short
+        assert!(!looks_like_short(&v("https://y/watch?v=4",
+            "Traffic Stop Treasures | Cops TV Show", Some(720), &["cops"])));
+        // không có duration + không dấu hiệu -> coi là dài (không loại nhầm)
+        assert!(!looks_like_short(&v("https://y/watch?v=5", "Full Episode", None, &[])));
+    }
 
     #[test]
     fn normalise_bilibili_tv_series_strips_query() {
