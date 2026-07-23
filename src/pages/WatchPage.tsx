@@ -591,30 +591,22 @@ export function WatchPage() {
         )}
       </div>
 
-      {/* Thanh LỌC NHÓM: bấm nhóm nào chỉ hiện vùng nhóm đó (100-200 kênh/nhóm
-          vẫn gọn); nhóm mới tạo tự mọc chip ở đây. */}
+      {/* Thanh LỌC NHÓM: bấm nhóm nào chỉ hiện vùng nhóm đó; bấm LẠI nhóm
+          đang chọn để xem hết mọi nhóm (bỏ chip "Tất cả" cho gọn). */}
+      {chipGroups.length > 0 && (
       <div className="flex items-center gap-1.5 flex-wrap text-sm">
-        <button
-          onClick={() => pickGroupFilter(null)}
-          className={`px-2.5 py-1 rounded-full border text-xs font-medium ${
-            groupFilter === null
-              ? "bg-accent text-accent-fg border-accent"
-              : "bg-surface border-border text-fg hover:bg-surface-2"
-          }`}
-          title="Hiện MỌI nhóm"
-        >
-          Tất cả ({kenhAll.length})
-        </button>
         {chipGroups.map((g) => (
           <button
             key={g || "⁇"}
-            onClick={() => pickGroupFilter(g)}
+            onClick={() => pickGroupFilter(groupFilter === g ? null : g)}
             className={`px-2.5 py-1 rounded-full border text-xs font-medium inline-flex items-center gap-1.5 ${
               groupFilter === g
                 ? "bg-accent text-accent-fg border-accent"
                 : "bg-surface border-border text-fg hover:bg-surface-2"
             }`}
-            title={`Chỉ hiện kênh nhóm "${g || "Chưa phân nhóm"}"`}
+            title={groupFilter === g
+              ? `Đang chỉ hiện nhóm "${g || "Chưa phân nhóm"}" — bấm lại để xem hết mọi nhóm`
+              : `Chỉ hiện kênh nhóm "${g || "Chưa phân nhóm"}"`}
           >
             <span
               className="inline-block w-2 h-2 rounded-full"
@@ -624,6 +616,7 @@ export function WatchPage() {
           </button>
         ))}
       </div>
+      )}
 
       {error && (
         <div className="px-3 py-2 rounded-md bg-danger/10 border border-danger text-danger text-sm">
