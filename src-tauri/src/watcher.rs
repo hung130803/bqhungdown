@@ -272,33 +272,33 @@ async fn apply(
     // lượt baseline — kênh vừa thêm, đợi vòng quét kế cho ổn định.
     let mut dripped: Vec<PickedVideo> = Vec::new();
     let mut auto_scanned = false;
-    if !is_baseline {
-        match channel.source_mode.as_str() {
-            // Hàng chờ tay 🎯: rót từ đầu danh sách user đã tích.
-            "picked" => dripped = plan_drip(channel, drip_count),
-            // Tự vét kho 🤖: quét danh sách kênh TỐI ĐA 1 LẦN/NGÀY, chọn
-            // video view cao nhất chưa làm. Ghi auto_fetch_date kể cả khi
-            // quét lỗi — không giã yt-dlp/API mỗi vòng 1-2 phút.
-            "auto" => {
-                let limit = channel.daily_limit.clamp(1, 3);
-                if drip_count < limit
-                    && channel.auto_fetch_date.as_deref() != Some(today.as_str())
-                {
-                    auto_scanned = true;
-                    let tab = if channel.tab.is_empty() { "all".to_string() } else { channel.tab.clone() };
-                    if let Ok((_i, videos)) = crate::channel_fetcher::fetch_channel(
-                        app, &channel.url, 300, false, &tab, &settings, false,
-                    ).await
-                    {
-                        dripped = pick_auto_candidates(
-                            &videos, &channel.done_ids,
-                            (limit - drip_count) as usize, &tab,
-                        );
-                    }
-                }
+    // Chế độ "new" = CHỈ video mới, không rót gì thêm. Mọi chế độ khác
+    // (auto / picked cũ) = TỰ ĐỘNG: hàng chờ tích ƯU TIÊN trước (bất kể
+    // view nhiều/ít, đúng thứ tự tích) → HẾT hàng chờ mới vét video view
+    // cao nhất CHƯA làm. Bỏ qua video đã tải (done_ids).
+    if !is_baseline && channel.source_mode != "new" {
+        let limit = channel.daily_limit.clamp(1, 3);
+        // 1. Hàng chờ tích trước (video mới đã chiếm suất ở trên nếu có).
+        dripped = plan_drip(channel, drip_count);
+        let after_picked = drip_count + dripped.len() as u32;
+        // 2. Còn suất → vét kho view cao nhất (quét TỐI ĐA 1 lần/ngày).
+        if after_picked < limit
+            && channel.auto_fetch_date.as_deref() != Some(today.as_str())
+        {
+            auto_scanned = true;
+            let tab = if channel.tab.is_empty() { "all".to_string() } else { channel.tab.clone() };
+            if let Ok((_i, videos)) = crate::channel_fetcher::fetch_channel(
+                app, &channel.url, 300, false, &tab, &settings, false,
+            ).await
+            {
+                // Loại video vừa lấy từ hàng chờ để không trùng.
+                let mut done_plus: Vec<String> = channel.done_ids.clone();
+                done_plus.extend(dripped.iter().map(|p| p.id.clone()));
+                let cand = pick_auto_candidates(
+                    &videos, &done_plus, (limit - after_picked) as usize, &tab,
+                );
+                dripped.extend(cand);
             }
-            // "new": chỉ video mới, không rót gì thêm.
-            _ => {}
         }
     }
     if !dripped.is_empty() {

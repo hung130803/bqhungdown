@@ -314,10 +314,10 @@ export function WatchPage() {
     setPickerSaving(true);
     try {
       await cmd.setWatchedPicked(pickerFor.id, pickerSel);
-      // Vừa tích hàng chờ mà kênh chưa ở chế độ 🎯 → chuyển luôn để hàng
-      // chờ thực sự chạy (khỏi quên đổi chế độ).
-      if (pickerSel.length > 0 && pickerFor.sourceMode !== "picked") {
-        await cmd.setWatchedSourceMode(pickerFor.id, "picked");
+      // Vừa tích hàng chờ mà kênh đang "chỉ video mới" → bật Tự động để
+      // hàng chờ thực sự chạy (Tự động = hàng chờ trước → hết thì vét view).
+      if (pickerSel.length > 0 && (pickerFor.sourceMode ?? "new") === "new") {
+        await cmd.setWatchedSourceMode(pickerFor.id, "auto");
       }
       setPickerFor(null);
       await reload();
@@ -552,9 +552,12 @@ export function WatchPage() {
           const stt = kenhVisible.slice(0, i + 1).filter((x) => (x.group || "") === g).length;
           // ✅ hôm nay kênh này ĐÃ tự tải video chưa (đếm theo ngày local —
           // khớp drip_date backend).
-          const downloadedToday = k.keys.some(
-            (c) => c.dripDate === todayStr && (c.dripCount ?? 0) > 0,
+          // Tổng số video ĐÃ TỰ TẢI hôm nay (cộng mọi key của kênh).
+          const dlToday = k.keys.reduce(
+            (s, c) => s + (c.dripDate === todayStr ? (c.dripCount ?? 0) : 0),
+            0,
           );
+          const downloadedToday = dlToday > 0;
           return (
           <Fragment key={k.key}>
           {isFirstInGroup && (
@@ -599,10 +602,16 @@ export function WatchPage() {
               </span>
               {!anyOn && <span className="text-xs text-muted shrink-0">⏸ tạm dừng</span>}
               <span className="text-xs text-muted shrink-0">{k.keys.length} key</span>
-              {/* Trạng thái NGÀY HÔM NAY: ✅ đã tải / ⏳ chưa / 🔴 hết nguồn */}
+              {/* Đang chờ bao nhiêu video trong hàng chờ (đã tích) */}
+              {pickedTotal > 0 && (
+                <span className="text-xs text-accent shrink-0" title="Số video trong HÀNG CHỜ (anh đã tích) — sẽ tải ưu tiên trước, hết mới vét view">
+                  🎯 chờ {pickedTotal} video
+                </span>
+              )}
+              {/* Trạng thái NGÀY HÔM NAY: ✅ đã tải N / ⏳ chưa / 🔴 hết nguồn */}
               {downloadedToday ? (
-                <span className="text-xs text-success font-semibold shrink-0" title="Hôm nay kênh này ĐÃ tự tải video — bên cắt cứ thế xử lý">
-                  ✅ đã tải hôm nay
+                <span className="text-xs text-success font-semibold shrink-0" title="Hôm nay kênh này đã tự tải — bên cắt cứ thế xử lý">
+                  ✅ đã tải {dlToday} video hôm nay
                 </span>
               ) : dry ? (
                 <span className="text-xs text-danger font-semibold shrink-0">🔴 HẾT video — đổi key</span>
@@ -638,16 +647,13 @@ export function WatchPage() {
                   {busyKenh[k.key] ? "…" : "➕ Tải thêm"}
                 </button>
               )}
-              {!dry && mode === "picked" && pickedTotal === 0 && (
-                <span className="text-xs text-warning shrink-0">⚠ hết hàng chờ</span>
-              )}
               {!dirOk && <span className="text-xs text-warning shrink-0">⚠ thiếu thư mục</span>}
               {k.keys.some((c) => c.lastError) && (
                 <span className="text-xs text-danger shrink-0">⚠ lỗi key</span>
               )}
               <span className="flex-1" />
               <span className="text-[11px] text-muted shrink-0">
-                {mode === "auto" ? "🤖" : mode === "picked" ? "🎯" : "🆕"} · {k.rep.dailyLimit ?? 1}/ngày
+                {mode === "new" ? "🆕" : "🤖"} · {k.rep.dailyLimit ?? 1}/ngày
               </span>
             </div>
             {/* Kênh đang TẢI → thanh tiến trình + tốc độ ngay dưới (kể cả khi gập) */}
@@ -741,16 +747,15 @@ export function WatchPage() {
                 <option value="__manage">➕ Quản lý nhóm…</option>
               </select>
               <select
-                value={mode}
+                value={mode === "new" ? "new" : "auto"}
                 onChange={(e) => {
-                  const v = e.target.value as "new" | "picked" | "auto";
+                  const v = e.target.value as "new" | "auto";
                   void forKenh(k, (id) => cmd.setWatchedSourceMode(id, v));
                 }}
                 className="px-1.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
-                title={"Nguồn video của kênh:\n• 🤖 Tự vét — video MỚI trước, không có thì tự lấy video VIEW CAO NHẤT chưa làm (khuyên dùng)\n• 🎯 Hàng chờ — tự tải dần video anh đã tích trong kho\n• Video mới — chỉ tải video mới đăng"}
+                title={"Nguồn video của kênh:\n• 🤖 Tự động — video MỚI trước → HÀNG CHỜ anh đã tích → hết thì vét video VIEW CAO NHẤT chưa làm (khuyên dùng)\n• Video mới — chỉ tải video mới đăng"}
               >
-                <option value="auto">🤖 Tự vét</option>
-                <option value="picked">🎯 Hàng chờ</option>
+                <option value="auto">🤖 Tự động</option>
                 <option value="new">Video mới</option>
               </select>
               {/* Loại video vét/theo dõi — vét luôn ưu tiên VIDEO DÀI trừ khi chọn Shorts */}
@@ -862,12 +867,13 @@ export function WatchPage() {
               {dry && (
                 <span className="text-danger font-semibold">· 🔴 HẾT video kho — đổi key!</span>
               )}
-              {mode === "picked" &&
-                (pickedTotal > 0 ? (
-                  <span>· 🎯 còn {pickedTotal} chờ làm</span>
-                ) : (
-                  <span className="text-warning">· ⚠ hết hàng chờ — bấm 🎯 trên key để tích thêm</span>
-                ))}
+              {mode !== "new" && (
+                <span>
+                  · {pickedTotal > 0
+                    ? `🎯 hàng chờ ${pickedTotal} video (ưu tiên), hết thì vét view`
+                    : "🤖 vét video view cao nhất chưa làm"}
+                </span>
+              )}
             </div>
 
             {/* Các KEY nguồn của kênh */}
