@@ -213,23 +213,65 @@ export function WatchPage() {
   // Thứ tự tích = thứ tự tự tải (video tích trước được làm trước).
   const [pickerSel, setPickerSel] = useState<PickedVideo[]>([]);
   const [pickerSaving, setPickerSaving] = useState(false);
+  // Lọc theo tên + sắp xếp trong kho (view cao nhất / mới nhất).
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [pickerSort, setPickerSort] = useState<"views" | "newest">("views");
 
   const openPicker = async (c: WatchedChannel) => {
     setPickerFor(c);
     setPickerVideos([]);
     setPickerErr(null);
     setPickerSel(c.picked ?? []);
+    setPickerSearch("");
     setPickerLoading(true);
     try {
       const res = await cmd.fetchChannelVideos(c.url, 300, false, (c.tab as "all" | "videos" | "shorts") || "all", false);
-      // Nhiều view nhất lên đầu (không có số view thì giữ nguyên thứ tự mới→cũ).
-      const vids = [...res.videos].sort((a, b) => (b.viewCount ?? -1) - (a.viewCount ?? -1));
-      setPickerVideos(vids);
+      // Giữ nguyên thứ tự kênh (mới→cũ) — sắp xếp lúc hiển thị theo pickerSort.
+      setPickerVideos(res.videos);
     } catch (e) {
       setPickerErr(formatErr(e));
     } finally {
       setPickerLoading(false);
     }
+  };
+
+  /** Danh sách kho sau lọc + sắp xếp (dùng chung cho list + nút tích hết). */
+  const pickerShown = (() => {
+    const term2 = pickerSearch.trim().toLowerCase();
+    const base = pickerVideos.filter(
+      (v) => !term2 || (v.title ?? "").toLowerCase().includes(term2),
+    );
+    if (pickerSort === "views") {
+      return [...base].sort((a, b) => (b.viewCount ?? -1) - (a.viewCount ?? -1));
+    }
+    return base; // "newest": thứ tự kênh gốc = mới nhất trước
+  })();
+
+  /** Tích TOÀN BỘ video đang hiển thị (bỏ video đã làm), theo đúng thứ tự. */
+  const pickAllShown = () => {
+    if (!pickerFor) return;
+    setPickerSel((sel) => {
+      const have = new Set(sel.map((p) => p.id));
+      const add = pickerShown
+        .filter((v) => {
+          const id = videoIdOf(v.url);
+          return !have.has(id) && !(pickerFor.doneIds?.includes(id) ?? false);
+        })
+        .map((v) => ({
+          id: videoIdOf(v.url),
+          url: v.url,
+          title: v.title,
+          viewCount: v.viewCount ?? null,
+          thumbnail: v.thumbnail ?? null,
+        }));
+      return [...sel, ...add];
+    });
+  };
+
+  /** Bỏ tích toàn bộ video đang hiển thị. */
+  const unpickAllShown = () => {
+    const shownIds = new Set(pickerShown.map((v) => videoIdOf(v.url)));
+    setPickerSel((sel) => sel.filter((p) => !shownIds.has(p.id)));
   };
 
   const togglePick = (v: ChannelVideo) => {
@@ -1090,6 +1132,41 @@ export function WatchPage() {
                 video MỚI đăng chiếm suất trước). Thứ tự tích = thứ tự làm. Đã tích {pickerSel.length} video.
               </div>
             </div>
+            {/* Thanh công cụ kho: lọc tên + sắp xếp + tích hết / bỏ tích */}
+            <div className="px-3 py-2 border-b border-border flex items-center gap-2 flex-wrap">
+              <input
+                type="search"
+                value={pickerSearch}
+                onChange={(e) => setPickerSearch(e.target.value)}
+                placeholder="🔍 Lọc theo tên video…"
+                className="flex-1 min-w-[140px] px-2.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs placeholder:text-muted"
+              />
+              <select
+                value={pickerSort}
+                onChange={(e) => setPickerSort(e.target.value as "views" | "newest")}
+                className="px-1.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
+                title="Thứ tự hiển thị kho"
+              >
+                <option value="views">👁 View cao nhất</option>
+                <option value="newest">🕐 Mới nhất</option>
+              </select>
+              <button
+                onClick={pickAllShown}
+                disabled={pickerShown.length === 0}
+                className="px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0 disabled:opacity-40"
+                title="Tích toàn bộ video đang hiển thị (bỏ qua video đã làm) — theo đúng thứ tự đang xem"
+              >
+                ☑ Tích hết ({pickerShown.filter((v) => !(pickerFor.doneIds?.includes(videoIdOf(v.url)) ?? false)).length})
+              </button>
+              <button
+                onClick={unpickAllShown}
+                disabled={pickerSel.length === 0}
+                className="px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0 disabled:opacity-40"
+                title="Bỏ tích toàn bộ video đang hiển thị"
+              >
+                ☐ Bỏ tích
+              </button>
+            </div>
             <div className="flex-1 overflow-y-auto">
               {pickerLoading && (
                 <div className="p-6 text-center text-sm text-muted">Đang lấy kho video…</div>
@@ -1102,7 +1179,10 @@ export function WatchPage() {
               {!pickerLoading && !pickerErr && pickerVideos.length === 0 && (
                 <div className="p-6 text-center text-sm text-muted">Không lấy được video nào.</div>
               )}
-              {pickerVideos.map((v) => {
+              {!pickerLoading && pickerVideos.length > 0 && pickerShown.length === 0 && (
+                <div className="p-6 text-center text-sm text-muted">Không video nào khớp ô lọc.</div>
+              )}
+              {pickerShown.map((v) => {
                 const id = videoIdOf(v.url);
                 const done = pickerFor.doneIds?.includes(id) ?? false;
                 const sel = pickerSel.some((p) => p.id === id);
@@ -1121,6 +1201,19 @@ export function WatchPage() {
                       onChange={() => togglePick(v)}
                       className="h-4 w-4 shrink-0"
                     />
+                    {/* Ảnh video — nhìn phát biết cái nào đáng làm */}
+                    {v.thumbnail ? (
+                      <img
+                        src={v.thumbnail}
+                        loading="lazy"
+                        alt=""
+                        className="w-24 h-[54px] object-cover rounded shrink-0 bg-surface-2"
+                      />
+                    ) : (
+                      <div className="w-24 h-[54px] rounded bg-surface-2 shrink-0 flex items-center justify-center text-lg">
+                        🎬
+                      </div>
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="truncate text-fg" title={v.title}>{v.title || v.url}</div>
                       <div className="text-xs text-muted">
