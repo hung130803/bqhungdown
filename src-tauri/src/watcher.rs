@@ -286,8 +286,18 @@ async fn apply(
     // cao nhất CHƯA làm. Bỏ qua video đã tải (done_ids).
     if !is_baseline && channel.source_mode != "new" {
         let limit = channel.daily_limit.clamp(1, 3);
-        // 1. Hàng chờ tích trước (video mới đã chiếm suất ở trên nếu có).
+        // Video ĐÃ TẢI (download-archive của yt-dlp) — loại khỏi vét để KHÔNG
+        // chọn lại video đã tải ở phiên trước / đường tải khác rồi bị yt-dlp
+        // "Bỏ qua" (phí suất ngày + đếm nhầm). Chỉ đọc khi bật "bỏ qua đã tải".
+        let archived = if settings.skip_downloaded {
+            load_archive_ids(app)
+        } else {
+            std::collections::HashSet::new()
+        };
+        // 1. Hàng chờ tích trước (video mới đã chiếm suất ở trên nếu có);
+        //    bỏ video đã có trong archive (tránh rót lại đồ cũ).
         dripped = plan_drip(channel, drip_count);
+        dripped.retain(|p| !archived.contains(&p.id));
         let after_picked = drip_count + dripped.len() as u32;
         // 2. Còn suất → vét kho view cao nhất (quét TỐI ĐA 1 lần/ngày).
         if after_picked < limit
@@ -297,10 +307,11 @@ async fn apply(
             // Chỉ VIDEO DÀI hoặc SHORTS — không còn "all" trộn lẫn (bỏ theo
             // yêu cầu: vét lẫn shorts+dài là hỏng format cắt).
             let tab = if channel.tab == "shorts" { "shorts".to_string() } else { "videos".to_string() };
-            // Loại video đã làm + vừa lấy từ hàng chờ để không trùng.
+            // Loại video đã làm + vừa lấy từ hàng chờ + ĐÃ TẢI (archive).
             let mut done_plus: Vec<String> = channel.done_ids.clone();
             done_plus.extend(channel.dl_pending.clone());
             done_plus.extend(dripped.iter().map(|p| p.id.clone()));
+            done_plus.extend(archived.iter().cloned());
             // KHO CẢ KÊNH (quét 1 lần, lưu đĩa, lần sau lấy thẳng) → chọn
             // video NHIỀU VIEW NHẤT của cả kênh chưa làm.
             let videos = vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
@@ -418,6 +429,31 @@ async fn apply(
         );
     }
     new_count
+}
+
+/// Bóc id video ĐÃ TẢI từ nội dung file download-archive của yt-dlp — mỗi dòng
+/// dạng "<extractor> <id>" (vd "youtube dQw4w9WgXcQ"); lấy token CUỐI làm id.
+/// Hàm thuần để unit-test (không đụng đĩa).
+fn parse_archive_ids(text: &str) -> std::collections::HashSet<String> {
+    text.lines()
+        .filter_map(|l| l.split_whitespace().last())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Đọc id video đã tải từ `app_data_dir/download_archive.txt` (nguồn sự thật
+/// cho "đã tải trên máy này" — bền qua mọi phiên/đường tải, không chỉ done_ids
+/// của kênh). Lỗi/không có file -> tập rỗng.
+fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("download_archive.txt"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| parse_archive_ids(&t))
+        .unwrap_or_default()
 }
 
 /// Hàng chờ làm — chọn video sẽ rót hôm nay: lấy từ ĐẦU hàng `picked` (đúng
@@ -717,6 +753,29 @@ async fn enqueue_new(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_archive_lay_dung_id_va_bo_dong_rong() {
+        // yt-dlp ghi "<extractor> <id>"; lấy token cuối. Dòng rỗng/khoảng
+        // trắng bỏ qua. Trùng gộp về set.
+        let text = "youtube aaa\nyoutube bbb\n\n   \nyoutube aaa\n";
+        let got = parse_archive_ids(text);
+        assert_eq!(got.len(), 2);
+        assert!(got.contains("aaa") && got.contains("bbb"));
+    }
+
+    #[test]
+    fn vet_loai_video_da_co_trong_archive() {
+        // done_plus chứa "hi" (đã tải — mô phỏng id lấy từ download-archive)
+        // -> pick KHÔNG chọn lại nó dù nhiều view nhất. Gốc rễ bug "vét đồ cũ".
+        let videos = vec![cv("hi", Some(9000), false),
+                          cv("new1", Some(50), false),
+                          cv("new2", Some(10), false)];
+        let got = pick_auto_candidates(&videos, &["hi".to_string()], 2, "all");
+        let ids: Vec<&str> = got.iter().map(|p| p.id.as_str()).collect();
+        assert!(!ids.contains(&"hi"), "KHÔNG được chọn lại video đã tải (hi)");
+        assert_eq!(ids, vec!["new1", "new2"], "chọn video CHƯA tải theo view");
+    }
 
     fn chan(picked: Vec<PickedVideo>, daily: u32, done: Vec<String>) -> WatchedChannel {
         WatchedChannel {
