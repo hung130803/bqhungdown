@@ -150,6 +150,7 @@ pub fn resolve_watch_folder(
 }
 
 /// A fetched video plus its dedup id and publish time (for "đăng X phút trước").
+#[derive(Clone)]
 struct Fetched {
     id: String,
     video: ChannelVideo,
@@ -238,30 +239,58 @@ async fn apply(
     let is_baseline = channel.seen_ids.is_empty();
     let seen: std::collections::HashSet<&String> = channel.seen_ids.iter().collect();
     let settings = settings_store.get();
-    // Video ĐÃ TẢI (download-archive của yt-dlp) — loại khỏi CẢ "video mới"
-    // LẪN "vét kho" để KHÔNG enqueue lại đồ cũ rồi bị yt-dlp "Bỏ qua" (phí
-    // suất + đếm nhầm). Chỉ đọc khi bật "bỏ qua video đã tải".
-    let archived = if settings.skip_downloaded {
-        load_archive_ids(app)
-    } else {
-        std::collections::HashSet::new()
-    };
+    // BỘ LOẠI-TRÙNG "ĐÃ TẢI" = archive của yt-dlp ∪ LỊCH SỬ tải Completed
+    // của chính app. Archive có thể THIẾU (video tải từ bản cũ / lúc tắt
+    // "bỏ qua đã tải" không được ghi sổ) -> lịch sử Completed là nguồn sự
+    // thật thứ 2, phủ nốt các lỗ đó. Video nằm trong 1 trong 2 sổ = ĐÃ TẢI,
+    // không bao giờ enqueue lại (hết cảnh "tải lại mà hiện thành công").
+    let mut downloaded: std::collections::HashSet<String> =
+        if settings.skip_downloaded {
+            load_archive_ids(app)
+        } else {
+            std::collections::HashSet::new()
+        };
+    for e in history.list(None, 10_000, 0).unwrap_or_default() {
+        if e.status == crate::models::HistoryStatus::Completed {
+            downloaded.insert(video_id_of(&e.url));
+        }
+    }
     // New = fetched videos CHƯA thấy VÀ CHƯA tải (none on baseline).
-    // Kênh "Video dài" (tab != shorts): LOẠI Shorts kể cả video mới đăng —
-    // tôn trọng cấu hình, không rót nhầm Short vào kênh cắt.
     let want_shorts = channel.tab == "shorts";
-    let new_fetched: Vec<&Fetched> = if is_baseline {
+    let mut new_fetched: Vec<Fetched> = if is_baseline {
         Vec::new()
     } else {
         fetched.iter()
-            .filter(|f| !seen.contains(&f.id) && !archived.contains(&f.id))
-            .filter(|f| {
-                let sh = f.video.is_short
-                    || crate::channel_fetcher::looks_like_short(&f.video);
-                sh == want_shorts
-            })
+            .filter(|f| !seen.contains(&f.id) && !downloaded.contains(&f.id))
+            .cloned()
             .collect()
     };
+    // RSS KHÔNG trả thời lượng -> không nhận diện được Shorts. Probe duration
+    // cho các video mới thiếu thời lượng (chỉ vài cái, 1 batch --print) rồi
+    // mới lọc — kênh "Video dài" không bao giờ dính Shorts từ đường video-mới.
+    if !new_fetched.is_empty()
+        && new_fetched.iter().any(|f| f.video.duration_sec.is_none())
+    {
+        let cvs: Vec<ChannelVideo> =
+            new_fetched.iter().map(|f| f.video.clone()).collect();
+        if let Ok(probed) =
+            crate::channel_fetcher::probe_views(app, cvs, &settings).await
+        {
+            for f in new_fetched.iter_mut() {
+                if f.video.duration_sec.is_none() {
+                    if let Some(p) = probed.iter().find(|p| p.url == f.video.url) {
+                        f.video.duration_sec = p.duration_sec;
+                    }
+                }
+            }
+        }
+    }
+    // Kênh "Video dài" LOẠI Shorts (và ngược lại) — tôn trọng cấu hình.
+    new_fetched.retain(|f| {
+        let sh = f.video.is_short
+            || crate::channel_fetcher::looks_like_short(&f.video);
+        sh == want_shorts
+    });
     let new_count = new_fetched.len() as u32;
     let auto = channel.auto_download;
 
@@ -305,9 +334,9 @@ async fn apply(
     if !is_baseline && channel.source_mode != "new" {
         let limit = channel.daily_limit.clamp(1, 3);
         // 1. Hàng chờ tích trước (video mới đã chiếm suất ở trên nếu có);
-        //    bỏ video đã có trong archive (dùng `archived` đã nạp ở trên).
+        //    bỏ video ĐÃ TẢI (archive ∪ lịch sử — `downloaded` ở trên).
         dripped = plan_drip(channel, drip_count);
-        dripped.retain(|p| !archived.contains(&p.id));
+        dripped.retain(|p| !downloaded.contains(&p.id));
         let after_picked = drip_count + dripped.len() as u32;
         // 2. Còn suất → vét kho view cao nhất (quét TỐI ĐA 1 lần/ngày).
         if after_picked < limit
@@ -317,11 +346,12 @@ async fn apply(
             // Chỉ VIDEO DÀI hoặc SHORTS — không còn "all" trộn lẫn (bỏ theo
             // yêu cầu: vét lẫn shorts+dài là hỏng format cắt).
             let tab = if channel.tab == "shorts" { "shorts".to_string() } else { "videos".to_string() };
-            // Loại video đã làm + vừa lấy từ hàng chờ + ĐÃ TẢI (archive).
+            // Loại video đã làm + vừa lấy từ hàng chờ + ĐÃ TẢI
+            // (archive ∪ lịch sử Completed — không bao giờ vét lại đồ cũ).
             let mut done_plus: Vec<String> = channel.done_ids.clone();
             done_plus.extend(channel.dl_pending.clone());
             done_plus.extend(dripped.iter().map(|p| p.id.clone()));
-            done_plus.extend(archived.iter().cloned());
+            done_plus.extend(downloaded.iter().cloned());
             // KHO CẢ KÊNH (quét 1 lần, lưu đĩa, lần sau lấy thẳng) → chọn
             // video NHIỀU VIEW NHẤT của cả kênh chưa làm.
             let videos = vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
