@@ -132,12 +132,21 @@ export function WatchPage() {
   const addKeyToKenh = async (k: Kenh) => {
     const u = (keyInputs[k.key] ?? "").trim();
     if (!u || adding) return;
+    // Key mới PHẢI mang ĐÚNG tên kênh này để gom chung 1 thẻ (gom theo
+    // targetName). Kênh chưa có tên -> không gom được -> chặn + nhắc đặt tên
+    // (trước đây chỉ copy khi rep.targetName có -> key thành thẻ "⁇" riêng =
+    // trông như tự tạo kênh mới).
+    if (!k.name.trim()) {
+      setError("Kênh chưa có TÊN — đặt tên kênh (nút ✏ / ô Tên) trước, "
+        + "rồi mới Thêm key để các key gom chung 1 kênh.");
+      return;
+    }
     setAdding(true);
     setError(null);
     try {
       const rep = k.rep;
       const c = await cmd.addWatchedChannel(u, rep.tab || "all");
-      if (rep.targetName) await cmd.setWatchedTarget(c.id, rep.targetName);
+      await cmd.setWatchedTarget(c.id, k.name.trim());  // LUÔN gắn tên -> gom chung
       await cmd.setWatchedGroup(c.id, rep.group ?? null);
       await cmd.setWatchedSourceMode(
         c.id, (rep.sourceMode as "new" | "picked" | "auto") ?? "auto",
