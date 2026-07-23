@@ -222,6 +222,8 @@ export function WatchPage() {
   // Lọc theo tên + sắp xếp trong kho (view cao nhất / mới nhất).
   const [pickerSearch, setPickerSearch] = useState("");
   const [pickerSort, setPickerSort] = useState<"views" | "newest">("views");
+  // Tab loại video trong kho: video dài / Shorts (kho luôn lấy CẢ 2 để lọc).
+  const [pickerType, setPickerType] = useState<"videos" | "shorts">("videos");
   // Tuổi kho đã lưu (giây); null = vừa lấy thật từ mạng.
   const [pickerCacheAge, setPickerCacheAge] = useState<number | null>(null);
 
@@ -230,6 +232,8 @@ export function WatchPage() {
     if (!forceRefresh) {
       setPickerSel(c.picked ?? []);
       setPickerSearch("");
+      // Mở kho: tab video theo chế độ kênh (kênh Shorts → mở tab Shorts sẵn).
+      setPickerType(c.tab === "shorts" ? "shorts" : "videos");
     }
     setPickerVideos([]);
     setPickerErr(null);
@@ -238,9 +242,8 @@ export function WatchPage() {
     try {
       // limit 0 = lấy CẢ kênh → được lưu KHO trên đĩa: lần sau mở tức thì,
       // không load lại 1000 video. 🔄 Làm mới (forceRefresh) mới lấy thật.
-      const res = await cmd.fetchChannelVideos(
-        c.url, 0, false, (c.tab as "all" | "videos" | "shorts") || "all", forceRefresh,
-      );
+      // Luôn lấy "all" để kho có CẢ Video dài + Shorts, rồi lọc theo tab.
+      const res = await cmd.fetchChannelVideos(c.url, 0, false, "all", forceRefresh);
       // Giữ nguyên thứ tự kênh (mới→cũ) — sắp xếp lúc hiển thị theo pickerSort.
       setPickerVideos(res.videos);
       setPickerCacheAge(res.cachedAgeSecs ?? null);
@@ -251,11 +254,18 @@ export function WatchPage() {
     }
   };
 
-  /** Danh sách kho sau lọc + sắp xếp (dùng chung cho list + nút tích hết). */
+  // Đếm số Video dài / Shorts trong kho (cho nhãn 2 tab).
+  const pickerCountVideos = pickerVideos.filter((v) => !v.isShort).length;
+  const pickerCountShorts = pickerVideos.filter((v) => v.isShort).length;
+
+  /** Danh sách kho sau LỌC LOẠI (dài/Shorts) + lọc tên + sắp xếp
+   *  (dùng chung cho list + nút tích hết). */
   const pickerShown = (() => {
     const term2 = pickerSearch.trim().toLowerCase();
     const base = pickerVideos.filter(
-      (v) => !term2 || (v.title ?? "").toLowerCase().includes(term2),
+      (v) =>
+        (pickerType === "shorts" ? v.isShort : !v.isShort) &&
+        (!term2 || (v.title ?? "").toLowerCase().includes(term2)),
     );
     if (pickerSort === "views") {
       return [...base].sort((a, b) => (b.viewCount ?? -1) - (a.viewCount ?? -1));
@@ -1159,6 +1169,29 @@ export function WatchPage() {
                 Tích video "nên làm" — app tự tải dần mỗi ngày ({pickerFor.dailyLimit ?? 1}/ngày,
                 video MỚI đăng chiếm suất trước). Thứ tự tích = thứ tự làm. Đã tích {pickerSel.length} video.
               </div>
+            </div>
+            {/* 2 tab loại: Video dài / Shorts — tự chọn phần muốn tích */}
+            <div className="px-3 pt-2 flex items-center gap-2">
+              <button
+                onClick={() => setPickerType("videos")}
+                className={`px-3 py-1 rounded-md text-xs font-medium border ${
+                  pickerType === "videos"
+                    ? "bg-accent text-accent-fg border-accent"
+                    : "bg-surface-2 text-fg border-border"
+                }`}
+              >
+                🎬 Video dài ({pickerCountVideos})
+              </button>
+              <button
+                onClick={() => setPickerType("shorts")}
+                className={`px-3 py-1 rounded-md text-xs font-medium border ${
+                  pickerType === "shorts"
+                    ? "bg-accent text-accent-fg border-accent"
+                    : "bg-surface-2 text-fg border-border"
+                }`}
+              >
+                📱 Shorts ({pickerCountShorts})
+              </button>
             </div>
             {/* Thanh công cụ kho: lọc tên + sắp xếp + tích hết / bỏ tích */}
             <div className="px-3 py-2 border-b border-border flex items-center gap-2 flex-wrap">
