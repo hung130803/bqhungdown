@@ -294,17 +294,20 @@ async fn apply(
             && channel.auto_fetch_date.as_deref() != Some(today.as_str())
         {
             auto_scanned = true;
-            let tab = if channel.tab.is_empty() { "all".to_string() } else { channel.tab.clone() };
-            if let Ok((_i, videos)) = crate::channel_fetcher::fetch_channel(
-                app, &channel.url, 300, false, &tab, &settings, false,
-            ).await
-            {
-                // Loại video vừa lấy từ hàng chờ để không trùng.
-                let mut done_plus: Vec<String> = channel.done_ids.clone();
-                done_plus.extend(dripped.iter().map(|p| p.id.clone()));
-                let cand = vet_pick(
-                    app, &videos, &done_plus, (limit - after_picked) as usize, &tab, &settings,
-                ).await;
+            // Chỉ VIDEO DÀI hoặc SHORTS — không còn "all" trộn lẫn (bỏ theo
+            // yêu cầu: vét lẫn shorts+dài là hỏng format cắt).
+            let tab = if channel.tab == "shorts" { "shorts".to_string() } else { "videos".to_string() };
+            // Loại video đã làm + vừa lấy từ hàng chờ để không trùng.
+            let mut done_plus: Vec<String> = channel.done_ids.clone();
+            done_plus.extend(channel.dl_pending.clone());
+            done_plus.extend(dripped.iter().map(|p| p.id.clone()));
+            // KHO CẢ KÊNH (quét 1 lần, lưu đĩa, lần sau lấy thẳng) → chọn
+            // video NHIỀU VIEW NHẤT của cả kênh chưa làm.
+            let videos = vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
+            if !videos.is_empty() {
+                let cand = pick_auto_candidates(
+                    &videos, &done_plus, (limit - after_picked) as usize, &tab,
+                );
                 if let Some(top) = cand.first() {
                     pick_note = Some(fmt_pick_note(top));
                 }
@@ -480,44 +483,73 @@ fn pick_auto_candidates(
         .collect()
 }
 
-/// Bao nhiêu ứng viên "nhiều view nhất theo view XẤP XỈ" sẽ được probe VIEW
-/// THẬT trước khi chốt. 60 = đủ rộng để bắt được video hit thật, đủ hẹp để
-/// probe nhanh (2 batch × 30) chạy nền 1 lần/ngày/kênh.
-const VET_PROBE_WINDOW: usize = 60;
+/// Bao nhiêu ứng viên "nhiều view nhất theo view XẤP XỈ" (trên TOÀN KÊNH) sẽ
+/// được probe VIEW THẬT khi quét mới. 80 = đủ rộng để chắc chắn chứa video
+/// hit thật của cả kênh, đủ hẹp để probe nhanh (~3 batch × 30).
+const VET_PROBE_WINDOW: usize = 80;
 
-/// TỰ VÉT có xếp hạng ĐÁNG TIN: chế độ flat của YouTube nhiều kênh KHÔNG
-/// trả view → sort theo view thành vô nghĩa, lấy đại video ở giữa. Hàm này
-/// thu hẹp cửa sổ ứng viên rồi PROBE VIEW THẬT, xếp lại theo view thật, lấy
-/// `n` video nhiều view nhất chưa làm. Trả PickedVideo mang view thật (để
-/// ghi chú minh bạch cho user).
-async fn vet_pick(
+/// Cache kho video của kênh trên đĩa (app_data_dir/channel_cache).
+fn vet_cache(app: &AppHandle) -> Option<crate::channel_cache::ChannelCache> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().ok()?.join("channel_cache");
+    Some(crate::channel_cache::ChannelCache::new(dir))
+}
+
+/// KHO VÉT của kênh — QUÉT CẢ KÊNH (kể cả video cũ) 1 LẦN rồi LƯU XUỐNG ĐĨA;
+/// những lần sau lấy THẲNG từ kho đã lưu, KHÔNG quét lại (đỡ mất công quét
+/// mấy nghìn video mỗi ngày). Chỉ quét mới khi: chưa có kho, hoặc kho đã CẠN
+/// (mọi video đều đã làm — `exclude` phủ hết) → quét lại 1 phát để bắt video
+/// mới đăng / xác nhận cạn. Lúc quét mới có PROBE VIEW THẬT cho nhóm đầu bảng
+/// rồi lưu kèm, nên lần sau xếp hạng bằng view thật mà không probe lại.
+async fn vet_pool(
     app: &AppHandle,
-    videos: &[ChannelVideo],
-    done_ids: &[String],
-    n: usize,
-    want: &str,
+    url: &str,
+    tab: &str,
+    exclude: &[String],
     settings: &crate::models::Settings,
-) -> Vec<PickedVideo> {
-    if n == 0 {
-        return Vec::new();
-    }
-    let mut window = pick_auto_candidates(videos, done_ids, VET_PROBE_WINDOW, want);
-    if window.is_empty() {
-        return window;
-    }
-    let as_cv: Vec<ChannelVideo> = window.iter().map(picked_to_channel_video).collect();
-    if let Ok(probed) = crate::channel_fetcher::probe_views(app, as_cv, settings).await {
-        let exact: std::collections::HashMap<String, Option<u64>> =
-            probed.iter().map(|v| (v.url.clone(), v.view_count)).collect();
-        for p in window.iter_mut() {
-            if let Some(Some(view)) = exact.get(&p.url) {
-                p.view_count = Some(*view);
+) -> Vec<ChannelVideo> {
+    let cache = vet_cache(app);
+    let key = crate::channel_cache::url_key(url, tab);
+    // 1. Còn video CHƯA làm trong kho đã lưu → dùng lại, khỏi quét mạng.
+    if let Some(c) = &cache {
+        if let Some(vids) = c.load(&key) {
+            let has_unused = vids
+                .iter()
+                .any(|v| !v.is_photo && !exclude.contains(&video_id_of(&v.url)));
+            if has_unused {
+                return vids;
             }
         }
     }
-    window.sort_by(|a, b| b.view_count.unwrap_or(0).cmp(&a.view_count.unwrap_or(0)));
-    window.truncate(n);
-    window
+    // 2. Kho trống/cạn → QUÉT CẢ KÊNH 1 lần (limit 0, flat = 1 lần gọi).
+    let mut videos = match crate::channel_fetcher::fetch_channel(
+        app, url, 0, false, tab, settings, false,
+    )
+    .await
+    {
+        Ok((_i, v)) => v,
+        // Quét lỗi (mạng/bot) → dùng tạm kho cũ nếu có, đừng mất dữ liệu.
+        Err(_) => return cache.and_then(|c| c.load(&key)).unwrap_or_default(),
+    };
+    // 3. Probe VIEW THẬT cho top theo view xấp xỉ (cả kênh) rồi gộp vào kho.
+    let top = pick_auto_candidates(&videos, &[], VET_PROBE_WINDOW, tab);
+    let as_cv: Vec<ChannelVideo> = top.iter().map(picked_to_channel_video).collect();
+    if let Ok(probed) = crate::channel_fetcher::probe_views(app, as_cv, settings).await {
+        let exact: std::collections::HashMap<String, u64> = probed
+            .iter()
+            .filter_map(|v| v.view_count.map(|n| (v.url.clone(), n)))
+            .collect();
+        for v in videos.iter_mut() {
+            if let Some(n) = exact.get(&v.url) {
+                v.view_count = Some(*n);
+            }
+        }
+    }
+    // 4. Lưu kho (kèm view thật) để lần sau lấy thẳng khỏi quét lại.
+    if let Some(c) = &cache {
+        c.save(&key, &videos);
+    }
+    videos
 }
 
 /// Số view gọn cho người đọc: 12500 → "12,5N", 2100000 → "2,1Tr".
@@ -1028,15 +1060,12 @@ pub async fn force_one_more(
     // 2. Hết hàng chờ → quét kho lấy video view cao nhất chưa làm (bỏ qua
     //    giới hạn "1 lần quét/ngày" vì đây là lệnh tay).
     if cand.is_none() {
-        let tab = if channel.tab.is_empty() { "all".to_string() } else { channel.tab.clone() };
-        if let Ok((_i, videos)) = crate::channel_fetcher::fetch_channel(
-            app, &channel.url, 300, false, &tab, &settings, false,
-        ).await
-        {
-            let mut done_plus = channel.done_ids.clone();
-            done_plus.extend(channel.dl_pending.clone());
-            cand = vet_pick(app, &videos, &done_plus, 1, &tab, &settings).await.into_iter().next();
-        }
+        let tab = if channel.tab == "shorts" { "shorts".to_string() } else { "videos".to_string() };
+        let mut done_plus = channel.done_ids.clone();
+        done_plus.extend(channel.dl_pending.clone());
+        // KHO CẢ KÊNH (đã lưu → lấy thẳng; cạn → quét lại 1 phát).
+        let videos = vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
+        cand = pick_auto_candidates(&videos, &done_plus, 1, &tab).into_iter().next();
     }
     let Some(p) = cand else {
         // Không còn gì để lấy — kho cạn thật.

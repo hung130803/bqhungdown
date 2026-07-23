@@ -905,7 +905,6 @@ export function WatchPage() {
               >
                 <option value="videos">🎬 Video dài</option>
                 <option value="shorts">📱 Shorts</option>
-                <option value="all">Tất cả</option>
               </select>
               <select
                 value={k.rep.dailyLimit ?? 1}
@@ -1253,9 +1252,8 @@ export function WatchPage() {
                     className="px-2 py-1.5 rounded-md bg-surface-2 border border-border text-fg"
                     title="Loại video theo dõi"
                   >
-                    <option value="all">Tất cả</option>
-                    <option value="videos">Video dài</option>
-                    <option value="shorts">Shorts</option>
+                    <option value="videos">🎬 Video dài</option>
+                    <option value="shorts">📱 Shorts</option>
                   </select>
                 </div>
               </div>
