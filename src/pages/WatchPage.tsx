@@ -43,6 +43,8 @@ export function WatchPage() {
   // 📊 Thống kê: mở dialog + nạp lịch sử tải (khớp theo thư mục kênh).
   const [showStats, setShowStats] = useState(false);
   const [statsHist, setStatsHist] = useState<HistoryEntry[] | null>(null);
+  // Lỗi tải 24h gần nhất (từ lịch sử) -> badge 🔴 cảnh báo trên thẻ kênh.
+  const [errHist, setErrHist] = useState<HistoryEntry[]>([]);
   const [statsExpand, setStatsExpand] = useState<Record<string, boolean>>({});
   // Bộ điều khiển bảng thống kê: tìm / lọc nhóm / lọc trạng thái / sắp xếp.
   const [statsQuery, setStatsQuery] = useState("");
@@ -82,6 +84,16 @@ export function WatchPage() {
       // hôm nay" không bao giờ hiển thị sai sau khi bấm ✕ Hủy.
       await cmd.reconcileWatched();
       setChannels(await cmd.listWatchedChannels());
+      // Lỗi tải 24h gần nhất -> badge 🔴 trên thẻ kênh (giới hạn tuổi cần
+      // cookie, mạng, private…). Lỗi nạp lịch sử thì bỏ qua, không chặn UI.
+      try {
+        const hist = await cmd.listHistory({ limit: 500 });
+        const dayMs = 24 * 3600 * 1000;
+        setErrHist(hist.filter(
+          (h) => h.status !== "completed"
+            && Date.now() - Date.parse(h.finishedAt) < dayMs,
+        ));
+      } catch { /* lịch sử lỗi không chặn trang */ }
     } catch (e) {
       setError(formatErr(e));
     }
@@ -728,6 +740,13 @@ export function WatchPage() {
             0,
           );
           const downloadedToday = dlToday > 0;
+          // LỖI TẢI 24h của kênh này (khớp thư mục lưu trong lịch sử) ->
+          // badge 🔴 + lý do ngay trên thẻ, khỏi phải mò sang tab Đang tải.
+          const nfp = (p?: string | null) =>
+            (p ?? "").replace(/[/\\]+$/, "").toLowerCase();
+          const kErrs = nfp(k.rep.destDir)
+            ? errHist.filter((h) => nfp(h.saveFolder) === nfp(k.rep.destDir))
+            : [];
           // Mỗi NHÓM một màu viền trái cố định → lướt 50-300 kênh vẫn phân
           // biệt được nhóm nào với nhóm nào ngay bằng mắt.
           const hue = groupHue(g);
@@ -800,6 +819,24 @@ export function WatchPage() {
                   ⏳ chưa tải hôm nay
                 </span>
               ) : null}
+              {/* 🔴 KÊNH CÓ VIDEO TẢI LỖI (24h): hiện rõ số lỗi + LÝ DO khi
+                  rê chuột (giới hạn tuổi cần cookie, mạng…) — user biết ngay
+                  kênh nào cần xử lý, không bị "✅ thành công" che mất. */}
+              {kErrs.length > 0 && (
+                <span
+                  className="text-xs text-danger font-bold shrink-0 px-1.5 py-0.5 rounded-md bg-danger/15 border border-danger cursor-help"
+                  title={
+                    "Video tải LỖI trong 24h:\n"
+                    + kErrs.slice(0, 3).map((h) =>
+                        `• ${(h.title || h.url).slice(0, 70)}\n   → ${(h.error || "lỗi không rõ").slice(0, 160)}`,
+                      ).join("\n")
+                    + (kErrs.length > 3 ? `\n… và ${kErrs.length - 3} lỗi nữa` : "")
+                    + "\n\nMở tab ĐANG TẢI để xem chi tiết / Thử lại."
+                  }
+                >
+                  🔴 {kErrs.length} lỗi tải
+                </span>
+              )}
               {/* ▶ chạy RIÊNG kênh này · 🔄 không ưng video hôm nay thì đổi cái khác */}
               {anyOn && !downloadedToday && (
                 <button
