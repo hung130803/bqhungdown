@@ -26,9 +26,8 @@ export function WatchPage() {
   const [channels, setChannels] = useState<WatchedChannel[]>([]);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Quản lý nhiều kênh đa quốc gia: tìm nhanh + lọc theo nhóm.
+  // Quản lý nhiều kênh đa quốc gia: tìm nhanh (nhóm gập/mở thay cho bộ lọc).
   const [search, setSearch] = useState("");
-  const [groupFilter, setGroupFilter] = useState("");
 
   // ── Dialog "➕ Thêm kênh": tên kênh đích + nhóm + key nguồn đầu tiên ──
   const [addOpen, setAddOpen] = useState(false);
@@ -219,16 +218,6 @@ export function WatchPage() {
     }
   };
 
-  const pickRoot = async () => {
-    try {
-      const dir = await cmd.pickFolder();
-      if (!dir) return;
-      await updateSettings({ watchRoot: dir });
-    } catch (e) {
-      setError(formatErr(e));
-    }
-  };
-
   // ── Quản lý NHÓM (thêm/sửa/xóa) — danh sách lưu trong Settings ──
   const [showGroups, setShowGroups] = useState(false);
   const [newGroup, setNewGroup] = useState("");
@@ -257,7 +246,6 @@ export function WatchPage() {
       for (const c of channels.filter((c) => c.group === oldName)) {
         await cmd.setWatchedGroup(c.id, n);
       }
-      if (groupFilter === oldName) setGroupFilter(n);
       await reload();
     } catch (e) {
       setError(formatErr(e));
@@ -271,7 +259,6 @@ export function WatchPage() {
       for (const c of channels.filter((c) => c.group === name)) {
         await cmd.setWatchedGroup(c.id, null);
       }
-      if (groupFilter === name) setGroupFilter("");
       await reload();
     } catch (e) {
       setError(formatErr(e));
@@ -290,8 +277,6 @@ export function WatchPage() {
       setChecking(false);
     }
   };
-
-  const interval = settings?.watchIntervalMin ?? 60;
 
   // Nhóm = danh sách user đặt (Settings) ∪ nhóm cũ còn dính trên kênh.
   const groups = [
@@ -322,7 +307,6 @@ export function WatchPage() {
   }
   const kenhAll = [...kenhMap.values()];
   const kenhVisible = kenhAll
-    .filter((k) => !groupFilter || (groupFilter === "__none" ? !k.group : k.group === groupFilter))
     .filter(
       (k) =>
         !term ||
@@ -340,6 +324,9 @@ export function WatchPage() {
         a.name.localeCompare(b.name, "vi"),
     );
   const nOn = channels.filter((c) => c.enabled).length;
+  // Ngày local YYYY-MM-DD — khớp cách backend ghi drip_date.
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   // Kênh cần chú ý: kho cạn (🤖 hết video chưa làm) / hết hàng chờ (🎯).
   const nDry = kenhAll.filter((k) => k.keys.some((c) => c.sourceEmpty)).length;
   const nEmpty = kenhAll.filter(
@@ -378,29 +365,7 @@ export function WatchPage() {
         vét cạn kho sẽ báo 🔴 để anh đổi key.
       </p>
 
-      {/* Trung chuyển gốc — KHÔNG bắt buộc: chỉ là lối tắt khỏi phải 📁 chọn
-          tay từng kênh (đã chọn tay thì bỏ qua dòng này). */}
-      <div className="flex items-center gap-2 text-xs text-muted flex-wrap px-1 -mt-1">
-        <span className="shrink-0">📂 Trung chuyển gốc (không bắt buộc):</span>
-        {settings?.watchRoot ? (
-          <span className="text-fg truncate flex-1 min-w-[120px]" title={settings.watchRoot}>
-            {settings.watchRoot}
-          </span>
-        ) : (
-          <span className="flex-1 min-w-[120px]">
-            chưa dùng — anh đang 📁 chọn thư mục tay từng kênh thì kệ nó
-          </span>
-        )}
-        <button
-          onClick={() => void pickRoot()}
-          className="px-2 py-0.5 rounded-md bg-surface-2 border border-border text-fg shrink-0"
-          title="Lối tắt: chọn 1 thư mục gốc, từ đó kênh mới chỉ cần gõ tên là tự có thư mục <gốc>\<tên> — khỏi bấm chọn 50 lần"
-        >
-          Chọn…
-        </button>
-      </div>
-
-      {/* Thanh công cụ: tìm + lọc nhóm + chu kỳ + kiểm tra ngay */}
+      {/* Thanh công cụ: tìm + quản lý nhóm + ▶ Chạy tất cả */}
       <div className="flex items-center gap-2 flex-wrap text-sm">
         <input
           type="search"
@@ -409,18 +374,6 @@ export function WatchPage() {
           placeholder="🔍 Tìm kênh / nhóm…"
           className="flex-1 min-w-[160px] px-3 py-1.5 rounded-md bg-surface border border-border text-fg placeholder:text-muted"
         />
-        <select
-          value={groupFilter}
-          onChange={(e) => setGroupFilter(e.target.value)}
-          className="px-2 py-1.5 rounded-md bg-surface border border-border text-fg"
-          title="Lọc theo nhóm/quốc gia"
-        >
-          <option value="">Mọi nhóm</option>
-          {groups.map((g) => (
-            <option key={g} value={g}>{g}</option>
-          ))}
-          <option value="__none">Chưa phân nhóm</option>
-        </select>
         <button
           onClick={() => setShowGroups(true)}
           className="px-2.5 py-1.5 rounded-md bg-surface-2 border border-border text-fg"
@@ -428,21 +381,6 @@ export function WatchPage() {
         >
           🏷 Nhóm
         </button>
-        <label className="flex items-center gap-1.5 text-muted">
-          <span>mỗi</span>
-          <input
-            type="number"
-            min={1}
-            max={1440}
-            value={interval}
-            onChange={(e) => {
-              const n = parseInt(e.target.value, 10);
-              if (Number.isFinite(n) && n >= 1) void updateSettings({ watchIntervalMin: n });
-            }}
-            className="w-16 px-2 py-1.5 rounded-md bg-surface border border-border text-fg"
-          />
-          <span>phút</span>
-        </label>
         <button
           onClick={() => void checkNow()}
           disabled={checking || channels.length === 0}
@@ -482,12 +420,19 @@ export function WatchPage() {
           // Ít kênh thì mở sẵn hết cho dễ nhìn; nhiều kênh (50-300) thì gập
           // theo nhóm, đang tìm/lọc thì luôn mở để thấy kết quả.
           const defaultOpen = kenhAll.length <= 8;
-          const gOpen = term || groupFilter ? true : (openGroups[g] ?? defaultOpen);
+          const gOpen = term ? true : (openGroups[g] ?? defaultOpen);
           const kOpen = openKenh[k.key] ?? !k.name; // thẻ chưa đặt tên tự xổ
           const isFirstInGroup = i === 0 || (kenhVisible[i - 1].group || "") !== g;
           const inGroup = kenhVisible.filter((x) => (x.group || "") === g);
           const gDry = inGroup.filter((x) => x.keys.some((c) => c.sourceEmpty)).length;
-          const dirOk = !!k.rep.destDir || (!!k.name && !!settings?.watchRoot);
+          const dirOk = !!k.rep.destDir;
+          // Số thứ tự trong nhóm (1, 2, 3…) để user định vị nhanh 50-300 kênh.
+          const stt = kenhVisible.slice(0, i + 1).filter((x) => (x.group || "") === g).length;
+          // ✅ hôm nay kênh này ĐÃ tự tải video chưa (đếm theo ngày local —
+          // khớp drip_date backend).
+          const downloadedToday = k.keys.some(
+            (c) => c.dripDate === todayStr && (c.dripCount ?? 0) > 0,
+          );
           return (
           <Fragment key={k.key}>
           {isFirstInGroup && (
@@ -528,11 +473,22 @@ export function WatchPage() {
               <span
                 className={`text-sm font-semibold truncate ${anyOn ? "text-fg" : "text-muted"}`}
               >
-                {k.name || "(chưa đặt tên)"}
+                {stt}. {k.name || "(chưa đặt tên)"}
               </span>
               {!anyOn && <span className="text-xs text-muted shrink-0">⏸ tạm dừng</span>}
               <span className="text-xs text-muted shrink-0">{k.keys.length} key</span>
-              {dry && <span className="text-xs text-danger font-semibold shrink-0">🔴 HẾT video — đổi key</span>}
+              {/* Trạng thái NGÀY HÔM NAY: ✅ đã tải / ⏳ chưa / 🔴 hết nguồn */}
+              {downloadedToday ? (
+                <span className="text-xs text-success font-semibold shrink-0" title="Hôm nay kênh này ĐÃ tự tải video — bên cắt cứ thế xử lý">
+                  ✅ đã tải hôm nay
+                </span>
+              ) : dry ? (
+                <span className="text-xs text-danger font-semibold shrink-0">🔴 HẾT video — đổi key</span>
+              ) : anyOn ? (
+                <span className="text-xs text-muted shrink-0" title="Chưa có video nào tải hôm nay — bấm ▶ Chạy tất cả hoặc chờ lượt quét">
+                  ⏳ chưa tải hôm nay
+                </span>
+              ) : null}
               {!dry && mode === "picked" && pickedTotal === 0 && (
                 <span className="text-xs text-warning shrink-0">⚠ hết hàng chờ</span>
               )}
@@ -566,7 +522,7 @@ export function WatchPage() {
                     ? `bg-transparent border-transparent hover:border-border ${anyOn ? "text-fg" : "text-muted"}`
                     : "bg-surface-2 border-warning text-fg"
                 }`}
-                title="Tên KÊNH của anh (kênh TikTok đích) — video tự về <Trung chuyển gốc>\tên này. Sửa tên là đổi cho mọi key."
+                title="Tên KÊNH của anh (kênh TikTok đích). Sửa tên là đổi cho mọi key. Video lưu vào thư mục 📁 của kênh."
               />
               <select
                 value={k.group}
@@ -659,16 +615,10 @@ export function WatchPage() {
                     ✕
                   </button>
                 </span>
-              ) : k.name && settings?.watchRoot ? (
-                <span className="truncate max-w-[60%]" title="Thư mục tự tạo theo tên kênh — tool cắt nhận đúng kênh này">
-                  📂 {settings.watchRoot}\{k.name}
-                </span>
-              ) : k.name ? (
-                <span className="text-danger">
-                  ⚠ CHƯA chọn 📂 Trung chuyển gốc — video sẽ rơi thư mục mặc định!
-                </span>
               ) : (
-                <span className="text-warning">⚠ đặt tên kênh để video tự về đúng thư mục</span>
+                <span className="text-danger">
+                  ⚠ CHƯA chọn thư mục — bấm 📁 ngay, không thì video rơi thư mục mặc định!
+                </span>
               )}
               {dry && (
                 <span className="text-danger font-semibold">· 🔴 HẾT video kho — đổi key!</span>
@@ -793,50 +743,34 @@ export function WatchPage() {
               </div>
             </div>
             <div className="p-3 space-y-2.5 text-sm">
-              {/* BƯỚC 1 — THƯ MỤC TRƯỚC: không có chỗ lưu chuẩn thì không cho tạo */}
-              <div className={`p-2 rounded-md border ${settings?.watchRoot || addDir ? "border-border bg-surface-2/50" : "border-danger bg-danger/5"}`}>
-                <div className="text-xs font-medium text-fg mb-1">1️⃣ Thư mục lưu (bắt buộc chọn trước)</div>
+              {/* BƯỚC 1 — THƯ MỤC TRƯỚC: chưa chọn thì không cho tạo */}
+              <div className={`p-2 rounded-md border ${addDir ? "border-border bg-surface-2/50" : "border-danger bg-danger/5"}`}>
+                <div className="text-xs font-medium text-fg mb-1">1️⃣ Thư mục lưu video của kênh (bắt buộc)</div>
                 {addDir ? (
                   <div className="text-xs text-fg truncate">
                     📁 {addDir}
                     <button onClick={() => setAddDir("")} className="ml-1.5 text-danger hover:underline">✕ bỏ</button>
                   </div>
-                ) : settings?.watchRoot ? (
-                  <div className="text-xs text-fg truncate">
-                    📂 {settings.watchRoot}\{addName.trim() || "<tên kênh>"}{" "}
-                    <span className="text-muted">(tự tạo theo tên kênh)</span>
-                  </div>
                 ) : (
                   <div className="text-xs text-danger">
-                    ⚠ Chưa có chỗ lưu — chọn 1 trong 2 nút dưới rồi mới tạo được kênh.
+                    ⚠ Chưa chọn — video của kênh này sẽ lưu vào đây, tool cắt đọc từ đây.
                   </div>
                 )}
-                <div className="flex gap-2 mt-1.5">
-                  {!settings?.watchRoot && (
-                    <button
-                      onClick={() => void pickRoot()}
-                      className="px-2 py-1 rounded-md bg-accent text-accent-fg text-xs font-medium"
-                      title="Chọn 1 LẦN cho tất cả kênh — mỗi kênh tự có thư mục con theo tên"
-                    >
-                      📂 Chọn Trung chuyển gốc (khuyên dùng)
-                    </button>
-                  )}
-                  <button
-                    onClick={() => {
-                      void (async () => {
-                        try {
-                          const dir = await cmd.pickFolder();
-                          if (dir) setAddDir(dir);
-                        } catch (e) {
-                          setError(formatErr(e));
-                        }
-                      })();
-                    }}
-                    className="px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs"
-                  >
-                    📁 Chọn tay riêng kênh này…
-                  </button>
-                </div>
+                <button
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        const dir = await cmd.pickFolder();
+                        if (dir) setAddDir(dir);
+                      } catch (e) {
+                        setError(formatErr(e));
+                      }
+                    })();
+                  }}
+                  className="mt-1.5 px-2 py-1 rounded-md bg-accent text-accent-fg text-xs font-medium"
+                >
+                  📁 Chọn thư mục…
+                </button>
               </div>
               <div>
                 <div className="text-xs text-muted mb-1">2️⃣ Tên kênh (tên/ID TikTok của anh)</div>
@@ -849,17 +783,26 @@ export function WatchPage() {
                 />
               </div>
               <div>
-                <div className="text-xs text-muted mb-1">3️⃣ Nhóm</div>
-                <select
-                  value={addGrp}
-                  onChange={(e) => setAddGrp(e.target.value)}
-                  className="w-full px-2 py-1.5 rounded-md bg-surface-2 border border-border text-fg"
-                >
-                  <option value="">— chưa phân nhóm —</option>
-                  {groups.map((g) => (
-                    <option key={g} value={g}>{g}</option>
-                  ))}
-                </select>
+                <div className="text-xs text-muted mb-1">3️⃣ Nhóm (bắt buộc — Mỹ, Hàn, Nhật…)</div>
+                <div className="flex gap-2">
+                  <select
+                    value={addGrp}
+                    onChange={(e) => setAddGrp(e.target.value)}
+                    className={`flex-1 px-2 py-1.5 rounded-md border text-fg ${addGrp ? "bg-surface-2 border-border" : "bg-danger/5 border-danger"}`}
+                  >
+                    <option value="">— chọn nhóm —</option>
+                    {groups.map((g) => (
+                      <option key={g} value={g}>{g}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setShowGroups(true)}
+                    className="px-2 py-1.5 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
+                    title="Chưa có nhóm nào ưng? Thêm nhóm mới tại đây"
+                  >
+                    🏷 Thêm nhóm…
+                  </button>
+                </div>
               </div>
               <div>
                 <div className="text-xs text-muted mb-1">4️⃣ Key nguồn (link kênh YouTube)</div>
@@ -893,14 +836,13 @@ export function WatchPage() {
               </button>
               <button
                 onClick={() => void addKenh()}
-                disabled={
-                  !addName.trim() || !addUrl.trim() || adding ||
-                  (!settings?.watchRoot && !addDir.trim())
-                }
+                disabled={!addName.trim() || !addUrl.trim() || !addGrp || !addDir.trim() || adding}
                 title={
-                  !settings?.watchRoot && !addDir.trim()
-                    ? "Chọn thư mục lưu trước (bước 1️⃣) rồi mới tạo được"
-                    : undefined
+                  !addDir.trim()
+                    ? "Chọn thư mục lưu trước (bước 1️⃣)"
+                    : !addGrp
+                      ? "Chọn nhóm (bước 3️⃣)"
+                      : undefined
                 }
                 className="px-4 py-1.5 rounded-md bg-accent text-accent-fg text-sm font-medium disabled:opacity-50"
               >
