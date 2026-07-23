@@ -306,9 +306,20 @@ export function WatchPage() {
     (pickerFor?.dlPending?.includes(id) ?? false) ||
     isPickerArchived(id);
 
+  // Nhận diện Shorts kể cả khi cờ isShort chưa được đánh (kho cache cũ):
+  // URL /shorts/ · thời lượng <=60s · tiêu đề có #short/#shorts. Khớp logic
+  // backend để danh sách "Video dài" KHÔNG hiện Shorts.
+  const looksShort = (v: ChannelVideo): boolean => {
+    if (v.isShort) return true;
+    if ((v.url ?? "").includes("/shorts/")) return true;
+    if (v.durationSec != null && v.durationSec > 0 && v.durationSec <= 60) return true;
+    const t = (v.title ?? "").toLowerCase();
+    return t.includes("#shorts") || t.includes("#short");
+  };
+
   // Đếm số Video dài / Shorts trong kho (cho nhãn 2 tab).
-  const pickerCountVideos = pickerVideos.filter((v) => !v.isShort).length;
-  const pickerCountShorts = pickerVideos.filter((v) => v.isShort).length;
+  const pickerCountVideos = pickerVideos.filter((v) => !looksShort(v)).length;
+  const pickerCountShorts = pickerVideos.filter((v) => looksShort(v)).length;
 
   /** Danh sách kho sau LỌC LOẠI (dài/Shorts) + lọc tên + sắp xếp
    *  (dùng chung cho list + nút tích hết). */
@@ -316,7 +327,7 @@ export function WatchPage() {
     const term2 = pickerSearch.trim().toLowerCase();
     const base = pickerVideos.filter(
       (v) =>
-        (pickerType === "shorts" ? v.isShort : !v.isShort) &&
+        (pickerType === "shorts" ? looksShort(v) : !looksShort(v)) &&
         (!term2 || (v.title ?? "").toLowerCase().includes(term2)),
     );
     if (pickerSort === "views") {
@@ -1804,12 +1815,11 @@ export function WatchPage() {
                 return (
                   <label
                     key={id}
-                    // ĐÃ TẢI -> nền VÀNG nhạt + viền trái vàng cho dễ phân biệt
-                    // (không làm mờ để vẫn đọc rõ); đã-làm khác (không archive)
-                    // vẫn mờ như cũ.
+                    // ĐÃ TẢI -> nền cam rõ + viền trái cam ĐẬM cho dễ thấy
+                    // (không làm mờ để vẫn đọc rõ); đã-làm khác vẫn mờ như cũ.
                     style={archived ? {
-                      background: "rgba(249,226,175,0.12)",
-                      borderLeft: "3px solid #f9e2af",
+                      background: "rgba(245,158,11,0.22)",
+                      borderLeft: "4px solid #f59e0b",
                     } : undefined}
                     className={`flex items-center gap-3 px-3 py-2 border-t border-border text-sm ${
                       archived ? "" : done ? "opacity-50" : "cursor-pointer hover:bg-surface-2"
@@ -1842,8 +1852,12 @@ export function WatchPage() {
                         {v.durationSec != null && v.durationSec > 0 && <>⏱ {fmtDur(v.durationSec)} · </>}
                         {v.uploadDate && <>{timeAgo(v.uploadDate)} · </>}
                         {archived ? (
-                          <span style={{ color: "#f9e2af", fontWeight: 600 }}>
-                            🟡 đã tải rồi
+                          <span style={{
+                            background: "#f59e0b", color: "#1a1200",
+                            padding: "1px 7px", borderRadius: 999,
+                            fontWeight: 700, fontSize: 11,
+                          }}>
+                            ✓ ĐÃ TẢI
                           </span>
                         ) : done ? "✅ đã làm" : sel ? `#${order} trong hàng chờ` : ""}
                       </div>
