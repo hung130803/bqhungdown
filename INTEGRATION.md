@@ -62,8 +62,25 @@ Theo dõi kênh nguồn          Quét thư mục trung chuyển        Quét th
 
 - `pipe_on` (bật dây chuyền cho kênh), `pipe_src` (thư mục trung chuyển
   của kênh; mặc định `<gốc>\<Tên kênh>`), `pipe_mode` ("auto" = Tạo clip
-  thường | "recap" = Reup thuyết minh), `pipe_daily` (1-2).
+  thường | "recap" = Reup thuyết minh), `pipe_daily` (1-2), `grp` (nhóm).
 - Thư mục xuất Part dùng cấu hình sẵn có (export_dir của kênh).
+- **Chạy THEO NHÓM:** hộp 🤖 Dây chuyền có bộ lọc nhóm; "▶ Chạy dây chuyền"
+  chỉ xử lý kênh của NHÓM đang chọn (chọn "Tất cả nhóm" = mọi kênh bật).
+  Nhóm ở tool cắt (`grp`) là để GOM/CHẠY THEO ĐỢT — **không ảnh hưởng
+  thư mục handoff** (thư mục vẫn là `<gốc>\<Tên kênh>` theo mục 1). Nhóm
+  của tool cắt độc lập với nhóm bên tool tải; user tự gán trong bảng.
+- **1 THƯ MỤC/KÊNH (mô hình hiện tại — KHÔNG còn "thư mục trung chuyển"
+  chung):** MỖI kênh tự đặt THƯ MỤC LẤY VIDEO riêng (`export_dir`) qua nút
+  📂 ở cột phải bảng 🤖 Dây chuyền. Thư mục đó VỪA là nơi tool tải thả video
+  vào VỪA là nơi xuất: Part cắt xong xuất THẲNG vào thư mục đó (KHÔNG tạo
+  thư mục con `\Clip`), file Part đặt tên "Part N …"; scan bỏ qua file khớp
+  `^Part\s*\d` nên KHÔNG cắt lại Part. Video gốc XÓA sau khi đủ Part; file
+  hỏng chuyển `_Loi`. `pipe_src` (chọn tay riêng) vẫn ưu tiên cao nhất, rồi
+  tới `export_dir`. Kênh CHƯA đặt thư mục → báo "CHƯA đặt thư mục lấy video"
+  (không xử lý oan). KHÔNG giới hạn video/ngày — có video là xử lý hết.
+  "Làm lại": `reset_channel` xóa sổ `pipeline_files` của kênh → cho cắt lại;
+  nút 🔄 làm lại 1 kênh hoặc cả nhóm. Bảng có Bật/Tắt tất cả + combo/ô số
+  chống cuộn nhầm (NoWheel).
 
 ## 7. Báo cáo & cảnh báo (tool cắt)
 
