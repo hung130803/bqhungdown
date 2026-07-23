@@ -347,6 +347,24 @@ fn normalise_channel_url(raw: &str, tab: &str) -> String {
 ///   - "streams" → Live/streams only
 ///   - "all"     → fetch /videos + /shorts (+ /streams when present) and merge
 ///                  the entries, dropping duplicates by URL.
+/// Probe VIEW THẬT (chính xác) + ngày đăng cho một tập video cho trước —
+/// dùng khi TỰ VÉT cần xếp hạng "nhiều view nhất" đáng tin (chế độ flat
+/// của YouTube nhiều kênh KHÔNG trả view → không probe thì sort vô nghĩa).
+/// Batch qua `--print`, chỉ đụng tập truyền vào (caller giới hạn cửa sổ).
+pub async fn probe_views(
+    app: &AppHandle,
+    videos: Vec<ChannelVideo>,
+    settings: &Settings,
+) -> AppResult<Vec<ChannelVideo>> {
+    if videos.is_empty() {
+        return Ok(videos);
+    }
+    // Không bump generation (đây là probe nền, không phải fetch UI); đọc gen
+    // hiện tại để enrich tự dừng nếu có fetch UI mới chen vào.
+    let my_gen = FETCH_GENERATION.load(Ordering::SeqCst);
+    enrich_in_parallel(app, videos, settings, my_gen, true).await
+}
+
 /// `limit = 0` → fetch all videos. `detailed = true` → also probe view_count.
 pub async fn fetch_channel(
     app: &AppHandle,

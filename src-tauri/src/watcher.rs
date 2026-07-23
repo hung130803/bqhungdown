@@ -278,6 +278,8 @@ async fn apply(
     // lượt baseline — kênh vừa thêm, đợi vòng quét kế cho ổn định.
     let mut dripped: Vec<PickedVideo> = Vec::new();
     let mut auto_scanned = false;
+    // Ghi chú minh bạch cho lần tự vét (video nào + bao nhiêu view).
+    let mut pick_note: Option<String> = None;
     // Chế độ "new" = CHỈ video mới, không rót gì thêm. Mọi chế độ khác
     // (auto / picked cũ) = TỰ ĐỘNG: hàng chờ tích ƯU TIÊN trước (bất kể
     // view nhiều/ít, đúng thứ tự tích) → HẾT hàng chờ mới vét video view
@@ -300,9 +302,12 @@ async fn apply(
                 // Loại video vừa lấy từ hàng chờ để không trùng.
                 let mut done_plus: Vec<String> = channel.done_ids.clone();
                 done_plus.extend(dripped.iter().map(|p| p.id.clone()));
-                let cand = pick_auto_candidates(
-                    &videos, &done_plus, (limit - after_picked) as usize, &tab,
-                );
+                let cand = vet_pick(
+                    app, &videos, &done_plus, (limit - after_picked) as usize, &tab, &settings,
+                ).await;
+                if let Some(top) = cand.first() {
+                    pick_note = Some(fmt_pick_note(top));
+                }
                 dripped.extend(cand);
             }
         }
@@ -384,6 +389,9 @@ async fn apply(
         }
         if let Some(v) = source_empty_now {
             c.source_empty = v;
+        }
+        if let Some(n) = &pick_note {
+            c.last_pick = Some(n.clone());
         }
         for p in &dripped {
             c.picked.retain(|x| x.id != p.id);
@@ -470,6 +478,65 @@ fn pick_auto_candidates(
             thumbnail: v.thumbnail.clone(),
         })
         .collect()
+}
+
+/// Bao nhiêu ứng viên "nhiều view nhất theo view XẤP XỈ" sẽ được probe VIEW
+/// THẬT trước khi chốt. 60 = đủ rộng để bắt được video hit thật, đủ hẹp để
+/// probe nhanh (2 batch × 30) chạy nền 1 lần/ngày/kênh.
+const VET_PROBE_WINDOW: usize = 60;
+
+/// TỰ VÉT có xếp hạng ĐÁNG TIN: chế độ flat của YouTube nhiều kênh KHÔNG
+/// trả view → sort theo view thành vô nghĩa, lấy đại video ở giữa. Hàm này
+/// thu hẹp cửa sổ ứng viên rồi PROBE VIEW THẬT, xếp lại theo view thật, lấy
+/// `n` video nhiều view nhất chưa làm. Trả PickedVideo mang view thật (để
+/// ghi chú minh bạch cho user).
+async fn vet_pick(
+    app: &AppHandle,
+    videos: &[ChannelVideo],
+    done_ids: &[String],
+    n: usize,
+    want: &str,
+    settings: &crate::models::Settings,
+) -> Vec<PickedVideo> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut window = pick_auto_candidates(videos, done_ids, VET_PROBE_WINDOW, want);
+    if window.is_empty() {
+        return window;
+    }
+    let as_cv: Vec<ChannelVideo> = window.iter().map(picked_to_channel_video).collect();
+    if let Ok(probed) = crate::channel_fetcher::probe_views(app, as_cv, settings).await {
+        let exact: std::collections::HashMap<String, Option<u64>> =
+            probed.iter().map(|v| (v.url.clone(), v.view_count)).collect();
+        for p in window.iter_mut() {
+            if let Some(Some(view)) = exact.get(&p.url) {
+                p.view_count = Some(*view);
+            }
+        }
+    }
+    window.sort_by(|a, b| b.view_count.unwrap_or(0).cmp(&a.view_count.unwrap_or(0)));
+    window.truncate(n);
+    window
+}
+
+/// Số view gọn cho người đọc: 12500 → "12,5N", 2100000 → "2,1Tr".
+fn fmt_views_vi(v: u64) -> String {
+    if v >= 1_000_000 {
+        format!("{:.1}Tr view", v as f64 / 1_000_000.0).replace('.', ",")
+    } else if v >= 1_000 {
+        format!("{:.1}N view", v as f64 / 1_000.0).replace('.', ",")
+    } else {
+        format!("{v} view")
+    }
+}
+
+/// Ghi chú minh bạch cho lần TỰ VÉT: "🔥 tự lấy: <tên> · 12,5N view".
+fn fmt_pick_note(p: &PickedVideo) -> String {
+    match p.view_count {
+        Some(v) => format!("🔥 tự lấy: {} · {}", p.title, fmt_views_vi(v)),
+        None => format!("🔥 tự lấy: {}", p.title),
+    }
 }
 
 fn picked_to_channel_video(p: &PickedVideo) -> ChannelVideo {
@@ -640,7 +707,29 @@ mod tests {
             done_ids: done,
             dl_pending: vec![],
             source_empty: false,
+            last_pick: None,
         }
+    }
+
+    /// pick_auto_candidates PHẢI xếp theo view giảm dần: khi có view thật thì
+    /// lấy đúng video nhiều view nhất (nền cho vét sau khi probe view thật).
+    #[test]
+    fn pick_auto_lay_dung_video_nhieu_view_nhat() {
+        let mut lo = cv("lo", Some(1_000), false);
+        let mut mid = cv("mid", Some(500_000), false);
+        let hi = cv("hi", Some(9_000_000), false);
+        lo.title = "lo".into();
+        mid.title = "mid".into();
+        let got = pick_auto_candidates(&[lo, mid, hi], &[], 1, "all");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "hi", "phải lấy video NHIỀU VIEW NHẤT, không phải video giữa/đầu");
+    }
+
+    #[test]
+    fn fmt_views_gon_kieu_viet() {
+        assert_eq!(fmt_views_vi(950), "950 view");
+        assert_eq!(fmt_views_vi(12_500), "12,5N view");
+        assert_eq!(fmt_views_vi(2_100_000), "2,1Tr view");
     }
 
     fn cv(id: &str, views: Option<u64>, photo: bool) -> ChannelVideo {
@@ -946,7 +1035,7 @@ pub async fn force_one_more(
         {
             let mut done_plus = channel.done_ids.clone();
             done_plus.extend(channel.dl_pending.clone());
-            cand = pick_auto_candidates(&videos, &done_plus, 1, &tab).into_iter().next();
+            cand = vet_pick(app, &videos, &done_plus, 1, &tab, &settings).await.into_iter().next();
         }
     }
     let Some(p) = cand else {
@@ -978,6 +1067,7 @@ pub async fn force_one_more(
                 c.dl_pending.push(p.id.clone());
             }
             c.source_empty = false;
+            c.last_pick = Some(fmt_pick_note(&p));
         });
         let _ = app.emit(
             crate::events::EV_WATCH_UPDATED,

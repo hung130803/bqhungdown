@@ -1126,6 +1126,7 @@ pub async fn add_watched_channel(
         done_ids: vec![],
         dl_pending: vec![],
         source_empty: false,
+        last_pick: None,
     };
     store.add(channel)?;
     // Baseline pass: records current videos as "seen" and enqueues NOTHING

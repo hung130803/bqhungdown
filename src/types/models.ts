@@ -259,6 +259,8 @@ export interface WatchedChannel {
   /** Chất lượng TỐI ĐA riêng của kênh (1080, 720…). null = mặc định chung
    *  (1080). Không bao giờ tải vượt; thiếu thì lấy mức thấp hơn gần nhất. */
   maxHeight?: number | null;
+  /** Ghi chú minh bạch lần TỰ VÉT gần nhất: "🔥 tự lấy: <tên> · N view". */
+  lastPick?: string | null;
 }
 
 /** Một video trong hàng chờ làm của kênh theo dõi. */

@@ -270,6 +270,11 @@ pub struct WatchedChannel {
     /// Tự về false ngay khi có video mới đăng hoặc tải được video.
     #[serde(default)]
     pub source_empty: bool,
+    /// GHI CHÚ MINH BẠCH lần TỰ VÉT gần nhất: video nào được máy chọn +
+    /// vì sao (số view thật + ngày đăng). UI hiện dưới thẻ kênh để user
+    /// biết rõ "đã lấy video X · 12.500 view · đăng 20/06" — không mơ hồ.
+    #[serde(default)]
+    pub last_pick: Option<String>,
 }
 
 fn default_daily_limit() -> u32 {

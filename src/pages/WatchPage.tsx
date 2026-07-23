@@ -1021,6 +1021,15 @@ export function WatchPage() {
                 </span>
               )}
             </div>
+            {/* Minh bạch: máy vừa TỰ VÉT video nào (tên + view thật) */}
+            {k.rep.lastPick && (
+              <div
+                className="px-3 pb-2 -mt-1 text-[11px] text-accent truncate"
+                title={`Lần tự vét gần nhất máy đã chọn: ${k.rep.lastPick}\n(chọn theo VIEW THẬT cao nhất trong ~60 video gần đây chưa làm)`}
+              >
+                {k.rep.lastPick}
+              </div>
+            )}
 
             {/* Các KEY nguồn của kênh */}
             <div className="border-t border-border">
@@ -1324,7 +1333,18 @@ export function WatchPage() {
                     />
                     <span className="text-xs text-muted shrink-0">{n} kênh</span>
                     <button
-                      onClick={() => void deleteGroup(g)}
+                      onClick={() => {
+                        void (async () => {
+                          const ok = await cmd.confirmDialog(
+                            n > 0
+                              ? `Xóa nhóm "${g}"?\n${n} kênh trong nhóm sẽ về "Chưa phân nhóm" (KHÔNG mất kênh, chỉ gỡ nhãn nhóm).`
+                              : `Xóa nhóm "${g}"? (nhóm đang trống)`,
+                            "Xóa nhóm?",
+                          );
+                          if (!ok) return;
+                          await deleteGroup(g);
+                        })();
+                      }}
                       className="px-2 py-1 rounded-md border border-border text-danger text-xs shrink-0 hover:bg-surface-2"
                       title={`Xóa nhóm "${g}" — ${n} kênh về "chưa phân nhóm"`}
                     >
