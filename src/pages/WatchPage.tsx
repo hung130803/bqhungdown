@@ -249,6 +249,11 @@ export function WatchPage() {
     }
   };
 
+  // Video đã làm (đã tải xong) HOẶC đang tải dở → khóa không cho tích lại.
+  const isPickerDone = (id: string) =>
+    (pickerFor?.doneIds?.includes(id) ?? false) ||
+    (pickerFor?.dlPending?.includes(id) ?? false);
+
   // Đếm số Video dài / Shorts trong kho (cho nhãn 2 tab).
   const pickerCountVideos = pickerVideos.filter((v) => !v.isShort).length;
   const pickerCountShorts = pickerVideos.filter((v) => v.isShort).length;
@@ -276,7 +281,7 @@ export function WatchPage() {
       const add = pickerShown
         .filter((v) => {
           const id = videoIdOf(v.url);
-          return !have.has(id) && !(pickerFor.doneIds?.includes(id) ?? false);
+          return !have.has(id) && !isPickerDone(id);
         })
         .map((v) => ({
           id: videoIdOf(v.url),
@@ -665,6 +670,23 @@ export function WatchPage() {
                     {it.state === "downloading" && it.etaSec != null && (
                       <span className="shrink-0">còn {fmtEta(it.etaSec)}</span>
                     )}
+                    {/* Hủy lượt tải này — hủy KHÔNG bị coi là đã tải, lượt sau lấy lại */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void (async () => {
+                          try {
+                            await cmd.cancelDownload(it.shortId);
+                          } catch (err) {
+                            setError(formatErr(err));
+                          }
+                        })();
+                      }}
+                      className="shrink-0 text-danger hover:bg-danger/10 rounded px-1 leading-none"
+                      title="Hủy tải video này (không tính là đã tải — lần chạy sau sẽ lấy lại)"
+                    >
+                      ✕ Hủy
+                    </button>
                   </div>
                   <div className="h-1 mt-0.5 rounded bg-surface-2 overflow-hidden">
                     <div
@@ -1199,7 +1221,7 @@ export function WatchPage() {
                 className="px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0 disabled:opacity-40"
                 title="Tích toàn bộ video đang hiển thị (bỏ qua video đã làm) — theo đúng thứ tự đang xem"
               >
-                ☑ Tích hết ({pickerShown.filter((v) => !(pickerFor.doneIds?.includes(videoIdOf(v.url)) ?? false)).length})
+                ☑ Tích hết ({pickerShown.filter((v) => !isPickerDone(videoIdOf(v.url))).length})
               </button>
               <button
                 onClick={unpickAllShown}
@@ -1243,7 +1265,7 @@ export function WatchPage() {
               )}
               {pickerShown.map((v) => {
                 const id = videoIdOf(v.url);
-                const done = pickerFor.doneIds?.includes(id) ?? false;
+                const done = isPickerDone(id);
                 const sel = pickerSel.some((p) => p.id === id);
                 const order = sel ? pickerSel.findIndex((p) => p.id === id) + 1 : 0;
                 return (

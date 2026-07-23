@@ -252,6 +252,8 @@ export interface WatchedChannel {
   dripCount?: number;
   /** Id video đã tự tải — dialog kho đánh dấu "đã làm". */
   doneIds?: string[];
+  /** Id video đang tải qua dây chuyền (chưa chốt) — kho coi như "đang làm". */
+  dlPending?: string[];
   /** true = kho nguồn ĐÃ CẠN (quét 🤖 không còn video chưa làm) — đổi key. */
   sourceEmpty?: boolean;
   /** Chất lượng TỐI ĐA riêng của kênh (1080, 720…). null = mặc định chung

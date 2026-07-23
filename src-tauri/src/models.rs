@@ -253,6 +253,13 @@ pub struct WatchedChannel {
     /// "đã làm" để user không tích lại video cũ.
     #[serde(default)]
     pub done_ids: Vec<String>,
+    /// Id video ĐANG TẢI qua dây chuyền (auto/drip/picked), CHƯA chốt xong.
+    /// Chỉ chuyển sang `done_ids` khi tải THÀNH CÔNG (có trong history
+    /// Completed). Nếu hủy/lỗi → gỡ khỏi đây + trả lại suất + gỡ seen_ids
+    /// để lấy lại (xem reconcile trong watcher). Chống "chưa tải xong đã
+    /// coi là đã làm".
+    #[serde(default)]
+    pub dl_pending: Vec<String>,
     /// Chất lượng TỐI ĐA của kênh (1080, 720…). None = mặc định chung
     /// (Settings.max_height, mặc định 1080). Không bao giờ tải VƯỢT mức
     /// này; nguồn thiếu thì lấy mức thấp hơn gần nhất.

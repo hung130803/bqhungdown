@@ -33,6 +33,67 @@ fn video_id_of(url: &str) -> String {
     crate::channel_fetcher::extract_video_id(url).unwrap_or_else(|| url.to_string())
 }
 
+/// Đối soát `dl_pending` (video đang tải qua dây chuyền) với thực tế:
+/// - Có trong history Completed  → tải XONG → chuyển sang `done_ids`.
+/// - Còn trong hàng đợi (kể cả đang chờ/retry) → giữ nguyên, chờ tiếp.
+/// - Không còn ở đâu (đã hủy / lỗi cứng / biến mất) → TRẢ SUẤT: gỡ khỏi
+///   `dl_pending` + `seen_ids`, giảm `drip_count` nếu là suất HÔM NAY, để
+///   lượt chạy sau lấy lại (chính video đó hoặc video khác). Không đụng
+///   video user tự tải tay (không nằm trong dl_pending).
+fn reconcile_pending(
+    store: &Arc<WatchlistStore>,
+    queue: &Arc<QueueManager>,
+    history: &Arc<HistoryStore>,
+    id: &str,
+) {
+    use crate::models::HistoryStatus;
+    let channel = match store.get(id) {
+        Some(c) if !c.dl_pending.is_empty() => c,
+        _ => return,
+    };
+    // Video đang "sống" trong hàng đợi (chưa kết thúc) — theo video id.
+    let live: std::collections::HashSet<String> = queue
+        .list()
+        .iter()
+        .filter(|it| {
+            matches!(
+                it.state,
+                crate::models::DownloadState::Queued
+                    | crate::models::DownloadState::Downloading
+                    | crate::models::DownloadState::Paused
+            )
+        })
+        .map(|it| video_id_of(&it.request.url))
+        .collect();
+    // Video đã tải XONG (history chỉ chứa Completed, nhưng lọc cho chắc).
+    let done_hist: std::collections::HashSet<String> = history
+        .list(None, 2000, 0)
+        .unwrap_or_default()
+        .iter()
+        .filter(|e| e.status == HistoryStatus::Completed)
+        .map(|e| video_id_of(&e.url))
+        .collect();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let _ = store.update(id, |c| {
+        let pending = std::mem::take(&mut c.dl_pending);
+        for vid in pending {
+            if done_hist.contains(&vid) {
+                if !c.done_ids.contains(&vid) {
+                    c.done_ids.push(vid); // chốt đã làm
+                }
+            } else if live.contains(&vid) {
+                c.dl_pending.push(vid); // vẫn đang tải/chờ/retry
+            } else {
+                // Hủy/lỗi cứng → trả suất, gỡ seen để lấy lại.
+                c.seen_ids.retain(|s| s != &vid);
+                if c.drip_date.as_deref() == Some(today.as_str()) && c.drip_count > 0 {
+                    c.drip_count -= 1;
+                }
+            }
+        }
+    });
+}
+
 /// Làm sạch tên kênh đích thành tên thư mục Windows hợp lệ: thay ký tự cấm
 /// `<>:"/\|?*` + ký tự điều khiển bằng khoảng trắng, gộp khoảng trắng thừa,
 /// bỏ chấm/khoảng trắng cuối (Windows cấm). Rỗng sau khi lọc -> None.
@@ -105,6 +166,10 @@ pub async fn check_channel(
     history: &Arc<HistoryStore>,
     id: &str,
 ) -> u32 {
+    // Đối soát video ĐANG TẢI dở trước tiên: tải xong → chốt "đã làm";
+    // hủy/lỗi cứng → trả lại suất để lấy lại (không coi là đã tải).
+    reconcile_pending(store, queue, history, id);
+
     let channel = match store.get(id) {
         Some(c) => c,
         None => return 0,
@@ -320,9 +385,11 @@ async fn apply(
                 c.seen_ids.push(p.id.clone());
             }
         }
+        // CHƯA chốt "đã làm" — chỉ đánh dấu ĐANG TẢI. Reconcile sẽ chuyển
+        // sang done_ids khi tải xong, hoặc trả suất nếu hủy/lỗi.
         for did in &new_done {
-            if !c.done_ids.contains(did) {
-                c.done_ids.push(did.clone());
+            if !c.dl_pending.contains(did) && !c.done_ids.contains(did) {
+                c.dl_pending.push(did.clone());
             }
         }
     });
@@ -565,6 +632,7 @@ mod tests {
             drip_date: None,
             drip_count: 0,
             done_ids: done,
+            dl_pending: vec![],
             source_empty: false,
         }
     }
@@ -743,6 +811,72 @@ mod tests {
         assert!(c.auto_fetch_date.is_none());
         assert!(c.target_name.is_none());
         assert!(!c.source_empty);
+        assert!(c.dl_pending.is_empty());
+    }
+
+    /// Logic đối soát dl_pending (tách riêng để test không cần queue/history
+    /// thật): áp cùng quy tắc với reconcile_pending.
+    fn reconcile_logic(
+        c: &mut WatchedChannel,
+        live: &[&str],
+        done_hist: &[&str],
+        today: &str,
+    ) {
+        let pending = std::mem::take(&mut c.dl_pending);
+        for vid in pending {
+            if done_hist.contains(&vid.as_str()) {
+                if !c.done_ids.contains(&vid) {
+                    c.done_ids.push(vid);
+                }
+            } else if live.contains(&vid.as_str()) {
+                c.dl_pending.push(vid);
+            } else {
+                c.seen_ids.retain(|s| s != &vid);
+                if c.drip_date.as_deref() == Some(today) && c.drip_count > 0 {
+                    c.drip_count -= 1;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reconcile_tai_xong_thi_chot_da_lam() {
+        let mut c = chan(vec![], 1, vec![]);
+        c.dl_pending = vec!["v1".into()];
+        c.seen_ids = vec!["v1".into()];
+        c.drip_date = Some("2026-07-23".into());
+        c.drip_count = 1;
+        reconcile_logic(&mut c, &[], &["v1"], "2026-07-23");
+        assert!(c.dl_pending.is_empty());
+        assert!(c.done_ids.contains(&"v1".to_string()));
+        assert_eq!(c.drip_count, 1, "tải xong thì GIỮ suất");
+    }
+
+    #[test]
+    fn reconcile_dang_tai_thi_giu_nguyen() {
+        let mut c = chan(vec![], 1, vec![]);
+        c.dl_pending = vec!["v1".into()];
+        c.drip_date = Some("2026-07-23".into());
+        c.drip_count = 1;
+        reconcile_logic(&mut c, &["v1"], &[], "2026-07-23");
+        assert_eq!(c.dl_pending, vec!["v1".to_string()], "đang tải → còn chờ");
+        assert!(c.done_ids.is_empty());
+        assert_eq!(c.drip_count, 1);
+    }
+
+    #[test]
+    fn reconcile_huy_loi_thi_tra_suat() {
+        let mut c = chan(vec![], 1, vec![]);
+        c.dl_pending = vec!["v1".into()];
+        c.seen_ids = vec!["base1".into(), "v1".into()];
+        c.drip_date = Some("2026-07-23".into());
+        c.drip_count = 1;
+        // v1 không còn trong queue, chưa Completed → hủy/lỗi.
+        reconcile_logic(&mut c, &[], &[], "2026-07-23");
+        assert!(c.dl_pending.is_empty());
+        assert!(!c.done_ids.contains(&"v1".to_string()), "KHÔNG được coi là đã làm");
+        assert!(!c.seen_ids.contains(&"v1".to_string()), "gỡ seen để lấy lại");
+        assert_eq!(c.drip_count, 0, "TRẢ lại suất hôm nay");
     }
 }
 

@@ -1090,6 +1090,7 @@ pub async fn add_watched_channel(
         drip_date: None,
         drip_count: 0,
         done_ids: vec![],
+        dl_pending: vec![],
         source_empty: false,
     };
     store.add(channel)?;
