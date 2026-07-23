@@ -29,6 +29,17 @@ export function WatchPage() {
   const [error, setError] = useState<string | null>(null);
   // Quản lý nhiều kênh đa quốc gia: tìm nhanh (nhóm gập/mở thay cho bộ lọc).
   const [search, setSearch] = useState("");
+  // Bộ lọc NHÓM: null = xem tất cả; "" = "Chưa phân nhóm"; nhớ qua các lần
+  // mở app (100-200 kênh/nhóm — anh Hùng làm việc theo từng vùng nhóm).
+  const [groupFilter, setGroupFilter] = useState<string | null>(() => {
+    const v = localStorage.getItem("watch.groupFilter");
+    return v === null || v === "*ALL*" ? null : v;
+  });
+  const pickGroupFilter = (g: string | null) => {
+    setGroupFilter(g);
+    localStorage.setItem("watch.groupFilter", g === null ? "*ALL*" : g);
+  };
+  const [cancellingAll, setCancellingAll] = useState(false);
 
   // ── Dialog "➕ Thêm kênh": tên kênh đích + nhóm + key nguồn đầu tiên ──
   const [addOpen, setAddOpen] = useState(false);
@@ -420,7 +431,20 @@ export function WatchPage() {
     }
   }
   const kenhAll = [...kenhMap.values()];
+  // Số kênh từng nhóm cho thanh chip lọc (đếm trên TOÀN BỘ, trước lọc).
+  const groupCounts = new Map<string, number>();
+  for (const k of kenhAll) {
+    const g = k.group || "";
+    groupCounts.set(g, (groupCounts.get(g) ?? 0) + 1);
+  }
+  // Chip = nhóm user đặt ∪ nhóm đang có kênh; "" (Chưa phân nhóm) chỉ hiện
+  // khi thật sự có kênh chưa gán nhóm.
+  const chipGroups = [
+    ...new Set([...groups, ...[...groupCounts.keys()].filter(Boolean)]),
+  ].sort((a, b) => a.localeCompare(b, "vi"));
+  if (groupCounts.has("")) chipGroups.push("");
   const kenhVisible = kenhAll
+    .filter((k) => groupFilter === null || (k.group || "") === groupFilter)
     .filter(
       (k) =>
         !term ||
@@ -441,6 +465,18 @@ export function WatchPage() {
   // Lượt tải đang chạy (store toàn cục đã nghe event tiến trình) — soi theo
   // thư mục lưu để gắn thanh tiến trình vào đúng thẻ kênh.
   const queueItems = useQueueStore((s) => s.items);
+  const refreshQueue = useQueueStore((s) => s.refresh);
+  // Nạp hàng đợi ngay khi mở trang — mở app vào thẳng Theo dõi vẫn thấy
+  // thanh tiến trình + nút ✕ Hủy tất cả đúng, không phải đợi event đầu tiên.
+  useEffect(() => {
+    void refreshQueue();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Tổng lượt đang chờ/tải/tạm dừng — hiện nút ✕ Hủy tất cả khi > 0.
+  const nActive = queueItems.filter(
+    (it) => it.state === "downloading" || it.state === "queued" || it.state === "paused",
+  ).length;
+  const [notice, setNotice] = useState<string | null>(null);
   const activeFor = (dir?: string | null) => {
     if (!dir) return [];
     const norm = (p: string) => p.replace(/[/\\]+$/, "").toLowerCase();
@@ -528,11 +564,76 @@ export function WatchPage() {
         >
           {checking ? "Đang chạy…" : "▶ Chạy tất cả"}
         </button>
+        {nActive > 0 && (
+          <button
+            onClick={() => {
+              if (cancellingAll) return;
+              setCancellingAll(true);
+              void (async () => {
+                try {
+                  const n = await cmd.cancelAllDownloads();
+                  await reload();
+                  setError(null);
+                  setNotice(`Đã hủy ${n} video — file tải dở tự xóa, suất trong ngày trả lại đủ.`);
+                } catch (e) {
+                  setError(formatErr(e));
+                } finally {
+                  setCancellingAll(false);
+                }
+              })();
+            }}
+            disabled={cancellingAll}
+            className="px-3 py-1.5 rounded-md bg-danger text-white font-medium disabled:opacity-50"
+            title={"HỦY TẤT CẢ video đang chờ/đang tải một phát — tức thời.\nFile tải dở (.part…) tự xóa sạch, không để rác; suất 'đã tải hôm nay' trả lại ngay."}
+          >
+            {cancellingAll ? "Đang hủy…" : `✕ Hủy tất cả (${nActive})`}
+          </button>
+        )}
+      </div>
+
+      {/* Thanh LỌC NHÓM: bấm nhóm nào chỉ hiện vùng nhóm đó (100-200 kênh/nhóm
+          vẫn gọn); nhóm mới tạo tự mọc chip ở đây. */}
+      <div className="flex items-center gap-1.5 flex-wrap text-sm">
+        <button
+          onClick={() => pickGroupFilter(null)}
+          className={`px-2.5 py-1 rounded-full border text-xs font-medium ${
+            groupFilter === null
+              ? "bg-accent text-accent-fg border-accent"
+              : "bg-surface border-border text-fg hover:bg-surface-2"
+          }`}
+          title="Hiện MỌI nhóm"
+        >
+          Tất cả ({kenhAll.length})
+        </button>
+        {chipGroups.map((g) => (
+          <button
+            key={g || "⁇"}
+            onClick={() => pickGroupFilter(g)}
+            className={`px-2.5 py-1 rounded-full border text-xs font-medium inline-flex items-center gap-1.5 ${
+              groupFilter === g
+                ? "bg-accent text-accent-fg border-accent"
+                : "bg-surface border-border text-fg hover:bg-surface-2"
+            }`}
+            title={`Chỉ hiện kênh nhóm "${g || "Chưa phân nhóm"}"`}
+          >
+            <span
+              className="inline-block w-2 h-2 rounded-full"
+              style={{ background: `hsl(${groupHue(g)} 70% 55%)` }}
+            />
+            {g || "Chưa phân nhóm"} ({groupCounts.get(g) ?? 0})
+          </button>
+        ))}
       </div>
 
       {error && (
         <div className="px-3 py-2 rounded-md bg-danger/10 border border-danger text-danger text-sm">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div className="px-3 py-2 rounded-md bg-surface-2 border border-border text-fg text-sm flex items-center gap-2">
+          <span className="flex-1">{notice}</span>
+          <button onClick={() => setNotice(null)} className="text-muted hover:text-fg">✕</button>
         </div>
       )}
 
@@ -547,7 +648,9 @@ export function WatchPage() {
         )}
         {channels.length > 0 && kenhVisible.length === 0 && (
           <div className="text-sm text-muted text-center py-6">
-            Không kênh nào khớp tìm kiếm/bộ lọc.
+            {groupFilter !== null && !term
+              ? `Nhóm "${groupFilter || "Chưa phân nhóm"}" chưa có kênh nào — bấm ➕ Thêm kênh rồi gán vào nhóm này.`
+              : "Không kênh nào khớp tìm kiếm/bộ lọc."}
           </div>
         )}
         {kenhVisible.map((k, i) => {
@@ -559,7 +662,8 @@ export function WatchPage() {
           // Ít kênh thì mở sẵn hết cho dễ nhìn; nhiều kênh (50-300) thì gập
           // theo nhóm, đang tìm/lọc thì luôn mở để thấy kết quả.
           const defaultOpen = kenhAll.length <= 8;
-          const gOpen = term ? true : (openGroups[g] ?? defaultOpen);
+          // Đang lọc 1 nhóm cụ thể / đang tìm → luôn mở để thấy kênh ngay.
+          const gOpen = term || groupFilter !== null ? true : (openGroups[g] ?? defaultOpen);
           const kOpen = openKenh[k.key] ?? !k.name; // thẻ chưa đặt tên tự xổ
           const isFirstInGroup = i === 0 || (kenhVisible[i - 1].group || "") !== g;
           const inGroup = kenhVisible.filter((x) => (x.group || "") === g);

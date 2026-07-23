@@ -582,10 +582,45 @@ impl QueueManager {
 
     pub fn cancel(self: &Arc<Self>, id: &str) -> AppResult<()> {
         self.transition_item(id, QueueEvent::Cancel)?;
-        if let Some(tok) = self.cancel_tokens.lock().unwrap().remove(id) {
-            tok.cancel();
+        let tok = self.cancel_tokens.lock().unwrap().remove(id);
+        match tok {
+            // Có tiến trình đang chạy: bấm token → run-loop tự kill + dọn
+            // file `.part` (nhánh Cancelled trong run_loop_for).
+            Some(t) => t.cancel(),
+            // Mục chờ/tạm dừng KHÔNG có run-loop sống → không ai dọn hộ;
+            // tự dọn file tải dở tại đây (bền bỉ, thread nền).
+            None => {
+                if let Some(it) = self.get(id) {
+                    cleanup_partials_retry(it);
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Hủy TẤT CẢ mục đang chờ/tải/tạm dừng một phát. Tức thời: chỉ chuyển
+    /// trạng thái + bấm cancel-token (kill tiến trình + dọn file `.part`
+    /// chạy nền, không chặn). Trả về số mục đã hủy.
+    pub fn cancel_all(self: &Arc<Self>) -> u32 {
+        let ids: Vec<String> = {
+            let map = self.items.read().unwrap();
+            map.values()
+                .filter(|it| {
+                    matches!(
+                        it.state,
+                        DownloadState::Queued | DownloadState::Downloading | DownloadState::Paused
+                    )
+                })
+                .map(|it| it.short_id.clone())
+                .collect()
+        };
+        let mut n = 0u32;
+        for id in &ids {
+            if self.cancel(id).is_ok() {
+                n += 1;
+            }
+        }
+        n
     }
 
     pub fn retry(self: &Arc<Self>, id: &str) -> AppResult<DownloadItem> {

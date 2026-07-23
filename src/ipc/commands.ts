@@ -239,6 +239,14 @@ export async function cancelDownload(shortId: string): Promise<void> {
   return invoke<void>("cancel_download", { shortId });
 }
 
+/** ✕ HỦY TẤT CẢ video đang chờ/tải/tạm dừng — trả về số mục đã hủy.
+ *  File tải dở (.part…) tự xóa nền, suất "đã tải hôm nay" trả lại ngay. */
+export async function cancelAllDownloads(): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("cancel_all_downloads");
+}
+
 // Thử lại TẤT CẢ mục lỗi một phát (sau khi thêm cookie / hết bị chặn).
 // Trả về số video được đưa lại vào hàng đợi.
 export async function retryAllFailed(): Promise<number> {

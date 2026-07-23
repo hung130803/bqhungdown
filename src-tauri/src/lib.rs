@@ -259,6 +259,7 @@ pub fn run() {
             commands::pause_download,
             commands::resume_download,
             commands::cancel_download,
+            commands::cancel_all_downloads,
             commands::retry_download,
             commands::retry_all_failed,
             commands::pause_all_downloads,

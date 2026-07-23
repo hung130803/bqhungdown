@@ -444,6 +444,25 @@ pub fn cancel_download(
     Ok(())
 }
 
+/// ✕ HỦY TẤT CẢ: hủy mọi video đang chờ/tải/tạm dừng một phát. Tức thời
+/// (chỉ lật trạng thái + bấm token; kill tiến trình và xóa file `.part`
+/// chạy nền). Đối soát kênh theo dõi ngay để bộ đếm ngày trả suất đủ.
+#[tauri::command]
+pub fn cancel_all_downloads(
+    app: AppHandle,
+    queue: State<Arc<QueueManager>>,
+    watchlist: State<Arc<WatchlistStore>>,
+    history: State<Arc<HistoryStore>>,
+) -> AppResult<u32> {
+    let n = queue.cancel_all();
+    crate::watcher::reconcile_all(watchlist.inner(), queue.inner(), history.inner());
+    let _ = app.emit(
+        crate::events::EV_WATCH_UPDATED,
+        crate::events::WatchUpdatedPayload { channel_id: String::new(), new_count: 0 },
+    );
+    Ok(n)
+}
+
 #[tauri::command]
 pub fn retry_download(
     short_id: String,
