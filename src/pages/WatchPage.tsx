@@ -43,8 +43,11 @@ export function WatchPage() {
   // 📊 Thống kê: mở dialog + nạp lịch sử tải (khớp theo thư mục kênh).
   const [showStats, setShowStats] = useState(false);
   const [statsHist, setStatsHist] = useState<HistoryEntry[] | null>(null);
-  // Lỗi tải 24h gần nhất (từ lịch sử) -> badge 🔴 cảnh báo trên thẻ kênh.
-  const [errHist, setErrHist] = useState<HistoryEntry[]>([]);
+  // LỖI TẢI đang hiện hữu -> badge 🔴 cảnh báo trên thẻ kênh. Nguồn CHÍNH là
+  // HÀNG ĐỢI (item Failed — lịch sử CHỈ ghi video thành công nên không dùng
+  // được); gom về dạng gọn {saveFolder, title, error}.
+  type ErrItem = { saveFolder: string; title: string; error: string };
+  const [errHist, setErrHist] = useState<ErrItem[]>([]);
   const [statsExpand, setStatsExpand] = useState<Record<string, boolean>>({});
   // Bộ điều khiển bảng thống kê: tìm / lọc nhóm / lọc trạng thái / sắp xếp.
   const [statsQuery, setStatsQuery] = useState("");
@@ -84,16 +87,17 @@ export function WatchPage() {
       // hôm nay" không bao giờ hiển thị sai sau khi bấm ✕ Hủy.
       await cmd.reconcileWatched();
       setChannels(await cmd.listWatchedChannels());
-      // Lỗi tải 24h gần nhất -> badge 🔴 trên thẻ kênh (giới hạn tuổi cần
-      // cookie, mạng, private…). Lỗi nạp lịch sử thì bỏ qua, không chặn UI.
+      // LỖI TẢI đang nằm trong HÀNG ĐỢI (state=failed) -> badge 🔴 trên thẻ
+      // kênh (giới hạn tuổi cần cookie, mạng, private…). Lịch sử KHÔNG dùng
+      // được vì chỉ ghi video thành công. Lỗi nạp queue thì bỏ qua.
       try {
-        const hist = await cmd.listHistory({ limit: 500 });
-        const dayMs = 24 * 3600 * 1000;
-        setErrHist(hist.filter(
-          (h) => h.status !== "completed"
-            && Date.now() - Date.parse(h.finishedAt) < dayMs,
-        ));
-      } catch { /* lịch sử lỗi không chặn trang */ }
+        const q = await cmd.listQueue();
+        setErrHist(q.filter((it) => it.state === "failed").map((it) => ({
+          saveFolder: it.request.saveFolder,
+          title: it.title || it.request.url,
+          error: it.errorMessage || "lỗi không rõ",
+        })));
+      } catch { /* queue lỗi không chặn trang */ }
     } catch (e) {
       setError(formatErr(e));
     }
@@ -826,9 +830,9 @@ export function WatchPage() {
                 <span
                   className="text-xs text-danger font-bold shrink-0 px-1.5 py-0.5 rounded-md bg-danger/15 border border-danger cursor-help"
                   title={
-                    "Video tải LỖI trong 24h:\n"
+                    "Video tải LỖI (đang nằm ở tab Đang tải):\n"
                     + kErrs.slice(0, 3).map((h) =>
-                        `• ${(h.title || h.url).slice(0, 70)}\n   → ${(h.error || "lỗi không rõ").slice(0, 160)}`,
+                        `• ${h.title.slice(0, 70)}\n   → ${h.error.slice(0, 160)}`,
                       ).join("\n")
                     + (kErrs.length > 3 ? `\n… và ${kErrs.length - 3} lỗi nữa` : "")
                     + "\n\nMở tab ĐANG TẢI để xem chi tiết / Thử lại."
