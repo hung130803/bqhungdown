@@ -586,6 +586,16 @@ export async function setWatchedSourceMode(
   return invoke<WatchedChannel | null>("set_watched_source_mode", { id, mode });
 }
 
+/** Đổi loại video theo dõi/vét: "videos" (dài) | "shorts" | "all". */
+export async function setWatchedTab(
+  id: string,
+  tab: "all" | "videos" | "shorts",
+): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("set_watched_tab", { id, tab });
+}
+
 /** Đặt TÊN KÊNH ĐÍCH (kênh TikTok của user) — video tự về <gốc>\<tên>. */
 export async function setWatchedTarget(
   id: string,

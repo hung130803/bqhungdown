@@ -226,7 +226,8 @@ async fn apply(
                     ).await
                     {
                         dripped = pick_auto_candidates(
-                            &videos, &channel.done_ids, (limit - drip_count) as usize,
+                            &videos, &channel.done_ids,
+                            (limit - drip_count) as usize, &tab,
                         );
                     }
                 }
@@ -354,17 +355,27 @@ fn plan_drip(channel: &WatchedChannel, drip_count: u32) -> Vec<PickedVideo> {
 }
 
 /// Tự vét kho 🤖 — chọn `n` video làm hôm nay: bỏ post ảnh + video đã làm
-/// (`done_ids`), xếp view CAO NHẤT trước (thiếu số view thì đứng cuối, giữ
-/// thứ tự kênh = mới trước), khử trùng id. Hàm thuần để unit-test.
+/// (`done_ids`), LỌC THEO LOẠI (`want`: "shorts" = chỉ Shorts; còn lại =
+/// CHỈ VIDEO DÀI — kể cả "all", vì vét lẫn Shorts vào kênh cắt là đểu),
+/// xếp view CAO NHẤT trước (thiếu số view thì đứng cuối, giữ thứ tự kênh
+/// = mới trước), khử trùng id. Hàm thuần để unit-test.
 fn pick_auto_candidates(
     videos: &[ChannelVideo],
     done_ids: &[String],
     n: usize,
+    want: &str,
 ) -> Vec<PickedVideo> {
     let mut cands: Vec<(String, &ChannelVideo)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for v in videos {
         if v.is_photo {
+            continue;
+        }
+        if want == "shorts" {
+            if !v.is_short {
+                continue;
+            }
+        } else if v.is_short {
             continue;
         }
         let id = video_id_of(&v.url);
@@ -648,6 +659,12 @@ mod tests {
         assert_eq!(f, std::path::PathBuf::from("D:\\TC").join("kênh mỹ 1"));
     }
 
+    fn cvs(id: &str, views: Option<u64>, short: bool) -> ChannelVideo {
+        let mut v = cv(id, views, false);
+        v.is_short = short;
+        v
+    }
+
     #[test]
     fn auto_chon_view_cao_nhat_chua_lam() {
         let videos = vec![
@@ -657,11 +674,32 @@ mod tests {
             cv("done1", Some(99_999), false), // đã làm -> bỏ
             cv("kha", Some(5_000), false),
         ];
-        let got = pick_auto_candidates(&videos, &["done1".to_string()], 2);
+        let got = pick_auto_candidates(&videos, &["done1".to_string()], 2, "all");
         assert_eq!(
             got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
             ["hot", "kha"]
         );
+    }
+
+    #[test]
+    fn auto_mac_dinh_chi_vet_video_dai_bo_shorts() {
+        let videos = vec![
+            cvs("short_hot", Some(900_000), true), // Shorts view khủng -> vẫn bỏ
+            cvs("dai_1", Some(50_000), false),
+            cvs("dai_2", Some(80_000), false),
+        ];
+        // "all" lẫn "videos" đều CHỈ lấy video dài, xếp theo view.
+        for want in ["all", "videos"] {
+            let got = pick_auto_candidates(&videos, &[], 5, want);
+            assert_eq!(
+                got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+                ["dai_2", "dai_1"],
+                "want={want}"
+            );
+        }
+        // Kênh chuyên Shorts thì ngược lại: chỉ lấy Shorts.
+        let got = pick_auto_candidates(&videos, &[], 5, "shorts");
+        assert_eq!(got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["short_hot"]);
     }
 
     #[test]
@@ -673,7 +711,7 @@ mod tests {
             cv("a", None, false),
             cv("b", None, false),
         ];
-        let got = pick_auto_candidates(&videos, &[], 5);
+        let got = pick_auto_candidates(&videos, &[], 5, "videos");
         assert_eq!(got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
     }
 

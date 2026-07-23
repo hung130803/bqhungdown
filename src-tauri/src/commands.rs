@@ -1139,6 +1139,23 @@ pub fn set_watched_source_mode(
     })
 }
 
+/// Đổi LOẠI VIDEO theo dõi/vét của kênh: "videos" (dài) | "shorts" | "all".
+/// Xóa auto_fetch_date để lượt quét kho kế tiếp áp loại mới ngay hôm nay.
+#[tauri::command]
+pub fn set_watched_tab(
+    id: String,
+    tab: String,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    if !matches!(tab.as_str(), "all" | "videos" | "shorts") {
+        return Err(AppError::Other(format!("loại video không hợp lệ: {tab}")));
+    }
+    store.update(&id, |c| {
+        c.tab = tab.clone();
+        c.auto_fetch_date = None;
+    })
+}
+
 /// Đặt TÊN KÊNH ĐÍCH (kênh TikTok của user) cho kênh theo dõi — video tự
 /// về `<watch_root>\<tên>` (resolve_watch_folder). None/rỗng = bỏ.
 #[tauri::command]

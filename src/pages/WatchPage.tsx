@@ -34,7 +34,8 @@ export function WatchPage() {
   const [addName, setAddName] = useState("");
   const [addGrp, setAddGrp] = useState("");
   const [addUrl, setAddUrl] = useState("");
-  const [addTab, setAddTab] = useState("all");
+  // Mặc định VIDEO DÀI — vét lẫn Shorts vào kênh cắt là hỏng format.
+  const [addTab, setAddTab] = useState("videos");
   const [addDir, setAddDir] = useState("");
   const [adding, setAdding] = useState(false);
   // Ô "dán key mới" trong từng thẻ kênh (map theo key của thẻ).
@@ -557,6 +558,20 @@ export function WatchPage() {
                 <option value="auto">🤖 Tự vét</option>
                 <option value="picked">🎯 Hàng chờ</option>
                 <option value="new">Video mới</option>
+              </select>
+              {/* Loại video vét/theo dõi — vét luôn ưu tiên VIDEO DÀI trừ khi chọn Shorts */}
+              <select
+                value={k.rep.tab || "all"}
+                onChange={(e) => {
+                  const v = e.target.value as "all" | "videos" | "shorts";
+                  void forKenh(k, (id) => cmd.setWatchedTab(id, v));
+                }}
+                className="px-1.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
+                title={"Loại video lấy từ nguồn:\n• Video dài — chỉ video thường (khuyên dùng để cắt)\n• Shorts — chỉ Shorts\n• Tất cả — theo dõi cả 2, nhưng TỰ VÉT vẫn chỉ lấy video dài"}
+              >
+                <option value="videos">🎬 Video dài</option>
+                <option value="shorts">📱 Shorts</option>
+                <option value="all">Tất cả</option>
               </select>
               <select
                 value={k.rep.dailyLimit ?? 1}
