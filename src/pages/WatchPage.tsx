@@ -265,9 +265,14 @@ export function WatchPage() {
   const [pickerType, setPickerType] = useState<"videos" | "shorts">("videos");
   // Tuổi kho đã lưu (giây); null = vừa lấy thật từ mạng.
   const [pickerCacheAge, setPickerCacheAge] = useState<number | null>(null);
+  // ID video ĐÃ TẢI (download-archive) — tô dấu "đã tải" trong kho.
+  const [pickerArchived, setPickerArchived] = useState<Set<string>>(new Set());
 
   const openPicker = async (c: WatchedChannel, forceRefresh = false) => {
     setPickerFor(c);
+    // Nạp danh sách ĐÃ TẢI (archive) để tô dấu — lỗi thì bỏ qua (không chặn).
+    void cmd.archivedVideoIds().then((ids) => setPickerArchived(new Set(ids)))
+      .catch(() => setPickerArchived(new Set()));
     if (!forceRefresh) {
       setPickerSel(c.picked ?? []);
       setPickerSearch("");
@@ -293,10 +298,13 @@ export function WatchPage() {
     }
   };
 
-  // Video đã làm (đã tải xong) HOẶC đang tải dở → khóa không cho tích lại.
+  // Video ĐÃ TẢI (download-archive) — dấu riêng, tô vàng cho dễ phân biệt.
+  const isPickerArchived = (id: string) => pickerArchived.has(id);
+  // Video đã làm / đang tải dở / ĐÃ TẢI → khóa không cho tích lại.
   const isPickerDone = (id: string) =>
     (pickerFor?.doneIds?.includes(id) ?? false) ||
-    (pickerFor?.dlPending?.includes(id) ?? false);
+    (pickerFor?.dlPending?.includes(id) ?? false) ||
+    isPickerArchived(id);
 
   // Đếm số Video dài / Shorts trong kho (cho nhãn 2 tab).
   const pickerCountVideos = pickerVideos.filter((v) => !v.isShort).length;
@@ -1789,14 +1797,22 @@ export function WatchPage() {
               )}
               {pickerShown.map((v) => {
                 const id = videoIdOf(v.url);
-                const done = isPickerDone(id);
+                const archived = isPickerArchived(id);   // đã tải (archive)
+                const done = isPickerDone(id);            // gồm cả archived
                 const sel = pickerSel.some((p) => p.id === id);
                 const order = sel ? pickerSel.findIndex((p) => p.id === id) + 1 : 0;
                 return (
                   <label
                     key={id}
+                    // ĐÃ TẢI -> nền VÀNG nhạt + viền trái vàng cho dễ phân biệt
+                    // (không làm mờ để vẫn đọc rõ); đã-làm khác (không archive)
+                    // vẫn mờ như cũ.
+                    style={archived ? {
+                      background: "rgba(249,226,175,0.12)",
+                      borderLeft: "3px solid #f9e2af",
+                    } : undefined}
                     className={`flex items-center gap-3 px-3 py-2 border-t border-border text-sm ${
-                      done ? "opacity-50" : "cursor-pointer hover:bg-surface-2"
+                      archived ? "" : done ? "opacity-50" : "cursor-pointer hover:bg-surface-2"
                     }`}
                   >
                     <input
@@ -1825,7 +1841,11 @@ export function WatchPage() {
                         {v.viewCount != null && <>👁 {formatViews(v.viewCount)} · </>}
                         {v.durationSec != null && v.durationSec > 0 && <>⏱ {fmtDur(v.durationSec)} · </>}
                         {v.uploadDate && <>{timeAgo(v.uploadDate)} · </>}
-                        {done ? "✅ đã làm" : sel ? `#${order} trong hàng chờ` : ""}
+                        {archived ? (
+                          <span style={{ color: "#f9e2af", fontWeight: 600 }}>
+                            🟡 đã tải rồi
+                          </span>
+                        ) : done ? "✅ đã làm" : sel ? `#${order} trong hàng chờ` : ""}
                       </div>
                     </div>
                   </label>

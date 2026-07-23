@@ -316,6 +316,7 @@ pub fn run() {
             commands::check_watched_one,
             commands::download_more_today,
             commands::reconcile_watched,
+            commands::archived_video_ids,
             commands::replace_watched_url,
             commands::download_pending,
             commands::dismiss_pending,

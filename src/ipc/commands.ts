@@ -624,6 +624,13 @@ export async function reconcileWatched(): Promise<void> {
   return invoke<void>("reconcile_watched");
 }
 
+/** ID video ĐÃ TẢI (download-archive) — để Kho video tô dấu "đã tải". */
+export async function archivedVideoIds(): Promise<string[]> {
+  if (IS_WEB) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string[]>("archived_video_ids");
+}
+
 /** THAY link key bằng link mới, GIỮ NGUYÊN kênh (tên/nhóm/thư mục/cấu hình). */
 export async function replaceWatchedUrl(
   id: string,

@@ -1276,6 +1276,13 @@ pub fn reconcile_watched(
     Ok(())
 }
 
+/// Danh sách ID video ĐÃ TẢI (đọc download-archive của yt-dlp) — để UI đánh
+/// dấu video đã tải trong "Kho video" (tô khác màu, không cho tích lại).
+#[tauri::command]
+pub fn archived_video_ids(app: tauri::AppHandle) -> Vec<String> {
+    crate::watcher::load_archive_ids(&app).into_iter().collect()
+}
+
 /// THAY link key nguồn bằng link mới nhưng GIỮ NGUYÊN kênh (tên, nhóm,
 /// thư mục, chế độ, chất lượng, sổ đã-làm). Reset phần thuộc nguồn cũ:
 /// baseline seen_ids (lượt quét đầu chỉ ghi mốc, không tải kho cũ),

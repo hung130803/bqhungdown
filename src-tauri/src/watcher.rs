@@ -447,7 +447,7 @@ fn parse_archive_ids(text: &str) -> std::collections::HashSet<String> {
 /// Đọc id video đã tải từ `app_data_dir/download_archive.txt` (nguồn sự thật
 /// cho "đã tải trên máy này" — bền qua mọi phiên/đường tải, không chỉ done_ids
 /// của kênh). Lỗi/không có file -> tập rỗng.
-fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
+pub(crate) fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
     use tauri::Manager;
     app.path()
         .app_data_dir()
