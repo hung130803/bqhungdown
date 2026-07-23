@@ -586,6 +586,20 @@ export async function setWatchedSourceMode(
   return invoke<WatchedChannel | null>("set_watched_source_mode", { id, mode });
 }
 
+/** Chạy RIÊNG 1 kênh ngay — trả về số video vừa xếp tải. */
+export async function checkWatchedOne(id: string): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("check_watched_one", { id });
+}
+
+/** Video hôm nay không ưng → hoàn suất + tự lấy ngay video KHÁC. */
+export async function redoWatchedToday(id: string): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("redo_watched_today", { id });
+}
+
 /** Đặt chất lượng tối đa của kênh (1080, 720…); 0 = về mặc định chung. */
 export async function setWatchedMaxHeight(
   id: string,

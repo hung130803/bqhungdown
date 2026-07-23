@@ -1142,6 +1142,48 @@ pub fn set_watched_source_mode(
     })
 }
 
+/// Chạy RIÊNG 1 kênh ngay (không đụng kênh khác): video mới → tải; còn
+/// suất mà không có mới → vét theo chế độ. Trả về số video vừa xếp tải.
+#[tauri::command]
+pub async fn check_watched_one(
+    id: String,
+    app: AppHandle,
+    store: State<'_, Arc<WatchlistStore>>,
+    queue: State<'_, Arc<QueueManager>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    history: State<'_, Arc<HistoryStore>>,
+) -> AppResult<u32> {
+    Ok(crate::watcher::check_channel(
+        &app, store.inner(), queue.inner(), settings.inner(), history.inner(), &id,
+    ).await)
+}
+
+/// "TẢI VIDEO KHÁC": video hôm nay không ưng → hoàn 1 suất + cho quét kho
+/// lại ngay + chạy kênh luôn. Video cũ đã nằm trong done_ids nên lần vét
+/// này lấy video KẾ TIẾP theo view — không bao giờ lặp lại video không ưng.
+/// (File không ưng user tự xóa trong thư mục kênh trước khi bên cắt chạy.)
+#[tauri::command]
+pub async fn redo_watched_today(
+    id: String,
+    app: AppHandle,
+    store: State<'_, Arc<WatchlistStore>>,
+    queue: State<'_, Arc<QueueManager>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    history: State<'_, Arc<HistoryStore>>,
+) -> AppResult<u32> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    store.update(&id, |c| {
+        if c.drip_date.as_deref() == Some(today.as_str()) && c.drip_count > 0 {
+            c.drip_count -= 1;
+        }
+        c.auto_fetch_date = None;
+        c.source_empty = false;
+    });
+    Ok(crate::watcher::check_channel(
+        &app, store.inner(), queue.inner(), settings.inner(), history.inner(), &id,
+    ).await)
+}
+
 /// Đặt CHẤT LƯỢNG TỐI ĐA của kênh (1080, 720…). 0 = về mặc định chung.
 /// Không bao giờ tải vượt mức; nguồn thiếu thì yt-dlp lấy mức thấp hơn
 /// gần nhất (format selector trong args_builder).

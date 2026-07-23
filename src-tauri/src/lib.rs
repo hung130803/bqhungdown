@@ -312,6 +312,8 @@ pub fn run() {
             commands::set_watched_target,
             commands::set_watched_tab,
             commands::set_watched_max_height,
+            commands::check_watched_one,
+            commands::redo_watched_today,
             commands::download_pending,
             commands::dismiss_pending,
             commands::check_watched_now,

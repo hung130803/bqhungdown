@@ -119,6 +119,46 @@ export function WatchPage() {
     }
   };
 
+  // Kênh đang chạy riêng (▶/🔄) — hiện spinner trên đúng thẻ đó.
+  const [busyKenh, setBusyKenh] = useState<Record<string, boolean>>({});
+
+  /** ▶ Chạy RIÊNG kênh này: quét mọi key của nó ngay. */
+  const runOne = async (k: Kenh) => {
+    if (busyKenh[k.key]) return;
+    setBusyKenh((m) => ({ ...m, [k.key]: true }));
+    setError(null);
+    try {
+      for (const c of k.keys.filter((c) => c.enabled)) {
+        await cmd.checkWatchedOne(c.id);
+      }
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    } finally {
+      setBusyKenh((m) => ({ ...m, [k.key]: false }));
+    }
+  };
+
+  /** 🔄 Video hôm nay không ưng → hoàn suất + tự lấy video KHÁC ngay. */
+  const redoOne = async (k: Kenh) => {
+    if (busyKenh[k.key]) return;
+    // Hoàn suất trên đúng key đã tải hôm nay (thường là 1).
+    const doneKey = k.keys.find(
+      (c) => c.dripDate === todayStr && (c.dripCount ?? 0) > 0,
+    );
+    if (!doneKey) return;
+    setBusyKenh((m) => ({ ...m, [k.key]: true }));
+    setError(null);
+    try {
+      await cmd.redoWatchedToday(doneKey.id);
+      await reload();
+    } catch (e) {
+      setError(formatErr(e));
+    } finally {
+      setBusyKenh((m) => ({ ...m, [k.key]: false }));
+    }
+  };
+
   /** Áp 1 thao tác cho MỌI key của kênh (cài đặt mức kênh). */
   const forKenh = async (k: Kenh, fn: (id: string) => Promise<unknown>) => {
     try {
@@ -499,10 +539,37 @@ export function WatchPage() {
               ) : dry ? (
                 <span className="text-xs text-danger font-semibold shrink-0">🔴 HẾT video — đổi key</span>
               ) : anyOn ? (
-                <span className="text-xs text-muted shrink-0" title="Chưa có video nào tải hôm nay — bấm ▶ Chạy tất cả hoặc chờ lượt quét">
+                <span className="text-xs text-muted shrink-0" title="Chưa có video nào tải hôm nay — bấm ▶ hoặc chờ lượt quét">
                   ⏳ chưa tải hôm nay
                 </span>
               ) : null}
+              {/* ▶ chạy RIÊNG kênh này · 🔄 không ưng video hôm nay thì đổi cái khác */}
+              {anyOn && !downloadedToday && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void runOne(k);
+                  }}
+                  disabled={!!busyKenh[k.key]}
+                  className="px-2 py-0.5 rounded-md bg-accent text-accent-fg text-xs font-medium shrink-0 disabled:opacity-50"
+                  title="Chạy RIÊNG kênh này ngay: có video mới thì tải, không có thì tự vét theo chế độ"
+                >
+                  {busyKenh[k.key] ? "…" : "▶"}
+                </button>
+              )}
+              {downloadedToday && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void redoOne(k);
+                  }}
+                  disabled={!!busyKenh[k.key]}
+                  className="px-2 py-0.5 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0 disabled:opacity-50"
+                  title={"Video hôm nay KHÔNG ƯNG? Bấm để hoàn suất + tự lấy ngay video KHÁC\n(video không ưng đã ghi sổ, không bao giờ bị lấy lại).\n⚠ Nhớ XÓA file không ưng trong thư mục 📁 trước khi bên cắt chạy."}
+                >
+                  {busyKenh[k.key] ? "…" : "🔄 Video khác"}
+                </button>
+              )}
               {!dry && mode === "picked" && pickedTotal === 0 && (
                 <span className="text-xs text-warning shrink-0">⚠ hết hàng chờ</span>
               )}
