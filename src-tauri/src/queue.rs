@@ -64,22 +64,16 @@ pub fn cleanup_partials(item: &DownloadItem) {
     cleanup_partials_inner(item, false);
 }
 
-/// Dọn file tạm BỀN BỈ khi huỷ/xoá: chạy trên thread riêng và thử lại nhiều
-/// lần cách nhau ngắn. Lý do: tiến trình yt-dlp/ffmpeg vừa bị kill có thể còn
-/// giữ khoá file `.part` thêm chốc lát trên Windows → lần xoá đầu trượt, lần
-/// sau ăn. Không chặn caller nên KHÔNG ảnh hưởng tốc độ tải; chỉ đụng file tạm
-/// đúng của mục này (khớp tên) nên KHÔNG ảnh hưởng video khác.
-pub fn cleanup_partials_retry(item: DownloadItem) {
-    std::thread::spawn(move || {
-        // 10 lần × 600ms ≈ 6s — đủ cho taskkill /T giết cây tiến trình + Windows
-        // nhả khoá file, kể cả máy chậm. Thread nền, không chặn gì.
-        for i in 0..10 {
-            if i > 0 {
-                std::thread::sleep(Duration::from_millis(600));
-            }
-            cleanup_partials_inner(&item, true);
-        }
-    });
+/// Khoá nhận diện "CÙNG MỘT VIDEO" giữa 2 mục hàng đợi (cho chốt an toàn
+/// của bộ dọn): tên đã sanitize + norm_key — trùng khoá + trùng thư mục
+/// nghĩa là 2 lượt tải sẽ đẻ ra CÙNG bộ file `.part`.
+fn video_twin_key(title: &str) -> String {
+    norm_key(&crate::filename_resolver::sanitize(title))
+}
+
+/// Chuẩn hoá thư mục để so sánh (Windows không phân biệt hoa thường).
+fn norm_folder(p: &std::path::Path) -> String {
+    p.to_string_lossy().trim_end_matches(['/', '\\']).to_lowercase()
 }
 
 /// True nếu tên file là file TẠM của yt-dlp (đang tải dở), KHÔNG phải video
@@ -417,7 +411,7 @@ impl QueueManager {
     /// a whole channel the user no longer wants. Cancels any in-flight ones,
     /// wipes their leftover partial files, and drops them from the queue.
     /// Returns how many were removed.
-    pub fn remove_group(&self, folder: &std::path::Path) -> usize {
+    pub fn remove_group(self: &Arc<Self>, folder: &std::path::Path) -> usize {
         // Snapshot the group first so the removal can be undone.
         let snapshot: Vec<DownloadItem> = {
             let map = self.items.read().unwrap();
@@ -442,7 +436,7 @@ impl QueueManager {
             let mut map = self.items.write().unwrap();
             for id in &ids {
                 if let Some(it) = map.get(id).cloned() {
-                    cleanup_partials_retry(it);
+                    self.cleanup_partials_retry(it);
                 }
                 map.shift_remove(id);
             }
@@ -528,7 +522,7 @@ impl QueueManager {
     /// Remove an item entirely from the queue (no FSM, no cleanup of files on disk).
     /// Used by UI when user wants to dismiss a row whose file is gone or that
     /// they no longer care about. If the item is still active, also cancel it.
-    pub fn remove_item(&self, id: &str) -> AppResult<()> {
+    pub fn remove_item(self: &Arc<Self>, id: &str) -> AppResult<()> {
         // Cancel any in-flight download first.
         if let Some(tok) = self.cancel_tokens.lock().unwrap().remove(id) {
             tok.cancel();
@@ -540,7 +534,7 @@ impl QueueManager {
         // Xoá SẠCH file tải dở của mục vừa bị xoá. Bản cũ KHÔNG dọn ở đây → khi
         // xoá 1 mục đang tải, file `.part`/mảnh bị mồ côi. Bản bền bỉ thử lại
         // vài lần (chờ tiến trình nhả khoá) và chỉ khớp đúng file của mục này.
-        cleanup_partials_retry(item);
+        self.cleanup_partials_retry(item);
         self.emit_queue_updated();
         Ok(())
     }
@@ -580,6 +574,42 @@ impl QueueManager {
         Ok(())
     }
 
+    /// Dọn file tạm BỀN BỈ khi huỷ/xoá: thread riêng, thử lại 10 lần × 600ms
+    /// (yt-dlp/ffmpeg vừa bị kill còn giữ khoá file `.part` chốc lát trên
+    /// Windows). CHỐT AN TOÀN: mỗi vòng kiểm tra — nếu CÙNG video này đã được
+    /// TẢI LẠI (mục sống cùng thư mục + cùng tên, hoặc chính short_id này
+    /// chạy lại) thì DỪNG NGAY, kẻo xoá trộm file `.part`/Frag của lượt tải
+    /// mới (lỗi thật anh Hùng gặp: hủy → ▶ chạy lại liền → "Errno 2 No such
+    /// file or directory ....part-Frag26").
+    pub fn cleanup_partials_retry(self: &Arc<Self>, item: DownloadItem) {
+        let me = self.clone();
+        std::thread::spawn(move || {
+            for i in 0..10 {
+                if i > 0 {
+                    std::thread::sleep(Duration::from_millis(600));
+                }
+                if me.has_live_download_of(&item) {
+                    return;
+                }
+                cleanup_partials_inner(&item, true);
+            }
+        });
+    }
+
+    /// true nếu đang có LƯỢT TẢI SỐNG của cùng video này trong hàng đợi.
+    fn has_live_download_of(&self, item: &DownloadItem) -> bool {
+        let key = video_twin_key(&item.title);
+        let folder = norm_folder(&item.request.save_folder);
+        let map = self.items.read().unwrap();
+        map.values().any(|it| {
+            matches!(
+                it.state,
+                DownloadState::Queued | DownloadState::Downloading | DownloadState::Paused
+            ) && norm_folder(&it.request.save_folder) == folder
+                && (it.short_id == item.short_id || video_twin_key(&it.title) == key)
+        })
+    }
+
     pub fn cancel(self: &Arc<Self>, id: &str) -> AppResult<()> {
         self.transition_item(id, QueueEvent::Cancel)?;
         let tok = self.cancel_tokens.lock().unwrap().remove(id);
@@ -591,7 +621,7 @@ impl QueueManager {
             // tự dọn file tải dở tại đây (bền bỉ, thread nền).
             None => {
                 if let Some(it) = self.get(id) {
-                    cleanup_partials_retry(it);
+                    self.cleanup_partials_retry(it);
                 }
             }
         }
@@ -1023,7 +1053,7 @@ impl QueueManager {
                 if let Some(it) = snap {
                     // Dọn cache rác khi cancel (đảm bảo state == Cancelled, không phải Paused).
                     if matches!(it.state, DownloadState::Cancelled) {
-                        cleanup_partials_retry(it.clone());
+                        self.cleanup_partials_retry(it.clone());
                     }
                     self.emit_state(&it);
                     self.emit_queue_updated();
@@ -1189,6 +1219,31 @@ mod tests {
     use super::*;
     use crate::models::DownloadState::*;
     use crate::models::QueueEvent::*;
+
+    /// Chốt an toàn bộ dọn: 2 lượt tải của CÙNG video phải cho cùng khoá
+    /// (để dừng dọn khi video được chạy lại), video khác phải khác khoá.
+    #[test]
+    fn twin_key_same_video_matches_other_video_does_not() {
+        // Cùng title → cùng khoá, bất kể yt-dlp sanitize dấu câu khác nhau.
+        assert_eq!(
+            video_twin_key("What Scammers Do When You Have $2,000,000"),
+            video_twin_key("What Scammers Do When You Have $2,000,000"),
+        );
+        assert_eq!(
+            video_twin_key("Clip: A!  (bản đẹp)"),
+            video_twin_key("Clip A bản đẹp"),
+            "khác dấu câu/khoảng trắng vẫn phải cùng khoá"
+        );
+        assert_ne!(
+            video_twin_key("Clip A của kênh"),
+            video_twin_key("Clip B của kênh"),
+        );
+        // Thư mục Windows so không phân biệt hoa thường + bỏ \\ cuối.
+        assert_eq!(
+            norm_folder(std::path::Path::new("C:\\Users\\Admin\\Downloads\\Test1\\2\\")),
+            norm_folder(std::path::Path::new("c:\\users\\admin\\downloads\\test1\\2")),
+        );
+    }
 
     #[test]
     fn temp_file_detection_never_matches_completed() {
