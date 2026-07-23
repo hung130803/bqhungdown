@@ -47,6 +47,9 @@ export function WatchPage() {
 
   const reload = async () => {
     try {
+      // Đối soát trước khi đọc: hủy/lỗi → trả suất NGAY, bộ đếm "đã tải
+      // hôm nay" không bao giờ hiển thị sai sau khi bấm ✕ Hủy.
+      await cmd.reconcileWatched();
       setChannels(await cmd.listWatchedChannels());
     } catch (e) {
       setError(formatErr(e));
@@ -139,19 +142,20 @@ export function WatchPage() {
     }
   };
 
-  /** ➕ Tải THÊM 1 video hôm nay: hoàn 1 suất + vét lấy video kế tiếp theo
-   *  view (video cũ đã ở done_ids nên không lặp), GIỮ video đã tải. */
+  /** ➕ Tải THÊM 1 video ngay: hàng chờ trước → hết thì vét view cao nhất.
+   *  Bộ đếm "đã tải hôm nay" CỘNG THÊM thật (1 → 2 → 3…). */
   const redoOne = async (k: Kenh) => {
     if (busyKenh[k.key]) return;
-    // Hoàn suất trên đúng key đã tải hôm nay (thường là 1).
-    const doneKey = k.keys.find(
+    const key = k.keys.find(
       (c) => c.dripDate === todayStr && (c.dripCount ?? 0) > 0,
-    );
-    if (!doneKey) return;
+    ) ?? k.keys.find((c) => c.enabled) ?? k.rep;
     setBusyKenh((m) => ({ ...m, [k.key]: true }));
     setError(null);
     try {
-      await cmd.redoWatchedToday(doneKey.id);
+      const got = await cmd.downloadMoreToday(key.id);
+      if (got === 0) {
+        setError(`Kênh "${k.name}" không còn video nào chưa làm để tải thêm — kho cạn, thay key mới.`);
+      }
       await reload();
     } catch (e) {
       setError(formatErr(e));
@@ -431,7 +435,8 @@ export function WatchPage() {
     .sort(
       (a, b) =>
         (a.group || "￿").localeCompare(b.group || "￿", "vi") ||
-        a.name.localeCompare(b.name, "vi"),
+        // Kênh THÊM MỚI NHẤT đứng đầu nhóm (số 1) — kênh cũ tự lùi 2, 3…
+        (b.rep.addedAt || "").localeCompare(a.rep.addedAt || ""),
     );
   // Lượt tải đang chạy (store toàn cục đã nghe event tiến trình) — soi theo
   // thư mục lưu để gắn thanh tiến trình vào đúng thẻ kênh.
@@ -446,8 +451,14 @@ export function WatchPage() {
     );
   };
   const nOn = channels.filter((c) => c.enabled).length;
+  // Đồng hồ cập nhật mỗi 30s — ngày đổi (qua 0:00 giờ VN) là bộ đếm
+  // "đã tải hôm nay" tự làm mới, không cần làm gì.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
   // Ngày local YYYY-MM-DD — khớp cách backend ghi drip_date.
-  const now = new Date();
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   // Kênh cần chú ý: kho cạn (🤖 hết video chưa làm) / hết hàng chờ (🎯).
   const nDry = kenhAll.filter((k) => k.keys.some((c) => c.sourceEmpty)).length;
@@ -463,6 +474,12 @@ export function WatchPage() {
         <h2 className="text-xl font-medium text-fg">Kênh của tôi</h2>
         <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 border border-border text-muted">
           {kenhAll.length} kênh · {channels.length} key · {nOn} key đang chạy
+        </span>
+        <span
+          className="text-xs px-2 py-0.5 rounded-full bg-surface-2 border border-border text-muted"
+          title="Bộ đếm 'đã tải hôm nay' tự làm mới sau 0:00 (giờ máy = giờ VN)"
+        >
+          📅 {String(now.getDate()).padStart(2, "0")}/{String(now.getMonth() + 1).padStart(2, "0")}/{now.getFullYear()} · {String(now.getHours()).padStart(2, "0")}:{String(now.getMinutes()).padStart(2, "0")}
         </span>
         {nDry > 0 && (
           <span className="text-xs px-2 py-0.5 rounded-full bg-danger/15 border border-danger text-danger">
@@ -482,8 +499,8 @@ export function WatchPage() {
         </button>
       </div>
       <p className="text-sm text-muted -mt-2">
-        Mỗi KÊNH = kênh TikTok của anh: đặt tên, gán nhóm, dán key YouTube nguồn. App tự tải video
-        MỚI để đăng; hôm nào nguồn không đăng thì tự vét video NHIỀU VIEW nhất chưa làm, lấy dần —
+        Chỉ tải khi ANH BẤM ▶ (Chạy tất cả = mọi kênh đang tích ✓; kênh bỏ tích không tải).
+        Mỗi lần chạy: video MỚI → HÀNG CHỜ đã tích → hết thì vét video NHIỀU VIEW nhất chưa làm —
         vét cạn kho sẽ báo 🔴 để anh đổi key.
       </p>
 
@@ -558,6 +575,9 @@ export function WatchPage() {
             0,
           );
           const downloadedToday = dlToday > 0;
+          // Mỗi NHÓM một màu viền trái cố định → lướt 50-300 kênh vẫn phân
+          // biệt được nhóm nào với nhóm nào ngay bằng mắt.
+          const hue = groupHue(g);
           return (
           <Fragment key={k.key}>
           {isFirstInGroup && (
@@ -567,6 +587,10 @@ export function WatchPage() {
               title={gOpen ? "Gập nhóm" : "Mở nhóm"}
             >
               <span className="text-xs text-muted w-3">{gOpen ? "▾" : "▸"}</span>
+              <span
+                className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                style={{ background: `hsl(${groupHue(g)} 70% 55%)` }}
+              />
               <span className="text-xs font-semibold text-fg uppercase tracking-wide">
                 🏷 {g || "Chưa phân nhóm"}
               </span>
@@ -578,7 +602,10 @@ export function WatchPage() {
             </button>
           )}
           {gOpen && (
-          <div className={`rounded-lg border bg-surface ${dry ? "border-danger" : "border-border"}`}>
+          <div
+            className={`rounded-lg border bg-surface ${dry ? "border-danger" : "border-border"}`}
+            style={{ borderLeft: `3px solid hsl(${hue} 70% 55%)` }}
+          >
             {/* Dòng THU GỌN của kênh — bấm để xổ chi tiết */}
             <div
               className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-2/50"
@@ -813,7 +840,18 @@ export function WatchPage() {
                 </button>
               )}
               <button
-                onClick={() => void forKenh(k, (id) => cmd.removeWatchedChannel(id))}
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      `Xóa CẢ KÊNH "${k.name || "?"}" cùng ${k.keys.length} key nguồn?\n` +
+                      "Tên, thư mục, cấu hình, sổ đã-làm của kênh sẽ mất.\n" +
+                      "Muốn ĐỔI link nguồn mà GIỮ kênh: dán link mới vào ô '＋ dán link…' rồi bấm 🔁.",
+                    )
+                  ) {
+                    return;
+                  }
+                  void forKenh(k, (id) => cmd.removeWatchedChannel(id));
+                }}
                 className="px-2 py-1 rounded-md border border-border text-fg text-xs shrink-0 hover:bg-surface-2"
                 title={`XÓA kênh "${k.name || "?"}" cùng toàn bộ ${k.keys.length} key nguồn`}
               >
@@ -917,10 +955,42 @@ export function WatchPage() {
                   >
                     {c.enabled ? "⏸" : "▶"}
                   </button>
+                  {/* 🔁 THAY link key (giữ nguyên kênh) — dán link mới vào ô dưới rồi bấm */}
                   <button
-                    onClick={() => void remove(c.id)}
+                    onClick={() => {
+                      const u = (keyInputs[k.key] ?? "").trim();
+                      if (!u) return;
+                      void (async () => {
+                        try {
+                          await cmd.replaceWatchedUrl(c.id, u);
+                          setKeyInputs((m) => ({ ...m, [k.key]: "" }));
+                          await reload();
+                        } catch (err) {
+                          setError(formatErr(err));
+                        }
+                      })();
+                    }}
+                    disabled={!(keyInputs[k.key] ?? "").trim()}
+                    className="px-1.5 py-0.5 rounded border border-border text-fg text-xs shrink-0 hover:bg-surface-2 disabled:opacity-40"
+                    title={"THAY link key này bằng link MỚI — GIỮ NGUYÊN kênh (tên, thư mục, nhóm, cấu hình, sổ đã làm).\nCách dùng: dán link mới vào ô '＋ dán link…' bên dưới rồi bấm 🔁."}
+                  >
+                    🔁
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (
+                        k.keys.length === 1 &&
+                        !window.confirm(
+                          `Đây là key CUỐI CÙNG — xóa sẽ xóa CẢ KÊNH "${k.name}" (tên, thư mục, cấu hình).\n` +
+                          "Muốn ĐỔI sang link khác mà GIỮ kênh: dán link mới vào ô dưới rồi bấm 🔁.\n\nVẫn xóa cả kênh?",
+                        )
+                      ) {
+                        return;
+                      }
+                      void remove(c.id);
+                    }}
                     className="px-1.5 py-0.5 rounded border border-border text-danger text-xs shrink-0 hover:bg-surface-2"
-                    title="Xóa key này khỏi kênh"
+                    title={k.keys.length === 1 ? "Key cuối — xóa là mất cả kênh (đổi link thì dùng 🔁)" : "Xóa key này khỏi kênh"}
                   >
                     ✕
                   </button>
@@ -1305,6 +1375,7 @@ export function WatchPage() {
                       <div className="truncate text-fg" title={v.title}>{v.title || v.url}</div>
                       <div className="text-xs text-muted">
                         {v.viewCount != null && <>👁 {formatViews(v.viewCount)} · </>}
+                        {v.durationSec != null && v.durationSec > 0 && <>⏱ {fmtDur(v.durationSec)} · </>}
                         {v.uploadDate && <>{timeAgo(v.uploadDate)} · </>}
                         {done ? "✅ đã làm" : sel ? `#${order} trong hàng chờ` : ""}
                       </div>
@@ -1370,6 +1441,24 @@ function fmtAgeSecs(sec: number): string {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h} giờ trước`;
   return `${Math.floor(h / 24)} ngày trước`;
+}
+
+/** Thời lượng video: `0:45`, `12:34`, `1:05:33`. */
+function groupHue(g: string): number {
+  // Màu nhận diện NHÓM: hash tên nhóm → hue cố định (không đổi giữa các lần
+  // mở app) để viền trái thẻ kênh + chấm màu header nhóm luôn khớp nhau.
+  const s = g || "Chưa phân nhóm";
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+function fmtDur(sec: number): string {
+  const s = Math.round(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
 /** Tốc độ tải người đọc được: `3.2 MB/s`, `850 KB/s`. */

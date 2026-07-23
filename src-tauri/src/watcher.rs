@@ -33,24 +33,24 @@ fn video_id_of(url: &str) -> String {
     crate::channel_fetcher::extract_video_id(url).unwrap_or_else(|| url.to_string())
 }
 
-/// Đối soát `dl_pending` (video đang tải qua dây chuyền) với thực tế:
+/// Đối soát `dl_pending` (video đang tải qua dây chuyền) của MỌI kênh với
+/// thực tế — gọi trước mỗi lần quét và khi UI reload:
 /// - Có trong history Completed  → tải XONG → chuyển sang `done_ids`.
 /// - Còn trong hàng đợi (kể cả đang chờ/retry) → giữ nguyên, chờ tiếp.
 /// - Không còn ở đâu (đã hủy / lỗi cứng / biến mất) → TRẢ SUẤT: gỡ khỏi
-///   `dl_pending` + `seen_ids`, giảm `drip_count` nếu là suất HÔM NAY, để
-///   lượt chạy sau lấy lại (chính video đó hoặc video khác). Không đụng
-///   video user tự tải tay (không nằm trong dl_pending).
-fn reconcile_pending(
+///   `dl_pending` + `seen_ids`, giảm `drip_count` nếu là suất HÔM NAY, và
+///   XÓA `auto_fetch_date` để lượt chạy sau được quét kho lấy lại ngay
+///   (không phải chờ mai). Không đụng video user tự tải tay.
+pub fn reconcile_all(
     store: &Arc<WatchlistStore>,
     queue: &Arc<QueueManager>,
     history: &Arc<HistoryStore>,
-    id: &str,
 ) {
     use crate::models::HistoryStatus;
-    let channel = match store.get(id) {
-        Some(c) if !c.dl_pending.is_empty() => c,
-        _ => return,
-    };
+    let channels = store.list();
+    if channels.iter().all(|c| c.dl_pending.is_empty()) {
+        return; // không có gì đang chờ chốt — khỏi truy vấn queue/history
+    }
     // Video đang "sống" trong hàng đợi (chưa kết thúc) — theo video id.
     let live: std::collections::HashSet<String> = queue
         .list()
@@ -74,24 +74,30 @@ fn reconcile_pending(
         .map(|e| video_id_of(&e.url))
         .collect();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let _ = store.update(id, |c| {
-        let pending = std::mem::take(&mut c.dl_pending);
-        for vid in pending {
-            if done_hist.contains(&vid) {
-                if !c.done_ids.contains(&vid) {
-                    c.done_ids.push(vid); // chốt đã làm
-                }
-            } else if live.contains(&vid) {
-                c.dl_pending.push(vid); // vẫn đang tải/chờ/retry
-            } else {
-                // Hủy/lỗi cứng → trả suất, gỡ seen để lấy lại.
-                c.seen_ids.retain(|s| s != &vid);
-                if c.drip_date.as_deref() == Some(today.as_str()) && c.drip_count > 0 {
-                    c.drip_count -= 1;
+    for ch in channels {
+        if ch.dl_pending.is_empty() {
+            continue;
+        }
+        let _ = store.update(&ch.id, |c| {
+            let pending = std::mem::take(&mut c.dl_pending);
+            for vid in pending {
+                if done_hist.contains(&vid) {
+                    if !c.done_ids.contains(&vid) {
+                        c.done_ids.push(vid); // chốt đã làm
+                    }
+                } else if live.contains(&vid) {
+                    c.dl_pending.push(vid); // vẫn đang tải/chờ/retry
+                } else {
+                    // Hủy/lỗi cứng → trả suất, gỡ seen, cho quét kho lại.
+                    c.seen_ids.retain(|s| s != &vid);
+                    if c.drip_date.as_deref() == Some(today.as_str()) && c.drip_count > 0 {
+                        c.drip_count -= 1;
+                    }
+                    c.auto_fetch_date = None;
                 }
             }
-        }
-    });
+        });
+    }
 }
 
 /// Làm sạch tên kênh đích thành tên thư mục Windows hợp lệ: thay ký tự cấm
@@ -168,7 +174,7 @@ pub async fn check_channel(
 ) -> u32 {
     // Đối soát video ĐANG TẢI dở trước tiên: tải xong → chốt "đã làm";
     // hủy/lỗi cứng → trả lại suất để lấy lại (không coi là đã tải).
-    reconcile_pending(store, queue, history, id);
+    reconcile_all(store, queue, history);
 
     let channel = match store.get(id) {
         Some(c) => c,
@@ -835,6 +841,7 @@ mod tests {
                 if c.drip_date.as_deref() == Some(today) && c.drip_count > 0 {
                     c.drip_count -= 1;
                 }
+                c.auto_fetch_date = None;
             }
         }
     }
@@ -871,13 +878,93 @@ mod tests {
         c.seen_ids = vec!["base1".into(), "v1".into()];
         c.drip_date = Some("2026-07-23".into());
         c.drip_count = 1;
+        c.auto_fetch_date = Some("2026-07-23".into());
         // v1 không còn trong queue, chưa Completed → hủy/lỗi.
         reconcile_logic(&mut c, &[], &[], "2026-07-23");
         assert!(c.dl_pending.is_empty());
         assert!(!c.done_ids.contains(&"v1".to_string()), "KHÔNG được coi là đã làm");
         assert!(!c.seen_ids.contains(&"v1".to_string()), "gỡ seen để lấy lại");
         assert_eq!(c.drip_count, 0, "TRẢ lại suất hôm nay");
+        // Fix bug "hủy xong bấm ▶ không tải được": phải cho quét kho lại ngay.
+        assert!(c.auto_fetch_date.is_none(), "xóa cờ quét để ▶ lấy lại được ngay");
     }
+}
+
+/// ➕ TẢI THÊM 1 video cho kênh NGAY HÔM NAY, vượt hạn mức ngày (user chủ
+/// động bấm): hàng chờ tích trước → hết thì vét kho video view cao nhất
+/// chưa làm. CỘNG THÊM vào bộ đếm hôm nay (không hoàn suất như trước —
+/// fix bug "tải thêm mà vẫn hiện 1 video"). Trả về số video đã xếp tải.
+pub async fn force_one_more(
+    app: &AppHandle,
+    store: &Arc<WatchlistStore>,
+    queue: &Arc<QueueManager>,
+    settings_store: &Arc<SettingsStore>,
+    history: &Arc<HistoryStore>,
+    id: &str,
+) -> u32 {
+    reconcile_all(store, queue, history);
+    let channel = match store.get(id) {
+        Some(c) => c,
+        None => return 0,
+    };
+    let settings = settings_store.get();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    // 1. Ưu tiên hàng chờ user đã tích (bỏ video đã làm / đang tải).
+    let mut cand: Option<PickedVideo> = channel
+        .picked
+        .iter()
+        .find(|p| !channel.done_ids.contains(&p.id) && !channel.dl_pending.contains(&p.id))
+        .cloned();
+    // 2. Hết hàng chờ → quét kho lấy video view cao nhất chưa làm (bỏ qua
+    //    giới hạn "1 lần quét/ngày" vì đây là lệnh tay).
+    if cand.is_none() {
+        let tab = if channel.tab.is_empty() { "all".to_string() } else { channel.tab.clone() };
+        if let Ok((_i, videos)) = crate::channel_fetcher::fetch_channel(
+            app, &channel.url, 300, false, &tab, &settings, false,
+        ).await
+        {
+            let mut done_plus = channel.done_ids.clone();
+            done_plus.extend(channel.dl_pending.clone());
+            cand = pick_auto_candidates(&videos, &done_plus, 1, &tab).into_iter().next();
+        }
+    }
+    let Some(p) = cand else {
+        // Không còn gì để lấy — kho cạn thật.
+        let _ = store.update(id, |c| c.source_empty = true);
+        return 0;
+    };
+
+    let folder = resolve_watch_folder(
+        &channel.dest_dir, &channel.target_name,
+        &settings.watch_root, &settings.default_folder,
+    );
+    let got = enqueue_new(
+        app, queue, settings_store, history, &channel.title,
+        folder, channel.max_height, &[picked_to_channel_video(&p)], &settings,
+    ).await;
+    if got > 0 {
+        let _ = store.update(id, |c| {
+            if c.drip_date.as_deref() != Some(today.as_str()) {
+                c.drip_date = Some(today.clone());
+                c.drip_count = 0;
+            }
+            c.drip_count += got;
+            c.picked.retain(|x| x.id != p.id);
+            if !c.seen_ids.contains(&p.id) {
+                c.seen_ids.push(p.id.clone());
+            }
+            if !c.dl_pending.contains(&p.id) {
+                c.dl_pending.push(p.id.clone());
+            }
+            c.source_empty = false;
+        });
+        let _ = app.emit(
+            crate::events::EV_WATCH_UPDATED,
+            crate::events::WatchUpdatedPayload { channel_id: id.to_string(), new_count: got },
+        );
+    }
+    got
 }
 
 /// Check every enabled channel once, sequentially. Returns the refreshed list.
@@ -908,7 +995,11 @@ pub fn spawn_monitor(
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(STARTUP_DELAY).await;
         loop {
-            let _ = check_all(&app, &store, &queue, &settings_store, &history).await;
+            // Mặc định TẮT: kênh chỉ tải khi user CHÍNH TAY bấm ▶ Chạy tất
+            // cả / ▶ từng kênh. Bật watch_auto_enabled mới tự quét nền.
+            if settings_store.get().watch_auto_enabled {
+                let _ = check_all(&app, &store, &queue, &settings_store, &history).await;
+            }
             let interval_min = settings_store.get().watch_interval_min.clamp(1, 1440);
             tokio::time::sleep(Duration::from_secs(interval_min as u64 * 60)).await;
         }

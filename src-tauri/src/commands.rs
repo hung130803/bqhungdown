@@ -1200,12 +1200,11 @@ pub async fn check_watched_one(
     ).await)
 }
 
-/// "TẢI VIDEO KHÁC": video hôm nay không ưng → hoàn 1 suất + cho quét kho
-/// lại ngay + chạy kênh luôn. Video cũ đã nằm trong done_ids nên lần vét
-/// này lấy video KẾ TIẾP theo view — không bao giờ lặp lại video không ưng.
-/// (File không ưng user tự xóa trong thư mục kênh trước khi bên cắt chạy.)
+/// ➕ TẢI THÊM 1 video NGAY cho kênh, vượt hạn mức ngày (user chủ động):
+/// hàng chờ tích trước → hết thì vét kho video view cao nhất chưa làm.
+/// Bộ đếm "đã tải hôm nay" CỘNG THÊM (1 → 2 → 3…), không hoàn suất.
 #[tauri::command]
-pub async fn redo_watched_today(
+pub async fn download_more_today(
     id: String,
     app: AppHandle,
     store: State<'_, Arc<WatchlistStore>>,
@@ -1213,17 +1212,51 @@ pub async fn redo_watched_today(
     settings: State<'_, Arc<SettingsStore>>,
     history: State<'_, Arc<HistoryStore>>,
 ) -> AppResult<u32> {
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    store.update(&id, |c| {
-        if c.drip_date.as_deref() == Some(today.as_str()) && c.drip_count > 0 {
-            c.drip_count -= 1;
-        }
-        c.auto_fetch_date = None;
-        c.source_empty = false;
-    });
-    Ok(crate::watcher::check_channel(
+    Ok(crate::watcher::force_one_more(
         &app, store.inner(), queue.inner(), settings.inner(), history.inner(), &id,
     ).await)
+}
+
+/// Đối soát tức thì video đang tải dở của MỌI kênh (tải xong → chốt đã
+/// làm; hủy/lỗi → trả suất + cho quét lại). UI gọi mỗi lần refresh danh
+/// sách để bộ đếm "đã tải hôm nay" luôn đúng ngay sau khi hủy.
+#[tauri::command]
+pub fn reconcile_watched(
+    store: State<Arc<WatchlistStore>>,
+    queue: State<Arc<QueueManager>>,
+    history: State<Arc<HistoryStore>>,
+) -> AppResult<()> {
+    crate::watcher::reconcile_all(store.inner(), queue.inner(), history.inner());
+    Ok(())
+}
+
+/// THAY link key nguồn bằng link mới nhưng GIỮ NGUYÊN kênh (tên, nhóm,
+/// thư mục, chế độ, chất lượng, sổ đã-làm). Reset phần thuộc nguồn cũ:
+/// baseline seen_ids (lượt quét đầu chỉ ghi mốc, không tải kho cũ),
+/// hàng chờ tích, channel_id RSS, lỗi, cờ kho cạn.
+#[tauri::command]
+pub fn replace_watched_url(
+    id: String,
+    url: String,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err(AppError::InvalidUrl);
+    }
+    store.update(&id, |c| {
+        c.url = url.clone();
+        c.title = None;
+        c.channel_id = None;
+        c.seen_ids.clear();
+        c.pending.clear();
+        c.picked.clear();
+        c.last_checked = None;
+        c.last_new_count = None;
+        c.last_error = None;
+        c.auto_fetch_date = None;
+        c.source_empty = false;
+    })
 }
 
 /// Đặt CHẤT LƯỢNG TỐI ĐA của kênh (1080, 720…). 0 = về mặc định chung.

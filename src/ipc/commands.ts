@@ -593,11 +593,28 @@ export async function checkWatchedOne(id: string): Promise<number> {
   return invoke<number>("check_watched_one", { id });
 }
 
-/** Video hôm nay không ưng → hoàn suất + tự lấy ngay video KHÁC. */
-export async function redoWatchedToday(id: string): Promise<number> {
+/** ➕ Tải THÊM 1 video ngay (vượt hạn mức ngày) — hàng chờ trước, hết vét view. */
+export async function downloadMoreToday(id: string): Promise<number> {
   if (IS_WEB) return 0;
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<number>("redo_watched_today", { id });
+  return invoke<number>("download_more_today", { id });
+}
+
+/** Đối soát tức thì video đang tải dở — bộ đếm 'đã tải hôm nay' luôn đúng. */
+export async function reconcileWatched(): Promise<void> {
+  if (IS_WEB) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("reconcile_watched");
+}
+
+/** THAY link key bằng link mới, GIỮ NGUYÊN kênh (tên/nhóm/thư mục/cấu hình). */
+export async function replaceWatchedUrl(
+  id: string,
+  url: string,
+): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("replace_watched_url", { id, url });
 }
 
 /** Đặt chất lượng tối đa của kênh (1080, 720…); 0 = về mặc định chung. */

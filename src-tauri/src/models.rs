@@ -538,6 +538,10 @@ pub struct Settings {
     /// dõi quản lý thêm/sửa/xóa; kênh gán nhóm bằng chọn từ danh sách này.
     #[serde(default)]
     pub watch_groups: Vec<String>,
+    /// Cho phép nền TỰ quét/tải kênh theo dõi theo chu kỳ. Mặc định TẮT —
+    /// user chỉ muốn tải khi CHÍNH TAY bấm ▶ Chạy tất cả / ▶ từng kênh.
+    #[serde(default)]
+    pub watch_auto_enabled: bool,
     /// THƯ MỤC TRUNG CHUYỂN GỐC của dây chuyền (INTEGRATION.md). Khi kênh
     /// theo dõi có `target_name`, video tự về `<watch_root>\<target_name>`
     /// — user chỉ gõ tên kênh đích, không phải chọn thư mục từng kênh.
@@ -602,6 +606,7 @@ impl Default for Settings {
             youtube_api_key: None,
             youtube_api_keys: Vec::new(),
             watch_groups: Vec::new(),
+            watch_auto_enabled: false,
             watch_root: None,
             max_height: 1080,
         }
@@ -636,6 +641,7 @@ pub struct SettingsPatch {
     pub youtube_api_key: Option<Option<String>>,
     pub youtube_api_keys: Option<Vec<String>>,
     pub watch_groups: Option<Vec<String>>,
+    pub watch_auto_enabled: Option<bool>,
     /// `Some(None)` = bỏ gốc trung chuyển; `Some(Some(path))` = đặt.
     #[serde(default, deserialize_with = "deserialize_optional_optional_string")]
     pub watch_root: Option<Option<String>>,

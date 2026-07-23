@@ -199,6 +199,9 @@ impl SettingsStore {
             if let Some(keys) = patch.youtube_api_keys {
                 s.youtube_api_keys = normalize_api_keys(keys);
             }
+            if let Some(v) = patch.watch_auto_enabled {
+                s.watch_auto_enabled = v;
+            }
             // watch_root: thư mục trung chuyển gốc — trim, rỗng/null = bỏ.
             if let Some(opt) = patch.watch_root {
                 s.watch_root = opt.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
