@@ -247,11 +247,19 @@ async fn apply(
         std::collections::HashSet::new()
     };
     // New = fetched videos CHƯA thấy VÀ CHƯA tải (none on baseline).
+    // Kênh "Video dài" (tab != shorts): LOẠI Shorts kể cả video mới đăng —
+    // tôn trọng cấu hình, không rót nhầm Short vào kênh cắt.
+    let want_shorts = channel.tab == "shorts";
     let new_fetched: Vec<&Fetched> = if is_baseline {
         Vec::new()
     } else {
         fetched.iter()
             .filter(|f| !seen.contains(&f.id) && !archived.contains(&f.id))
+            .filter(|f| {
+                let sh = f.video.is_short
+                    || crate::channel_fetcher::looks_like_short(&f.video);
+                sh == want_shorts
+            })
             .collect()
     };
     let new_count = new_fetched.len() as u32;
@@ -493,11 +501,15 @@ fn pick_auto_candidates(
         if v.is_photo {
             continue;
         }
+        // Nhận diện Shorts NGAY Ở KHÂU CHỌN (không chỉ dựa cờ is_short đã lưu):
+        // kho cache cũ có thể chưa đánh dấu -> tự soi lại (URL/duration/#shorts)
+        // để chế độ "Video dài" KHÔNG bao giờ rót nhầm Shorts.
+        let is_short = v.is_short || crate::channel_fetcher::looks_like_short(v);
         if want == "shorts" {
-            if !v.is_short {
+            if !is_short {
                 continue;
             }
-        } else if v.is_short {
+        } else if is_short {
             continue;
         }
         let id = video_id_of(&v.url);

@@ -267,7 +267,7 @@ fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
 /// URL có "/shorts/" · thời lượng <=60s · tiêu đề/hashtag có #shorts/#short.
 /// (Với kênh reup, clip <=60s cũng coi như short — quá ngắn để cắt.)
 /// Hàm THUẦN để unit-test.
-fn looks_like_short(v: &ChannelVideo) -> bool {
+pub(crate) fn looks_like_short(v: &ChannelVideo) -> bool {
     let tl = v.title.to_lowercase();
     v.url.contains("/shorts/")
         || v.duration_sec.map(|d| d > 0 && d <= 60).unwrap_or(false)
