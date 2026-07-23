@@ -239,22 +239,8 @@ async fn apply(
     let is_baseline = channel.seen_ids.is_empty();
     let seen: std::collections::HashSet<&String> = channel.seen_ids.iter().collect();
     let settings = settings_store.get();
-    // BỘ LOẠI-TRÙNG "ĐÃ TẢI" = archive của yt-dlp ∪ LỊCH SỬ tải Completed
-    // của chính app. Archive có thể THIẾU (video tải từ bản cũ / lúc tắt
-    // "bỏ qua đã tải" không được ghi sổ) -> lịch sử Completed là nguồn sự
-    // thật thứ 2, phủ nốt các lỗ đó. Video nằm trong 1 trong 2 sổ = ĐÃ TẢI,
-    // không bao giờ enqueue lại (hết cảnh "tải lại mà hiện thành công").
-    let mut downloaded: std::collections::HashSet<String> =
-        if settings.skip_downloaded {
-            load_archive_ids(app)
-        } else {
-            std::collections::HashSet::new()
-        };
-    for e in history.list(None, 10_000, 0).unwrap_or_default() {
-        if e.status == crate::models::HistoryStatus::Completed {
-            downloaded.insert(video_id_of(&e.url));
-        }
-    }
+    // BỘ LOẠI-TRÙNG "ĐÃ TẢI" dùng chung (archive ∪ lịch sử Completed).
+    let downloaded = downloaded_ids(app, history, &settings);
     // New = fetched videos CHƯA thấy VÀ CHƯA tải (none on baseline).
     let want_shorts = channel.tab == "shorts";
     let mut new_fetched: Vec<Fetched> = if is_baseline {
@@ -485,6 +471,29 @@ fn parse_archive_ids(text: &str) -> std::collections::HashSet<String> {
 /// Đọc id video đã tải từ `app_data_dir/download_archive.txt` (nguồn sự thật
 /// cho "đã tải trên máy này" — bền qua mọi phiên/đường tải, không chỉ done_ids
 /// của kênh). Lỗi/không có file -> tập rỗng.
+/// Bộ "ĐÃ TẢI trên máy này" = download-archive của yt-dlp (khi bật "bỏ qua
+/// đã tải") ∪ LỊCH SỬ tải Completed của app. Archive có thể THIẾU (video tải
+/// từ bản cũ / lúc tắt bỏ-qua không được ghi sổ) -> lịch sử là nguồn sự thật
+/// thứ 2 phủ nốt. MỌI đường chọn video (video mới / hàng chờ / vét / ➕ Tải
+/// thêm) PHẢI loại theo bộ này — video từng tải = không bao giờ lấy lại.
+fn downloaded_ids(
+    app: &AppHandle,
+    history: &HistoryStore,
+    settings: &crate::models::Settings,
+) -> std::collections::HashSet<String> {
+    let mut set = if settings.skip_downloaded {
+        load_archive_ids(app)
+    } else {
+        std::collections::HashSet::new()
+    };
+    for e in history.list(None, 10_000, 0).unwrap_or_default() {
+        if e.status == crate::models::HistoryStatus::Completed {
+            set.insert(video_id_of(&e.url));
+        }
+    }
+    set
+}
+
 pub(crate) fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
     use tauri::Manager;
     app.path()
@@ -1178,12 +1187,18 @@ pub async fn force_one_more(
     };
     let settings = settings_store.get();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    // Bộ ĐÃ TẢI dùng chung (archive ∪ lịch sử) — trước đây đường "➕ Tải
+    // thêm" KHÔNG lọc bộ này nên cứ chọn lại video đã tải (bị "Bỏ qua"),
+    // bấm tiếp lại dính cái đã-tải kế → không bao giờ tới video chưa tải.
+    let downloaded = downloaded_ids(app, history, &settings);
 
-    // 1. Ưu tiên hàng chờ user đã tích (bỏ video đã làm / đang tải).
+    // 1. Ưu tiên hàng chờ user đã tích (bỏ video đã làm / đang tải / ĐÃ TẢI).
     let mut cand: Option<PickedVideo> = channel
         .picked
         .iter()
-        .find(|p| !channel.done_ids.contains(&p.id) && !channel.dl_pending.contains(&p.id))
+        .find(|p| !channel.done_ids.contains(&p.id)
+            && !channel.dl_pending.contains(&p.id)
+            && !downloaded.contains(&p.id))
         .cloned();
     // 2. Hết hàng chờ → quét kho lấy video view cao nhất chưa làm (bỏ qua
     //    giới hạn "1 lần quét/ngày" vì đây là lệnh tay).
@@ -1191,6 +1206,7 @@ pub async fn force_one_more(
         let tab = if channel.tab == "shorts" { "shorts".to_string() } else { "videos".to_string() };
         let mut done_plus = channel.done_ids.clone();
         done_plus.extend(channel.dl_pending.clone());
+        done_plus.extend(downloaded.iter().cloned());
         // KHO CẢ KÊNH (đã lưu → lấy thẳng; cạn → quét lại 1 phát).
         let videos = vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
         cand = pick_auto_candidates(&videos, &done_plus, 1, &tab).into_iter().next();
