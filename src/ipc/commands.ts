@@ -586,6 +586,16 @@ export async function setWatchedSourceMode(
   return invoke<WatchedChannel | null>("set_watched_source_mode", { id, mode });
 }
 
+/** Đặt chất lượng tối đa của kênh (1080, 720…); 0 = về mặc định chung. */
+export async function setWatchedMaxHeight(
+  id: string,
+  height: number,
+): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("set_watched_max_height", { id, height });
+}
+
 /** Đổi loại video theo dõi/vét: "videos" (dài) | "shorts" | "all". */
 export async function setWatchedTab(
   id: string,

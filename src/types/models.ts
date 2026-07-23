@@ -252,6 +252,9 @@ export interface WatchedChannel {
   doneIds?: string[];
   /** true = kho nguồn ĐÃ CẠN (quét 🤖 không còn video chưa làm) — đổi key. */
   sourceEmpty?: boolean;
+  /** Chất lượng TỐI ĐA riêng của kênh (1080, 720…). null = mặc định chung
+   *  (1080). Không bao giờ tải vượt; thiếu thì lấy mức thấp hơn gần nhất. */
+  maxHeight?: number | null;
 }
 
 /** Một video trong hàng chờ làm của kênh theo dõi. */

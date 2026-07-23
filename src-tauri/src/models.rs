@@ -253,6 +253,11 @@ pub struct WatchedChannel {
     /// "đã làm" để user không tích lại video cũ.
     #[serde(default)]
     pub done_ids: Vec<String>,
+    /// Chất lượng TỐI ĐA của kênh (1080, 720…). None = mặc định chung
+    /// (Settings.max_height, mặc định 1080). Không bao giờ tải VƯỢT mức
+    /// này; nguồn thiếu thì lấy mức thấp hơn gần nhất.
+    #[serde(default)]
+    pub max_height: Option<u32>,
     /// true = lần quét kho gần nhất (chế độ 🤖 tự vét) KHÔNG còn video nào
     /// chưa làm — kho nguồn ĐÃ CẠN, user cần đổi key. UI hiện badge đỏ.
     /// Tự về false ngay khi có video mới đăng hoặc tải được video.
@@ -354,6 +359,11 @@ pub struct DownloadRequest {
     /// đã-tải. File cũ còn trên máy thì tự thêm ` (1)` chứ không ghi đè.
     #[serde(default)]
     pub force_redownload: bool,
+    /// Chất lượng TỐI ĐA riêng cho lượt tải này (kênh theo dõi đặt riêng).
+    /// None = dùng `Settings.max_height` chung. Không bao giờ vượt mức này —
+    /// thiếu thì yt-dlp tự lấy mức THẤP hơn gần nhất (xem args_builder).
+    #[serde(default)]
+    pub max_height: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -684,6 +694,9 @@ pub struct DownloadOptions {
     /// when downloading many videos from the same channel.
     #[serde(default)]
     pub polite: Option<bool>,
+    /// Chất lượng tối đa riêng (kênh theo dõi) — None = mặc định chung.
+    #[serde(default)]
+    pub max_height: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

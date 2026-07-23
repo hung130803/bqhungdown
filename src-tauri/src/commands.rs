@@ -183,6 +183,7 @@ pub(crate) fn build_request(url: String, options: DownloadOptions, settings: &Se
         playlist_all: options.playlist_all.unwrap_or(false),
         polite: options.polite.unwrap_or(false),
         force_redownload: false,
+        max_height: options.max_height,
     }
 }
 
@@ -940,6 +941,7 @@ pub fn redownload_from_history(
         on_conflict: ConflictPolicy::Ask,
         playlist_all: None,
         polite: None,
+        max_height: None,
     };
     let req = build_request(entry.url.clone(), options, &s);
     let item = make_item(req, Some(entry.title), entry.thumbnail.clone(), Some(entry.extractor), entry.channel.clone(), &taken);
@@ -1038,6 +1040,7 @@ pub async fn add_watched_channel(
         seen_ids: vec![],
         dest_dir: None,
         target_name: None,
+        max_height: None,
         group: None,
         source_mode: "new".into(),
         auto_fetch_date: None,
@@ -1139,6 +1142,19 @@ pub fn set_watched_source_mode(
     })
 }
 
+/// Đặt CHẤT LƯỢNG TỐI ĐA của kênh (1080, 720…). 0 = về mặc định chung.
+/// Không bao giờ tải vượt mức; nguồn thiếu thì yt-dlp lấy mức thấp hơn
+/// gần nhất (format selector trong args_builder).
+#[tauri::command]
+pub fn set_watched_max_height(
+    id: String,
+    height: u32,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    let h = if height == 0 { None } else { Some(height.clamp(144, 4320)) };
+    store.update(&id, |c| c.max_height = h)
+}
+
 /// Đổi LOẠI VIDEO theo dõi/vét của kênh: "videos" (dài) | "shorts" | "all".
 /// Xóa auto_fetch_date để lượt quét kho kế tiếp áp loại mới ngay hôm nay.
 #[tauri::command]
@@ -1219,6 +1235,7 @@ pub async fn download_pending(
         on_conflict: ConflictPolicy::Rename,
         playlist_all: None,
         polite: Some(true),
+        max_height: channel.max_height,
     };
     let mut taken = history.known_short_ids().unwrap_or_default();
     for it in queue.list() {

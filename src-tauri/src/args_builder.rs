@@ -404,7 +404,8 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
                         // nên vớ 4K mặc định làm tải hàng loạt chậm hẳn. Fallback
                         // cuối `bv*+ba/b` không kèm điều kiện → nếu kênh không có
                         // mức <=cap vẫn tải được (không bao giờ fail vì cap).
-                        let mh = settings.max_height;
+                        // Kênh theo dõi đặt mức riêng thì ưu tiên; không thì mức chung.
+                        let mh = req.max_height.unwrap_or(settings.max_height);
                         args.push("-f".into());
                         if mh > 0 {
                             args.push(format!(
@@ -510,6 +511,7 @@ mod tests {
             playlist_all: false,
             polite: false,
             force_redownload: false,
+            max_height: None,
         }
     }
 

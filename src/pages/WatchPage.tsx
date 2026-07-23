@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import * as cmd from "@/ipc/commands";
 import { useSettingsStore } from "@/stores/useSettingsStore";
+import { useQueueStore } from "@/stores/useQueueStore";
 import type { ChannelVideo, PickedVideo, WatchedChannel } from "@/types/models";
 import { EmptyState } from "@/components/EmptyState";
 
@@ -324,6 +325,18 @@ export function WatchPage() {
         (a.group || "￿").localeCompare(b.group || "￿", "vi") ||
         a.name.localeCompare(b.name, "vi"),
     );
+  // Lượt tải đang chạy (store toàn cục đã nghe event tiến trình) — soi theo
+  // thư mục lưu để gắn thanh tiến trình vào đúng thẻ kênh.
+  const queueItems = useQueueStore((s) => s.items);
+  const activeFor = (dir?: string | null) => {
+    if (!dir) return [];
+    const norm = (p: string) => p.replace(/[/\\]+$/, "").toLowerCase();
+    return queueItems.filter(
+      (it) =>
+        (it.state === "downloading" || it.state === "queued" || it.state === "paused") &&
+        norm(String(it.request.saveFolder)) === norm(dir),
+    );
+  };
   const nOn = channels.filter((c) => c.enabled).length;
   // Ngày local YYYY-MM-DD — khớp cách backend ghi drip_date.
   const now = new Date();
@@ -502,6 +515,36 @@ export function WatchPage() {
                 {mode === "auto" ? "🤖" : mode === "picked" ? "🎯" : "🆕"} · {k.rep.dailyLimit ?? 1}/ngày
               </span>
             </div>
+            {/* Kênh đang TẢI → thanh tiến trình + tốc độ ngay dưới (kể cả khi gập) */}
+            {activeFor(k.rep.destDir).map((it) => {
+              const pct = it.bytesTotal
+                ? Math.min(100, (it.bytesDownloaded / it.bytesTotal) * 100)
+                : null;
+              return (
+                <div key={it.shortId} className="px-3 pb-1.5 -mt-0.5">
+                  <div className="flex items-center gap-2 text-[11px] text-muted">
+                    <span className="shrink-0">
+                      {it.state === "downloading" ? "⬇" : it.state === "paused" ? "⏸" : "🕐"}
+                    </span>
+                    <span className="truncate flex-1 text-fg" title={it.title}>{it.title}</span>
+                    {it.state === "queued" && <span className="shrink-0">chờ tải…</span>}
+                    {it.state === "downloading" && it.speedBps != null && (
+                      <span className="shrink-0 font-medium text-fg">{fmtSpeed(it.speedBps)}</span>
+                    )}
+                    {pct != null && <span className="shrink-0">{pct.toFixed(0)}%</span>}
+                    {it.state === "downloading" && it.etaSec != null && (
+                      <span className="shrink-0">còn {fmtEta(it.etaSec)}</span>
+                    )}
+                  </div>
+                  <div className="h-1 mt-0.5 rounded bg-surface-2 overflow-hidden">
+                    <div
+                      className="h-full bg-accent transition-all"
+                      style={{ width: `${pct ?? (it.state === "downloading" ? 30 : 2)}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
             {kOpen && (
             <>
             {/* Cài đặt kênh: TÊN · nhóm · chế độ · hạn mức · 📁 · ✕ */}
@@ -586,29 +629,33 @@ export function WatchPage() {
                 <option value={2}>2/ngày</option>
                 <option value={3}>3/ngày</option>
               </select>
-              <button
-                onClick={() => {
-                  void (async () => {
-                    try {
-                      const dir = await cmd.pickFolder();
-                      if (!dir) return;
-                      await forKenh(k, (id) => cmd.setWatchedDestDir(id, dir));
-                    } catch (e) {
-                      setError(formatErr(e));
-                    }
-                  })();
+              {/* Chất lượng TỐI ĐA — thiếu thì tự lấy mức THẤP hơn gần nhất,
+                  không bao giờ tải vượt (1080 không bao giờ ra 1440/4K) */}
+              <select
+                value={k.rep.maxHeight ?? 1080}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  void forKenh(k, (id) => cmd.setWatchedMaxHeight(id, n));
                 }}
-                className={`px-2 py-1 rounded-md text-xs shrink-0 border ${
-                  k.rep.destDir ? "bg-accent text-accent-fg border-accent" : "bg-surface-2 text-fg border-border"
-                }`}
-                title={
-                  k.rep.destDir
-                    ? `Thư mục chọn tay: ${k.rep.destDir} — bấm để đổi`
-                    : "Chọn thư mục TAY cho kênh (bình thường không cần — tên kênh tự tạo thư mục)"
-                }
+                className="px-1.5 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0"
+                title={"Chất lượng TỐI ĐA của kênh (mặc định 1080p).\nNguồn không có mức này → tự lấy mức THẤP hơn gần nhất (vd 720p).\nKHÔNG BAO GIỜ tải vượt mức đã chọn."}
               >
-                📁
-              </button>
+                <option value={480}>480p</option>
+                <option value={720}>720p</option>
+                <option value={1080}>1080p</option>
+                <option value={1440}>1440p</option>
+                <option value={2160}>4K</option>
+              </select>
+              {/* 📁 = MỞ thư mục xem video đã tải (đổi thư mục ở dòng dưới) */}
+              {k.rep.destDir && (
+                <button
+                  onClick={() => void cmd.openInFolder(k.rep.destDir!)}
+                  className="px-2 py-1 rounded-md text-xs shrink-0 border bg-surface-2 text-fg border-border"
+                  title={`MỞ thư mục xem video đã tải của kênh: ${k.rep.destDir}`}
+                >
+                  📁 Mở
+                </button>
+              )}
               <button
                 onClick={() => void forKenh(k, (id) => cmd.removeWatchedChannel(id))}
                 className="px-2 py-1 rounded-md border border-border text-fg text-xs shrink-0 hover:bg-surface-2"
@@ -620,19 +667,45 @@ export function WatchPage() {
             {/* Dòng trạng thái kênh: thư mục + kho cạn + hàng chờ */}
             <div className="px-3 pb-2 pt-1 text-xs text-muted flex items-center gap-x-2 gap-y-0.5 flex-wrap">
               {k.rep.destDir ? (
-                <span className="truncate max-w-[60%]" title={`Thư mục chọn tay (ưu tiên hơn tên kênh): ${k.rep.destDir}`}>
+                <span className="truncate max-w-[60%]" title={`Thư mục lưu video của kênh: ${k.rep.destDir}`}>
                   📁 {k.rep.destDir}
                   <button
-                    onClick={() => void forKenh(k, (id) => cmd.setWatchedDestDir(id, null))}
-                    className="ml-1 text-danger hover:underline"
-                    title="Bỏ thư mục tay — quay về tự tạo theo tên kênh"
+                    onClick={() => {
+                      void (async () => {
+                        try {
+                          const dir = await cmd.pickFolder();
+                          if (!dir) return;
+                          await forKenh(k, (id) => cmd.setWatchedDestDir(id, dir));
+                        } catch (e) {
+                          setError(formatErr(e));
+                        }
+                      })();
+                    }}
+                    className="ml-1.5 text-accent hover:underline"
+                    title="Đổi sang thư mục khác"
                   >
-                    ✕
+                    đổi…
                   </button>
                 </span>
               ) : (
                 <span className="text-danger">
-                  ⚠ CHƯA chọn thư mục — bấm 📁 ngay, không thì video rơi thư mục mặc định!
+                  ⚠ CHƯA chọn thư mục — video sẽ rơi thư mục mặc định!
+                  <button
+                    onClick={() => {
+                      void (async () => {
+                        try {
+                          const dir = await cmd.pickFolder();
+                          if (!dir) return;
+                          await forKenh(k, (id) => cmd.setWatchedDestDir(id, dir));
+                        } catch (e) {
+                          setError(formatErr(e));
+                        }
+                      })();
+                    }}
+                    className="ml-1.5 text-accent hover:underline"
+                  >
+                    📁 Chọn thư mục…
+                  </button>
                 </span>
               )}
               {dry && (
@@ -1040,6 +1113,21 @@ function videoIdOf(url: string): string {
 function baseName(p: string): string {
   const parts = p.replace(/[/\\]+$/, "").split(/[/\\]/);
   return parts[parts.length - 1] || p;
+}
+
+/** Tốc độ tải người đọc được: `3.2 MB/s`, `850 KB/s`. */
+function fmtSpeed(bps: number): string {
+  if (bps >= 1_048_576) return `${(bps / 1_048_576).toFixed(1)} MB/s`;
+  if (bps >= 1024) return `${Math.round(bps / 1024)} KB/s`;
+  return `${Math.round(bps)} B/s`;
+}
+
+/** Thời gian còn lại: `45s`, `2p30`, `1g05`. */
+function fmtEta(sec: number): string {
+  if (sec < 60) return `${Math.round(sec)}s`;
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m}p${String(Math.round(sec % 60)).padStart(2, "0")}`;
+  return `${Math.floor(m / 60)}g${String(m % 60).padStart(2, "0")}`;
 }
 
 function formatViews(n: number): string {

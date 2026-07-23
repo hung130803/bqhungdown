@@ -197,7 +197,7 @@ async fn apply(
                 &settings.watch_root, &settings.default_folder,
             );
             let got = enqueue_new(app, queue, settings_store, history, &channel.title,
-                                  folder, &vids, &settings).await;
+                                  folder, channel.max_height, &vids, &settings).await;
             drip_count += got;
         }
     }
@@ -243,7 +243,7 @@ async fn apply(
             &settings.watch_root, &settings.default_folder,
         );
         let got = enqueue_new(app, queue, settings_store, history, &channel.title,
-                              folder, &vids, &settings).await;
+                              folder, channel.max_height, &vids, &settings).await;
         dripped.truncate(got as usize);
         drip_count += got;
     }
@@ -487,6 +487,7 @@ async fn enqueue_new(
     history: &Arc<HistoryStore>,
     channel_title: &Option<String>,
     folder: std::path::PathBuf,
+    max_height: Option<u32>,
     videos: &[ChannelVideo],
     settings: &crate::models::Settings,
 ) -> u32 {
@@ -514,6 +515,7 @@ async fn enqueue_new(
             on_conflict: ConflictPolicy::Rename,
             playlist_all: None,
             polite: Some(true),
+            max_height,
         };
         let req = crate::commands::build_request(v.url.clone(), options, settings);
         let extractor = crate::url_validator::resolve_extractor(&v.url).map(|s| s.to_string());
@@ -554,6 +556,7 @@ mod tests {
             seen_ids: vec!["base1".into()],
             dest_dir: Some("D:\\TrungChuyen\\K".into()),
             target_name: None,
+            max_height: None,
             group: None,
             source_mode: "picked".into(),
             auto_fetch_date: None,

@@ -1193,6 +1193,7 @@ mod tests {
                 playlist_all: false,
                 polite: false,
                 force_redownload: false,
+                max_height: None,
             },
             title: title.into(),
             thumbnail: None,
