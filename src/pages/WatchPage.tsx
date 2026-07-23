@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import * as cmd from "@/ipc/commands";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useQueueStore } from "@/stores/useQueueStore";
-import type { ChannelVideo, PickedVideo, WatchedChannel } from "@/types/models";
+import type { ChannelVideo, HistoryEntry, PickedVideo, WatchedChannel } from "@/types/models";
 import { EmptyState } from "@/components/EmptyState";
 
 /** 1 KÊNH đích của user (kênh TikTok) = nhiều key nguồn chung tên kênh.
@@ -40,6 +40,21 @@ export function WatchPage() {
     localStorage.setItem("watch.groupFilter", g === null ? "*ALL*" : g);
   };
   const [cancellingAll, setCancellingAll] = useState(false);
+  // 📊 Thống kê: mở dialog + nạp lịch sử tải (khớp theo thư mục kênh).
+  const [showStats, setShowStats] = useState(false);
+  const [statsHist, setStatsHist] = useState<HistoryEntry[] | null>(null);
+  const [statsExpand, setStatsExpand] = useState<Record<string, boolean>>({});
+  const openStats = () => {
+    setShowStats(true);
+    setStatsHist(null);
+    void (async () => {
+      try {
+        setStatsHist(await cmd.listHistory({ limit: 5000 }));
+      } catch {
+        setStatsHist([]);
+      }
+    })();
+  };
 
   // ── Dialog "➕ Thêm kênh": tên kênh đích + nhóm + key nguồn đầu tiên ──
   const [addOpen, setAddOpen] = useState(false);
@@ -555,6 +570,14 @@ export function WatchPage() {
           title="Quản lý nhóm: thêm / đổi tên / xóa"
         >
           🏷 Nhóm
+        </button>
+        <button
+          onClick={openStats}
+          disabled={channels.length === 0}
+          className="px-2.5 py-1.5 rounded-md bg-surface-2 border border-border text-fg disabled:opacity-50"
+          title="Bảng thống kê: mỗi nhóm/kênh đã tải bao nhiêu video, tên gì, lưu đâu, OK hay lỗi"
+        >
+          📊 Thống kê
         </button>
         <button
           onClick={() => void checkNow()}
@@ -1272,6 +1295,208 @@ export function WatchPage() {
               >
                 {adding ? "Đang tạo…" : "Tạo kênh"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dialog 📊 THỐNG KÊ — tổng quan + theo nhóm + theo kênh (đã tải bao
+          nhiêu, tên video, thư mục, OK/lỗi) để quản lý 50-300 kênh. */}
+      {showStats && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-y-auto"
+          onClick={() => setShowStats(false)}
+        >
+          <div
+            className="bg-surface border border-border rounded-lg w-full max-w-3xl my-4 flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+              <h3 className="text-base font-semibold text-fg flex-1">📊 Thống kê kênh</h3>
+              <button
+                onClick={openStats}
+                className="px-2 py-1 rounded-md border border-border text-fg text-xs hover:bg-surface-2"
+                title="Nạp lại số liệu mới nhất"
+              >
+                🔄 Làm mới
+              </button>
+              <button
+                onClick={() => setShowStats(false)}
+                className="px-2 py-1 rounded-md border border-border text-fg text-xs hover:bg-surface-2"
+              >
+                ✕ Đóng
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {statsHist === null ? (
+                <div className="text-center text-sm text-muted py-8">Đang nạp số liệu…</div>
+              ) : (
+                (() => {
+                  const nf = (p?: string | null) =>
+                    (p ?? "").replace(/[/\\]+$/, "").toLowerCase();
+                  // Gom lịch sử tải theo THƯ MỤC lưu (khớp với thư mục kênh).
+                  const byFolder = new Map<string, HistoryEntry[]>();
+                  for (const h of statsHist) {
+                    const k = nf(h.saveFolder);
+                    if (!k) continue;
+                    (byFolder.get(k) ?? byFolder.set(k, []).get(k)!).push(h);
+                  }
+                  // Số liệu từng KÊNH.
+                  const rows = kenhAll.map((k) => {
+                    const folder = k.rep.destDir ?? "";
+                    const hs = byFolder.get(nf(folder)) ?? [];
+                    const ok = hs.filter((h) => h.status === "completed");
+                    const err = hs.filter((h) => h.status !== "completed");
+                    const today = k.keys.reduce(
+                      (s, c) => s + (c.dripDate === todayStr ? (c.dripCount ?? 0) : 0),
+                      0,
+                    );
+                    const dry = k.keys.some((c) => c.sourceEmpty);
+                    const errMsg = k.keys.map((c) => c.lastError).find(Boolean) || null;
+                    const on = k.keys.some((c) => c.enabled);
+                    return { k, folder, ok, err, today, dry, errMsg, on };
+                  });
+                  const totalOk = rows.reduce((s, r) => s + r.ok.length, 0);
+                  const totalToday = rows.reduce((s, r) => s + r.today, 0);
+                  const nDryC = rows.filter((r) => r.dry).length;
+                  const nErrC = rows.filter((r) => r.errMsg).length;
+                  const nOff = rows.filter((r) => !r.on).length;
+                  const nDoneToday = rows.filter((r) => r.today > 0).length;
+                  // Gom theo NHÓM.
+                  const byGroup = new Map<string, typeof rows>();
+                  for (const r of rows) {
+                    const g = r.k.group || "";
+                    (byGroup.get(g) ?? byGroup.set(g, []).get(g)!).push(r);
+                  }
+                  const groupNames = [...byGroup.keys()].sort((a, b) =>
+                    a.localeCompare(b, "vi"),
+                  );
+                  const kpi = (label: string, val: string | number, cls = "") => (
+                    <div className="px-3 py-2 rounded-md bg-surface-2 border border-border">
+                      <div className={`text-lg font-semibold ${cls}`}>{val}</div>
+                      <div className="text-[11px] text-muted">{label}</div>
+                    </div>
+                  );
+                  return (
+                    <>
+                      {/* TỔNG QUAN */}
+                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                        {kpi("kênh", kenhAll.length)}
+                        {kpi("nhóm", groupNames.filter(Boolean).length)}
+                        {kpi("✅ đã tải (tổng)", totalOk, "text-accent")}
+                        {kpi("📅 tải hôm nay", totalToday)}
+                        {kpi("kênh đã tải hôm nay", `${nDoneToday}/${kenhAll.length}`)}
+                        {nDryC > 0 && kpi("🔴 kho cạn", nDryC, "text-danger")}
+                        {nErrC > 0 && kpi("⚠ kênh lỗi", nErrC, "text-danger")}
+                        {nOff > 0 && kpi("⏸ tạm dừng", nOff, "text-muted")}
+                      </div>
+
+                      {/* THEO NHÓM */}
+                      {groupNames.map((g) => {
+                        const gr = byGroup.get(g)!;
+                        const gOk = gr.reduce((s, r) => s + r.ok.length, 0);
+                        const gToday = gr.reduce((s, r) => s + r.today, 0);
+                        const gDry = gr.filter((r) => r.dry).length;
+                        return (
+                          <div key={g || "⁇"} className="rounded-lg border border-border overflow-hidden">
+                            <div className="flex items-center gap-2 px-3 py-2 bg-surface-2">
+                              <span
+                                className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                                style={{ background: `hsl(${groupHue(g)} 70% 55%)` }}
+                              />
+                              <span className="text-sm font-semibold text-fg uppercase tracking-wide flex-1">
+                                🏷 {g || "Chưa phân nhóm"}
+                              </span>
+                              <span className="text-xs text-muted">{gr.length} kênh</span>
+                              <span className="text-xs text-accent">✅ {gOk}</span>
+                              <span className="text-xs text-muted">📅 {gToday}</span>
+                              {gDry > 0 && <span className="text-xs text-danger">🔴 {gDry}</span>}
+                            </div>
+                            {gr.map((r) => {
+                              const exp = statsExpand[r.k.key] ?? false;
+                              return (
+                                <Fragment key={r.k.key}>
+                                  <div
+                                    className="flex items-center gap-2 px-3 py-2 border-t border-border/60 cursor-pointer hover:bg-surface-2/40 text-xs"
+                                    onClick={() =>
+                                      setStatsExpand((m) => ({ ...m, [r.k.key]: !exp }))
+                                    }
+                                  >
+                                    <span className="text-muted w-3 shrink-0">{exp ? "▾" : "▸"}</span>
+                                    <span className={`font-medium truncate flex-1 ${r.on ? "text-fg" : "text-muted"}`}>
+                                      {r.k.name || "(chưa đặt tên)"}
+                                    </span>
+                                    {r.today > 0 ? (
+                                      <span className="text-accent shrink-0">📅 {r.today} hôm nay</span>
+                                    ) : (
+                                      <span className="text-muted shrink-0">⏳ chưa</span>
+                                    )}
+                                    <span className="text-accent shrink-0" title="Tổng video đã tải xong (nằm trong thư mục)">
+                                      ✅ {r.ok.length}
+                                    </span>
+                                    {r.err.length > 0 && (
+                                      <span className="text-danger shrink-0">⚠ {r.err.length} lỗi</span>
+                                    )}
+                                    {r.dry && <span className="text-danger shrink-0">🔴 hết</span>}
+                                    {!r.on && <span className="text-muted shrink-0">⏸</span>}
+                                  </div>
+                                  {exp && (
+                                    <div className="px-3 pb-2 pt-0.5 border-t border-border/40 bg-surface-2/20 text-[11px] space-y-1">
+                                      <div className="text-muted flex items-center gap-1">
+                                        📁
+                                        {r.folder ? (
+                                          <>
+                                            <span className="truncate" title={r.folder}>{r.folder}</span>
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                void cmd.openInFolder(r.folder);
+                                              }}
+                                              className="text-accent hover:underline shrink-0"
+                                            >
+                                              mở
+                                            </button>
+                                          </>
+                                        ) : (
+                                          <span className="text-warning">CHƯA chọn thư mục</span>
+                                        )}
+                                      </div>
+                                      {r.errMsg && (
+                                        <div className="text-danger truncate" title={r.errMsg}>⚠ lỗi kênh: {r.errMsg}</div>
+                                      )}
+                                      {r.ok.length === 0 && r.err.length === 0 ? (
+                                        <div className="text-muted">Chưa tải video nào.</div>
+                                      ) : (
+                                        [...r.ok, ...r.err]
+                                          .sort((a, b) => (b.finishedAt || "").localeCompare(a.finishedAt || ""))
+                                          .slice(0, 12)
+                                          .map((h) => (
+                                            <div key={h.shortId} className="flex items-center gap-1.5">
+                                              <span className="shrink-0">{h.status === "completed" ? "✅" : "⚠"}</span>
+                                              <span className="truncate flex-1 text-fg" title={h.error || h.title}>{h.title}</span>
+                                              <span className="text-muted shrink-0">{timeAgo(h.finishedAt)}</span>
+                                            </div>
+                                          ))
+                                      )}
+                                      {r.ok.length + r.err.length > 12 && (
+                                        <div className="text-muted">… và {r.ok.length + r.err.length - 12} video nữa</div>
+                                      )}
+                                    </div>
+                                  )}
+                                </Fragment>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                      <p className="text-[11px] text-muted">
+                        "✅ đã tải" đếm video tải xong nằm trong thư mục kênh (theo Lịch sử tải).
+                        Bấm 1 kênh để xem tên video + OK/lỗi.
+                      </p>
+                    </>
+                  );
+                })()
+              )}
             </div>
           </div>
         </div>
