@@ -139,20 +139,15 @@ export function WatchPage() {
     }
   };
 
-  /** Lấy THÊM 1 video hôm nay. Backend giống nhau (hoàn 1 suất + vét lấy
-   *  video kế tiếp theo view — video cũ đã ở done_ids nên không lặp).
-   *  mode "more" = giữ video cũ, tải thêm; "replace" = đổi (user tự xóa file cũ). */
-  const redoOne = async (k: Kenh, mode: "more" | "replace") => {
+  /** ➕ Tải THÊM 1 video hôm nay: hoàn 1 suất + vét lấy video kế tiếp theo
+   *  view (video cũ đã ở done_ids nên không lặp), GIỮ video đã tải. */
+  const redoOne = async (k: Kenh) => {
     if (busyKenh[k.key]) return;
     // Hoàn suất trên đúng key đã tải hôm nay (thường là 1).
     const doneKey = k.keys.find(
       (c) => c.dripDate === todayStr && (c.dripCount ?? 0) > 0,
     );
     if (!doneKey) return;
-    if (mode === "replace" &&
-        !window.confirm("Đổi video: sẽ tải 1 video KHÁC. Nhớ tự XÓA file video cũ trong thư mục kênh nếu không dùng. Tiếp tục?")) {
-      return;
-    }
     setBusyKenh((m) => ({ ...m, [k.key]: true }));
     setError(null);
     try {
@@ -626,30 +621,17 @@ export function WatchPage() {
                 </button>
               )}
               {downloadedToday && (
-                <>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void redoOne(k, "more");
-                    }}
-                    disabled={!!busyKenh[k.key]}
-                    className="px-2 py-0.5 rounded-md bg-accent/15 border border-accent text-fg text-xs shrink-0 disabled:opacity-50"
-                    title={"TẢI THÊM 1 video nữa cho hôm nay (GIỮ video đã tải, lấy thêm cái kế tiếp theo view).\nDùng khi muốn nhiều hơn 1 video/ngày để làm."}
-                  >
-                    {busyKenh[k.key] ? "…" : "➕ Tải thêm"}
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void redoOne(k, "replace");
-                    }}
-                    disabled={!!busyKenh[k.key]}
-                    className="px-2 py-0.5 rounded-md bg-surface-2 border border-border text-fg text-xs shrink-0 disabled:opacity-50"
-                    title={"ĐỔI video: không ưng video hôm nay → lấy ngay video KHÁC thay thế.\n⚠ Nhớ XÓA file không ưng trong thư mục 📁 trước khi bên cắt chạy."}
-                  >
-                    {busyKenh[k.key] ? "…" : "🔄 Đổi video"}
-                  </button>
-                </>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void redoOne(k);
+                  }}
+                  disabled={!!busyKenh[k.key]}
+                  className="px-2 py-0.5 rounded-md bg-accent/15 border border-accent text-fg text-xs shrink-0 disabled:opacity-50"
+                  title={"TẢI THÊM 1 video nữa cho hôm nay (GIỮ video đã tải, lấy thêm cái kế tiếp theo view).\nDùng khi muốn nhiều hơn 1 video/ngày để làm."}
+                >
+                  {busyKenh[k.key] ? "…" : "➕ Tải thêm"}
+                </button>
               )}
               {!dry && mode === "picked" && pickedTotal === 0 && (
                 <span className="text-xs text-warning shrink-0">⚠ hết hàng chờ</span>
