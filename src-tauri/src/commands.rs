@@ -1516,8 +1516,11 @@ pub async fn check_watched_now(
     queue: State<'_, Arc<QueueManager>>,
     settings: State<'_, Arc<SettingsStore>>,
     history: State<'_, Arc<HistoryStore>>,
+    // Nhóm ĐANG XEM trên UI ("" = Chưa phân nhóm; bỏ trống/None = mọi nhóm).
+    // Chỉ chạy kênh của đúng nhóm này -> không kích các nhóm khác.
+    group: Option<String>,
 ) -> AppResult<Vec<WatchedChannel>> {
-    Ok(crate::watcher::check_all(&app, store.inner(), queue.inner(), settings.inner(), history.inner()).await)
+    Ok(crate::watcher::check_all(&app, store.inner(), queue.inner(), settings.inner(), history.inner(), group).await)
 }
 
 // ---------- Junk cleanup ----------

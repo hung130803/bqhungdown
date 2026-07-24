@@ -990,6 +990,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chay_dung_nhom_dang_xem_khong_kich_nhom_khac() {
+        // None = mọi nhóm -> mọi kênh khớp.
+        assert!(channel_in_group(Some("Mỹ"), None));
+        assert!(channel_in_group(None, None));
+        // Chọn "Mỹ" -> chỉ kênh Mỹ; kênh "Hàn"/chưa-nhóm KHÔNG khớp.
+        assert!(channel_in_group(Some("Mỹ"), Some("Mỹ")));
+        assert!(!channel_in_group(Some("Hàn"), Some("Mỹ")));
+        assert!(!channel_in_group(None, Some("Mỹ")));
+        // Chọn "" (Chưa phân nhóm) -> khớp kênh chưa gán nhóm hoặc group="".
+        assert!(channel_in_group(None, Some("")));
+        assert!(channel_in_group(Some(""), Some("")));
+        assert!(!channel_in_group(Some("Mỹ"), Some("")));
+    }
+
+    #[test]
     fn parse_archive_lay_dung_id_va_bo_dong_rong() {
         // yt-dlp ghi "<extractor> <id>"; lấy token cuối. Dòng rỗng/khoảng
         // trắng bỏ qua. Trùng gộp về set.
@@ -1507,6 +1522,16 @@ pub async fn force_one_more(
 /// (Việc TẢI video vẫn theo hạn mức tải song song riêng của hàng đợi.)
 const CHECK_CONCURRENCY: usize = 3;
 
+/// Kênh có nằm trong nhóm cần chạy không. `filter=None` → mọi nhóm; `Some(g)`
+/// → chỉ nhóm g. Nhóm của kênh chưa đặt (None) coi như "" ("Chưa phân nhóm"),
+/// nên chạy nhóm "" sẽ khớp cả kênh chưa gán nhóm.
+fn channel_in_group(chan_group: Option<&str>, filter: Option<&str>) -> bool {
+    match filter {
+        None => true,
+        Some(g) => chan_group.unwrap_or("") == g,
+    }
+}
+
 /// Quét MỌI kênh đang bật — chạy SONG SONG tối đa `CHECK_CONCURRENCY` kênh
 /// một lúc (trước đây nối đuôi từng kênh → kênh sau phải đợi kênh trước
 /// quét xong mới chạy, rất lâu với nhiều kênh). Trả về danh sách đã cập nhật.
@@ -1516,6 +1541,10 @@ pub async fn check_all(
     queue: &Arc<QueueManager>,
     settings_store: &Arc<SettingsStore>,
     history: &Arc<HistoryStore>,
+    // Some(g) = CHỈ chạy kênh thuộc nhóm g ("" = "Chưa phân nhóm"); None = mọi
+    // nhóm. Nút "Chạy tất cả" trên UI truyền nhóm ĐANG XEM để KHÔNG kích cả các
+    // nhóm khác; vòng theo dõi nền truyền None (canh mọi nhóm).
+    group: Option<String>,
 ) -> Vec<crate::models::WatchedChannel> {
     use tokio::sync::Semaphore;
     use tokio::task::JoinSet;
@@ -1524,6 +1553,7 @@ pub async fn check_all(
         .list()
         .into_iter()
         .filter(|c| c.enabled)
+        .filter(|c| channel_in_group(c.group.as_deref(), group.as_deref()))
         .map(|c| c.id)
         .collect();
     let sem = Arc::new(Semaphore::new(CHECK_CONCURRENCY));
@@ -1559,7 +1589,8 @@ pub fn spawn_monitor(
             // Mặc định TẮT: kênh chỉ tải khi user CHÍNH TAY bấm ▶ Chạy tất
             // cả / ▶ từng kênh. Bật watch_auto_enabled mới tự quét nền.
             if settings_store.get().watch_auto_enabled {
-                let _ = check_all(&app, &store, &queue, &settings_store, &history).await;
+                // Nền canh MỌI nhóm.
+                let _ = check_all(&app, &store, &queue, &settings_store, &history, None).await;
             }
             let interval_min = settings_store.get().watch_interval_min.clamp(1, 1440);
             tokio::time::sleep(Duration::from_secs(interval_min as u64 * 60)).await;

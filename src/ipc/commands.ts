@@ -719,10 +719,14 @@ export async function setWatchedGroup(
   return invoke<WatchedChannel | null>("set_watched_group", { id, group });
 }
 
-export async function checkWatchedNow(): Promise<WatchedChannel[]> {
+// group: nhóm ĐANG XEM trên UI ("" = Chưa phân nhóm; null/undefined = mọi
+// nhóm). Chỉ chạy kênh của đúng nhóm này -> không kích các nhóm khác.
+export async function checkWatchedNow(group?: string | null): Promise<WatchedChannel[]> {
   if (IS_WEB) return [];
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<WatchedChannel[]>("check_watched_now");
+  return invoke<WatchedChannel[]>("check_watched_now", {
+    group: group ?? null,
+  });
 }
 
 export async function setWatchedAutoDownload(id: string, auto: boolean): Promise<WatchedChannel | null> {
