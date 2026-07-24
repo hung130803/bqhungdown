@@ -264,15 +264,16 @@ fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
 /// `tab` is one of: "videos", "shorts", "streams", or empty/other (leave as-is).
 /// Video này CÓ PHẢI SHORTS không (để chế độ "Video dài" không rót nhầm)?
 /// YouTube nay trộn Shorts vào tab /videos nên KHÔNG chỉ dựa tab. Dấu hiệu:
-/// URL có "/shorts/" · thời lượng <=90s · tiêu đề/hashtag có #shorts/#short.
-/// Ngưỡng 90s (không phải 60s): YouTube Shorts nay tới 3 phút, nhiều short
-/// chạy 61-90s (1:01, 1:26…) — 60s bỏ lọt nên xếp nhầm vào "Video dài".
-/// (Với kênh reup, clip <=90s quá ngắn để cắt highlight -> coi như short.)
+/// URL có "/shorts/" · thời lượng <=180s · tiêu đề/hashtag có #shorts/#short.
+/// NGƯỠNG 180s = ĐÚNG giới hạn YouTube Shorts (tới 3 phút). Video >180s mới
+/// chắc chắn là video dài; short nay chạy tới 1:47, 2:30, 3:00 — ngưỡng thấp
+/// hơn (60/90s) bỏ lọt, xếp nhầm vào "Video dài".
+/// (Với kênh reup, clip <=180s quá ngắn để cắt highlight -> coi như short.)
 /// Hàm THUẦN để unit-test.
 pub(crate) fn looks_like_short(v: &ChannelVideo) -> bool {
     let tl = v.title.to_lowercase();
     v.url.contains("/shorts/")
-        || v.duration_sec.map(|d| d > 0 && d <= 90).unwrap_or(false)
+        || v.duration_sec.map(|d| d > 0 && d <= 180).unwrap_or(false)
         || tl.contains("#shorts")
         || tl.contains("#short")
         || v.hashtags.iter().any(|h| {
@@ -1349,14 +1350,16 @@ mod tests {
             "'Why Are Your Pants Half Off?' #shorts #cops", None, &[])));
         // hashtag "shorts"
         assert!(looks_like_short(&v("https://y/watch?v=3", "x", None, &["#shorts"])));
-        // Short 61-90s (ca NEP&UNC: 1:01, 1:26) -> PHẢI nhận là short
+        // Short 61-180s (NEP&UNC: 1:01, 1:26, 1:47=107s, tới 3:00) -> short
         assert!(looks_like_short(&v("https://y/watch?v=1a", "I dressed as a gang member", Some(61), &[])));
         assert!(looks_like_short(&v("https://y/watch?v=1b", "old age filter", Some(86), &[])));
-        // 90s = biên -> vẫn short
-        assert!(looks_like_short(&v("https://y/watch?v=1c", "x", Some(90), &[])));
-        // 91s trở lên (không dấu hiệu khác) -> video dài, KHÔNG loại nhầm
-        assert!(!looks_like_short(&v("https://y/watch?v=1d", "2 phút clip", Some(120), &[])));
-        // VIDEO DÀI thật: watch, dài >90s, không #shorts -> KHÔNG phải short
+        assert!(looks_like_short(&v("https://y/watch?v=1e", "v Card reaction", Some(107), &[]))); // 1:47
+        assert!(looks_like_short(&v("https://y/watch?v=1f", "2m30 short", Some(150), &[])));
+        // 180s = biên (giới hạn Shorts YouTube) -> vẫn short
+        assert!(looks_like_short(&v("https://y/watch?v=1c", "x", Some(180), &[])));
+        // 181s trở lên (không dấu hiệu khác) -> video dài, KHÔNG loại nhầm
+        assert!(!looks_like_short(&v("https://y/watch?v=1d", "hơn 3 phút", Some(200), &[])));
+        // VIDEO DÀI thật: watch, dài >180s, không #shorts -> KHÔNG phải short
         assert!(!looks_like_short(&v("https://y/watch?v=4",
             "Traffic Stop Treasures | Cops TV Show", Some(720), &["cops"])));
         // không có duration + không dấu hiệu -> coi là dài (không loại nhầm)

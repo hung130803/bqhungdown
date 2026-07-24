@@ -475,8 +475,8 @@ fn parse_video_item(it: &Value) -> Option<(String, ChannelVideo)> {
         .map(|s| s.to_string());
     let hashtags = extract_hashtags(&title, description);
     // YouTube Data API không gắn cờ Shorts; dùng heuristic thời lượng ngắn
-    // (≤ 90s) khớp looks_like_short — Short nay tới 3 phút, nhiều cái 61-90s.
-    let is_short = duration_sec.map(|d| d > 0 && d <= 90).unwrap_or(false);
+    // (≤ 180s) khớp looks_like_short — đúng giới hạn YouTube Shorts (3 phút).
+    let is_short = duration_sec.map(|d| d > 0 && d <= 180).unwrap_or(false);
     Some((
         id.clone(),
         ChannelVideo {
