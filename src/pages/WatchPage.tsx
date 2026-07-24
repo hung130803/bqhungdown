@@ -530,6 +530,24 @@ export function WatchPage() {
 
   const checkNow = async () => {
     if (checking) return;
+    // XÁC NHẬN trước khi chạy hàng loạt — tránh bấm nhầm kích cả loạt kênh.
+    // Đếm theo KÊNH đích đang tích (gom key cùng tên), không đếm theo key.
+    const enabledKenh = new Set(
+      channels
+        .filter((c) => c.enabled)
+        .map((c) => c.targetName?.trim() || (c.destDir ? baseName(c.destDir) : c.id)),
+    ).size;
+    if (enabledKenh === 0) {
+      setError("Chưa có kênh nào đang tích ✓ để chạy — tích kênh muốn chạy rồi thử lại.");
+      return;
+    }
+    const ok = await cmd.confirmDialog(
+      `Chạy TẤT CẢ ${enabledKenh} kênh đang tích ✓ ngay bây giờ?\n\n` +
+        "Mỗi kênh sẽ tự tải cho đủ hạn mức hôm nay (1-3 video/ngày).\n" +
+        "Kênh đã đủ suất sẽ đứng yên, không tải trùng.",
+      "Chạy tất cả?",
+    );
+    if (!ok) return;
     setChecking(true);
     setError(null);
     try {
