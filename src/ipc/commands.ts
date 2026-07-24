@@ -631,6 +631,20 @@ export async function archivedVideoIds(): Promise<string[]> {
   return invoke<string[]>("archived_video_ids");
 }
 
+/** ⛔ BỎ QUA (hoặc gỡ bỏ qua) danh sách video của 1 kênh — mọi đường lấy
+ *  video né vĩnh viễn. Trả về kênh đã cập nhật (hoặc null nếu không có). */
+export async function setVideosSkipped(
+  id: string,
+  videoIds: string[],
+  skipped: boolean,
+): Promise<WatchedChannel | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<WatchedChannel | null>("set_videos_skipped", {
+    id, videoIds, skipped,
+  });
+}
+
 /** KHOÁ TÊN file video đang nằm trong các thư mục lưu (chữ+số thường hoá)
  *  — nhận diện "đã tải" cả khi chỉ còn FILE trên đĩa (không còn sổ nào). */
 export async function downloadedTitleKeys(): Promise<string[]> {

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import * as cmd from "@/ipc/commands";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useQueueStore } from "@/stores/useQueueStore";
@@ -400,6 +400,44 @@ export function WatchPage() {
         ? sel.filter((p) => p.id !== id)
         : [...sel, { id, url: v.url, title: v.title, viewCount: v.viewCount ?? null, thumbnail: v.thumbnail ?? null }],
     );
+  };
+  /** Đặt trạng thái tích của 1 video về đúng `on` (dùng cho KÉO-CHỌN). */
+  const setPickTo = (v: ChannelVideo, on: boolean) => {
+    const id = videoIdOf(v.url);
+    setPickerSel((sel) => {
+      const has = sel.some((p) => p.id === id);
+      if (on && !has) {
+        return [...sel, { id, url: v.url, title: v.title, viewCount: v.viewCount ?? null, thumbnail: v.thumbnail ?? null }];
+      }
+      if (!on && has) return sel.filter((p) => p.id !== id);
+      return sel;
+    });
+  };
+  // KÉO-CHỌN: đè chuột lên 1 dòng rồi KÉO xuống — các dòng lướt qua tự tích
+  // (hoặc tự bỏ tích, theo trạng thái dòng đầu). Đỡ phải tick từng cái.
+  const dragSel = useRef<{ on: boolean; target: boolean }>({ on: false, target: true });
+  useEffect(() => {
+    const up = () => { dragSel.current.on = false; };
+    window.addEventListener("mouseup", up);
+    return () => window.removeEventListener("mouseup", up);
+  }, []);
+
+  // ⛔ Video user chủ động BỎ QUA của kênh đang mở kho.
+  const isSkipped = (id: string) =>
+    pickerFor?.skippedIds?.includes(id) ?? false;
+  /** ⛔ BỎ QUA các video ĐANG TÍCH (hoặc gỡ 1 video khỏi sổ bỏ-qua). */
+  const skipSelected = async (ids: string[], skipped: boolean) => {
+    if (!pickerFor || ids.length === 0) return;
+    try {
+      const updated = await cmd.setVideosSkipped(pickerFor.id, ids, skipped);
+      if (updated) setPickerFor(updated);          // badge ⛔ hiện/mất ngay
+      if (skipped) {
+        setPickerSel((sel) => sel.filter((p) => !ids.includes(p.id)));
+      }
+      void reload();                                // lưu bền, danh sách tươi
+    } catch (e) {
+      setPickerErr(formatErr(e));
+    }
   };
 
   const savePicker = async () => {
@@ -1863,30 +1901,46 @@ export function WatchPage() {
               )}
               {pickerShown.map((v) => {
                 const id = videoIdOf(v.url);
+                const skipped = isSkipped(id);           // ⛔ user bỏ qua
                 // đã tải = có trong sổ (archive/lịch sử) HOẶC file còn trên đĩa
                 const archived = isPickerArchived(id) || isOnDisk(v.title);
-                const done = isPickerDone(id) || archived;
+                const done = isPickerDone(id) || archived || skipped;
                 const sel = pickerSel.some((p) => p.id === id);
                 const order = sel ? pickerSel.findIndex((p) => p.id === id) + 1 : 0;
                 return (
                   <label
                     key={id}
-                    // ĐÃ TẢI -> nền cam rõ + viền trái cam ĐẬM cho dễ thấy
-                    // (không làm mờ để vẫn đọc rõ); đã-làm khác vẫn mờ như cũ.
-                    style={archived ? {
+                    // ĐÃ TẢI -> nền cam; ⛔ BỎ QUA -> nền xám viền trái xám.
+                    style={skipped ? {
+                      background: "rgba(120,120,128,0.18)",
+                      borderLeft: "4px solid #9ca3af",
+                    } : archived ? {
                       background: "rgba(245,158,11,0.22)",
                       borderLeft: "4px solid #f59e0b",
                     } : undefined}
-                    className={`flex items-center gap-3 px-3 py-2 border-t border-border text-sm ${
-                      archived ? "" : done ? "opacity-50" : "cursor-pointer hover:bg-surface-2"
+                    className={`flex items-center gap-3 px-3 py-2 border-t border-border text-sm select-none ${
+                      archived || skipped ? "" : done ? "opacity-50" : "cursor-pointer hover:bg-surface-2"
                     }`}
+                    // KÉO-CHỌN: đè chuột dòng đầu (chốt tích/bỏ-tích theo dòng
+                    // đó) rồi kéo qua các dòng dưới -> tự tích hàng loạt.
+                    onMouseDown={(e) => {
+                      if (done) return;
+                      e.preventDefault();
+                      dragSel.current = { on: true, target: !sel };
+                      setPickTo(v, !sel);
+                    }}
+                    onMouseEnter={() => {
+                      if (dragSel.current.on && !done) {
+                        setPickTo(v, dragSel.current.target);
+                      }
+                    }}
                   >
                     <input
                       type="checkbox"
                       checked={sel}
                       disabled={done}
-                      onChange={() => togglePick(v)}
-                      className="h-4 w-4 shrink-0"
+                      readOnly
+                      className="h-4 w-4 shrink-0 pointer-events-none"
                     />
                     {/* Ảnh video — nhìn phát biết cái nào đáng làm */}
                     {v.thumbnail ? (
@@ -1907,7 +1961,15 @@ export function WatchPage() {
                         {v.viewCount != null && <>👁 {formatViews(v.viewCount)} · </>}
                         {v.durationSec != null && v.durationSec > 0 && <>⏱ {fmtDur(v.durationSec)} · </>}
                         {v.uploadDate && <>{timeAgo(v.uploadDate)} · </>}
-                        {archived ? (
+                        {skipped ? (
+                          <span style={{
+                            background: "#9ca3af", color: "#111",
+                            padding: "1px 7px", borderRadius: 999,
+                            fontWeight: 700, fontSize: 11,
+                          }}>
+                            ⛔ BỎ QUA
+                          </span>
+                        ) : archived ? (
                           <span style={{
                             background: "#f59e0b", color: "#1a1200",
                             padding: "1px 7px", borderRadius: 999,
@@ -1918,11 +1980,36 @@ export function WatchPage() {
                         ) : done ? "✅ đã làm" : sel ? `#${order} trong hàng chờ` : ""}
                       </div>
                     </div>
+                    {/* ↩ gỡ khỏi sổ bỏ-qua (đổi ý) */}
+                    {skipped && (
+                      <button
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          void skipSelected([id], false);
+                        }}
+                        className="px-2 py-0.5 rounded-md border border-border text-fg text-xs shrink-0 hover:bg-surface-2"
+                        title="Gỡ khỏi danh sách bỏ qua — cho phép tải lại video này"
+                      >
+                        ↩ Gỡ
+                      </button>
+                    )}
                   </label>
                 );
               })}
             </div>
             <div className="p-3 border-t border-border flex gap-2 justify-end">
+              {/* ⛔ BỎ QUA các video ĐANG TÍCH: hệ thống vĩnh viễn không tải
+                  các video này (mọi đường vét/chọn đều né). Gỡ lại bằng nút
+                  ↩ Gỡ trên từng dòng xám. */}
+              <button
+                onClick={() => void skipSelected(pickerSel.map((p) => p.id), true)}
+                disabled={pickerSel.length === 0}
+                className="px-3 py-1.5 rounded-md border border-border text-fg text-sm hover:bg-surface-2 disabled:opacity-40 mr-auto"
+                title={"BỎ QUA các video đang tích: coi như không tồn tại — vét/tải không bao giờ chọn.\nMẹo: đè chuột 1 dòng rồi KÉO xuống để tích hàng loạt."}
+              >
+                ⛔ Bỏ qua ({pickerSel.length})
+              </button>
               <button
                 onClick={() => setPickerFor(null)}
                 className="px-3 py-1.5 rounded-md border border-border text-fg text-sm hover:bg-surface-2"

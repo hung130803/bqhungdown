@@ -253,6 +253,10 @@ pub struct WatchedChannel {
     /// "đã làm" để user không tích lại video cũ.
     #[serde(default)]
     pub done_ids: Vec<String>,
+    /// Id video user CHỦ ĐỘNG BỎ QUA (⛔ trong Kho video) — MỌI đường lấy
+    /// video (video mới / hàng chờ / vét / ➕ Tải thêm) không bao giờ chọn.
+    #[serde(default)]
+    pub skipped_ids: Vec<String>,
     /// Id video ĐANG TẢI qua dây chuyền (auto/drip/picked), CHƯA chốt xong.
     /// Chỉ chuyển sang `done_ids` khi tải THÀNH CÔNG (có trong history
     /// Completed). Nếu hủy/lỗi → gỡ khỏi đây + trả lại suất + gỡ seen_ids

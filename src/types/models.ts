@@ -252,6 +252,8 @@ export interface WatchedChannel {
   dripCount?: number;
   /** Id video đã tự tải — dialog kho đánh dấu "đã làm". */
   doneIds?: string[];
+  /** Id video user CHỦ ĐỘNG ⛔ BỎ QUA — mọi đường lấy video né vĩnh viễn. */
+  skippedIds?: string[];
   /** Id video đang tải qua dây chuyền (chưa chốt) — kho coi như "đang làm". */
   dlPending?: string[];
   /** true = kho nguồn ĐÃ CẠN (quét 🤖 không còn video chưa làm) — đổi key. */

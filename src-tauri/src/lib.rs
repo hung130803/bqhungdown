@@ -328,6 +328,7 @@ pub fn run() {
             commands::reconcile_watched,
             commands::archived_video_ids,
             commands::downloaded_title_keys,
+            commands::set_videos_skipped,
             commands::replace_watched_url,
             commands::download_pending,
             commands::dismiss_pending,

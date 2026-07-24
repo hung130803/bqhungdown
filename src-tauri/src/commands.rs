@@ -1124,6 +1124,7 @@ pub async fn add_watched_channel(
         drip_date: None,
         drip_count: 0,
         done_ids: vec![],
+        skipped_ids: vec![],
         dl_pending: vec![],
         source_empty: false,
         last_pick: None,
@@ -1289,6 +1290,30 @@ pub fn archived_video_ids(
     crate::watcher::downloaded_ids(&app, history.inner(), &st)
         .into_iter()
         .collect()
+}
+
+/// ⛔ BỎ QUA video theo tay user (Kho video): thêm/gỡ danh sách id vào
+/// `skipped_ids` của kênh — mọi đường lấy video không bao giờ chọn các id
+/// này. `skipped=true` thì đồng thời RÚT chúng khỏi hàng chờ đã tích.
+#[tauri::command]
+pub fn set_videos_skipped(
+    id: String,
+    video_ids: Vec<String>,
+    skipped: bool,
+    store: State<Arc<WatchlistStore>>,
+) -> AppResult<Option<WatchedChannel>> {
+    Ok(store.update(&id, |c| {
+        if skipped {
+            for v in &video_ids {
+                if !c.skipped_ids.contains(v) {
+                    c.skipped_ids.push(v.clone());
+                }
+            }
+            c.picked.retain(|p| !video_ids.contains(&p.id));
+        } else {
+            c.skipped_ids.retain(|v| !video_ids.contains(v));
+        }
+    })?)
 }
 
 /// KHOÁ TÊN (chữ+số thường hoá) của FILE VIDEO đang nằm trong các thư mục

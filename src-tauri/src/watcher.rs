@@ -256,6 +256,7 @@ async fn apply(
         fetched.iter()
             .filter(|f| !seen.contains(&f.id)
                 && !downloaded.contains(&f.id)
+                && !channel.skipped_ids.contains(&f.id)   // ⛔ user bỏ qua
                 && !on_disk(&f.video.title))
             .cloned()
             .collect()
@@ -331,7 +332,9 @@ async fn apply(
         // 1. Hàng chờ tích trước (video mới đã chiếm suất ở trên nếu có);
         //    bỏ video ĐÃ TẢI (archive ∪ lịch sử — `downloaded` ở trên).
         dripped = plan_drip(channel, drip_count);
-        dripped.retain(|p| !downloaded.contains(&p.id) && !on_disk(&p.title));
+        dripped.retain(|p| !downloaded.contains(&p.id)
+            && !channel.skipped_ids.contains(&p.id)
+            && !on_disk(&p.title));
         let after_picked = drip_count + dripped.len() as u32;
         // 2. Còn suất → vét kho view cao nhất (quét TỐI ĐA 1 lần/ngày).
         if after_picked < limit
@@ -344,6 +347,7 @@ async fn apply(
             // Loại video đã làm + vừa lấy từ hàng chờ + ĐÃ TẢI
             // (archive ∪ lịch sử Completed — không bao giờ vét lại đồ cũ).
             let mut done_plus: Vec<String> = channel.done_ids.clone();
+            done_plus.extend(channel.skipped_ids.clone());  // ⛔ user bỏ qua
             done_plus.extend(channel.dl_pending.clone());
             done_plus.extend(dripped.iter().map(|p| p.id.clone()));
             done_plus.extend(downloaded.iter().cloned());
@@ -956,6 +960,22 @@ mod tests {
     }
 
     #[test]
+    fn bo_qua_thu_cong_khong_rot_khong_vet() {
+        // User ⛔ bỏ qua "a": hàng chờ tích KHÔNG rót "a", vét KHÔNG chọn "a"
+        // (dù nhiều view nhất) — đúng luồng apply()/force_one_more dùng.
+        let mut c = chan(vec![pv("a"), pv("b")], 2, vec![]);
+        c.skipped_ids = vec!["a".into()];
+        let mut dripped = plan_drip(&c, 0);
+        dripped.retain(|p| !c.skipped_ids.contains(&p.id));
+        assert_eq!(dripped.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+                   vec!["b"]);
+        let vids = vec![cv("a", Some(999), false), cv("b", Some(1), false)];
+        let got = pick_auto_candidates(&vids, &c.skipped_ids, 5, "all");
+        assert_eq!(got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+                   vec!["b"]);
+    }
+
+    #[test]
     fn khoa_ten_va_quet_dia_nhan_dien_file_da_tai() {
         // Khoá tên: bỏ ký tự cấm/khoảng trắng, thường hoá — tiêu đề YouTube
         // và tên file yt-dlp (sanitize khác nhau) ra CÙNG một khoá.
@@ -1054,6 +1074,7 @@ mod tests {
             drip_date: None,
             drip_count: 0,
             done_ids: done,
+            skipped_ids: vec![],
             dl_pending: vec![],
             source_empty: false,
             last_pick: None,
@@ -1384,6 +1405,7 @@ pub async fn force_one_more(
         .iter()
         .find(|p| !channel.done_ids.contains(&p.id)
             && !channel.dl_pending.contains(&p.id)
+            && !channel.skipped_ids.contains(&p.id)   // ⛔ user bỏ qua
             && !downloaded.contains(&p.id)
             && !on_disk(&p.title))
         .cloned();
@@ -1392,6 +1414,7 @@ pub async fn force_one_more(
     if cand.is_none() {
         let tab = if channel.tab == "shorts" { "shorts".to_string() } else { "videos".to_string() };
         let mut done_plus = channel.done_ids.clone();
+        done_plus.extend(channel.skipped_ids.clone());    // ⛔ user bỏ qua
         done_plus.extend(channel.dl_pending.clone());
         done_plus.extend(downloaded.iter().cloned());
         // KHO CẢ KÊNH (đã lưu → lấy thẳng; cạn → quét lại 1 phát).
