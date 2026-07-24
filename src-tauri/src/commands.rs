@@ -674,6 +674,37 @@ pub async fn validate_youtube_api_key(key: String) -> AppResult<()> {
     crate::youtube_api::validate_key(&key).await
 }
 
+/// Quota ƯỚC TÍNH đã tiêu HÔM NAY cho từng YouTube API key (theo chính app).
+/// YouTube không cho query quota còn lại → đây là ước tính từ số request app
+/// tự đếm. Trả về danh sách đúng thứ tự key trong Cài đặt.
+#[derive(serde::Serialize)]
+pub struct ApiKeyUsage {
+    pub used: u32,
+    pub quota: u32,
+    pub remaining: u32,
+}
+
+#[derive(serde::Serialize)]
+pub struct ApiUsageReport {
+    /// Ngày (giờ Thái Bình Dương) của số liệu — mốc reset của Google.
+    pub day: String,
+    pub keys: Vec<ApiKeyUsage>,
+}
+
+#[tauri::command]
+pub fn youtube_api_usage(settings: State<Arc<SettingsStore>>) -> ApiUsageReport {
+    let keys = settings.get().youtube_api_keys.clone();
+    let (day, used) = crate::api_usage::snapshot(&keys);
+    let q = crate::api_usage::DAILY_QUOTA;
+    ApiUsageReport {
+        day,
+        keys: used
+            .into_iter()
+            .map(|u| ApiKeyUsage { used: u, quota: q, remaining: q.saturating_sub(u) })
+            .collect(),
+    }
+}
+
 // ---------- Filesystem helpers ----------
 
 #[tauri::command]

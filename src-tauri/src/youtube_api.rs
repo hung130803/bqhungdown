@@ -124,6 +124,7 @@ async fn api_get(
     client: &reqwest::Client,
     pool: &Arc<Mutex<KeyPool>>,
     url_no_key: &str,
+    cost: u32,
 ) -> AppResult<Value> {
     loop {
         // Đọc key hiện tại + index của nó, rồi NHẢ lock trước khi gọi mạng để
@@ -147,6 +148,10 @@ async fn api_get(
             }
             return Err(AppError::YtDlpFailed(friendly_api_error(err)));
         }
+        // Thành công → cộng `cost` đơn vị quota cho key này (channels/
+        // playlistItems/videos.list = 1; search.list = 100). Chỉ đếm request
+        // THÀNH CÔNG cho sát thực.
+        crate::api_usage::add(&key, cost);
         return Ok(body);
     }
 }
@@ -184,6 +189,7 @@ async fn api_get_opt(
             }
             return Err(AppError::YtDlpFailed(friendly_api_error(err)));
         }
+        crate::api_usage::add(&key, 1);
         return Ok(Some(body));
     }
 }
@@ -271,6 +277,7 @@ pub async fn validate_key(key: &str) -> AppResult<()> {
     if let Some(err) = body.get("error") {
         return Err(AppError::YtDlpFailed(friendly_api_error(err)));
     }
+    crate::api_usage::add(key, 1); // videos.list = 1 unit
     if body.get("items").and_then(|i| i.as_array()).is_some() {
         Ok(())
     } else {
@@ -404,7 +411,7 @@ async fn resolve_channel(
     };
 
     let url = format!("{API_BASE}/channels?part=snippet,contentDetails,statistics&{lookup}");
-    let body = api_get(client, pool, &url).await?;
+    let body = api_get(client, pool, &url, 1).await?;
     let item = body
         .get("items")
         .and_then(|i| i.as_array())
@@ -463,7 +470,7 @@ async fn search_channel_id(
 ) -> AppResult<String> {
     let q = urlencoding(query);
     let url = format!("{API_BASE}/search?part=snippet&type=channel&maxResults=1&q={q}");
-    let body = api_get(client, pool, &url).await?;
+    let body = api_get(client, pool, &url, 100).await?;
     body.pointer("/items/0/id/channelId")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
@@ -505,7 +512,7 @@ async fn list_upload_ids(
         let url = format!(
             "{API_BASE}/playlistItems?part=contentDetails&maxResults=50&playlistId={uploads_playlist}{token_param}"
         );
-        let body = api_get(client, pool, &url).await?;
+        let body = api_get(client, pool, &url, 1).await?;
         if let Some(items) = body.get("items").and_then(|i| i.as_array()) {
             for it in items {
                 if let Some(id) = it
@@ -595,7 +602,7 @@ async fn fetch_detail_chunk(
     let id_param = chunk.join(",");
     let url =
         format!("{API_BASE}/videos?part=snippet,statistics,contentDetails&id={id_param}");
-    let body = api_get(client, pool, &url).await?;
+    let body = api_get(client, pool, &url, 1).await?;
     let items = match body.get("items").and_then(|i| i.as_array()) {
         Some(a) => a,
         None => return Ok(Vec::new()),

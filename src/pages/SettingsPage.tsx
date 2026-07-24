@@ -101,6 +101,17 @@ export function SettingsPage() {
   };
   const maskKey = (k: string) =>
     k.length <= 12 ? k : `${k.slice(0, 8)}…${k.slice(-4)}`;
+  // Quota ƯỚC TÍNH đã tiêu hôm nay (theo app) cho từng key — tự làm mới 15s.
+  const [ytUsage, setYtUsage] = useState<import("../ipc/commands").ApiUsageReport | null>(null);
+  useEffect(() => {
+    if (ytKeys.length === 0) { setYtUsage(null); return; }
+    let alive = true;
+    const load = () => cmd.youtubeApiUsage().then(u => { if (alive) setYtUsage(u); }).catch(() => {});
+    void load();
+    const id = setInterval(load, 15000);
+    return () => { alive = false; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ytKeysJoined]);
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -351,10 +362,26 @@ export function SettingsPage() {
           {/* Danh sách key đã thêm, mỗi key 1 đèn xanh/đỏ */}
           {ytKeys.map((k, i) => {
             const st = ytStatuses[i] ?? "idle";
+            const u = ytUsage?.keys[i];
+            // % đã tiêu (ước tính) → thanh + màu cảnh báo khi gần cạn.
+            const pct = u ? Math.min(100, Math.round((u.used / u.quota) * 100)) : 0;
+            const barColor = pct >= 90 ? "bg-danger" : pct >= 70 ? "bg-warning" : "bg-success";
             return (
               <div key={`${k}-${i}`} className="flex items-center gap-2 px-3 py-2 rounded-md bg-surface border border-border">
                 <span className="text-sm shrink-0 w-6 text-muted">#{i + 1}</span>
-                <span className="font-mono text-xs text-fg flex-1 truncate" title={k}>{maskKey(k)}</span>
+                <div className="flex-1 min-w-0">
+                  <span className="font-mono text-xs text-fg truncate block" title={k}>{maskKey(k)}</span>
+                  {u && (
+                    <div className="flex items-center gap-1.5 mt-1" title={`Ước tính theo app: đã dùng ~${u.used.toLocaleString()} / ${u.quota.toLocaleString()} đơn vị hôm nay. YouTube không cho biết số thật — đây là số app tự đếm.`}>
+                      <div className="h-1.5 flex-1 max-w-[120px] rounded bg-surface-2 overflow-hidden">
+                        <div className={`h-full ${barColor}`} style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-[11px] text-muted shrink-0">
+                        còn ~{u.remaining.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                </div>
                 <span className="text-xs shrink-0">
                   {st === "ok" && <span className="text-success font-medium">🟢 OK</span>}
                   {st === "checking" && <span className="text-warning">⏳…</span>}
@@ -418,6 +445,13 @@ export function SettingsPage() {
         Thêm <b>nhiều key</b> để khi 1 key hết 10.000 lượt/ngày, app <b>tự nhảy sang key kế tiếp</b> (key
         hết sẽ hiện <span className="text-danger">🔴 Hết quota</span>). Để trống = dùng cách cũ (dò từng video, chậm).
       </p>
+      {ytKeys.length > 0 && (
+        <p className="text-xs text-muted -mt-2">
+          Thanh <b>"còn ~…"</b> là <b>ước tính theo app</b> (app tự đếm số lượt đã gọi hôm nay) — YouTube
+          không cho biết số quota thật, chỉ Google Cloud Console mới thấy chính xác. Số reset mỗi ngày
+          {ytUsage?.day ? ` (mốc ${ytUsage.day} giờ Thái Bình Dương)` : ""}. Nếu key còn dùng ở nơi khác thì số thật đã tiêu sẽ cao hơn.
+        </p>
+      )}
 
       {/* ── Nút cứu hộ: YouTube đổi luật → bấm 1 nút là tự vá ─────────────── */}
       <div className="rounded-lg border border-border bg-surface p-4 space-y-2">

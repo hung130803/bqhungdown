@@ -21,6 +21,7 @@ pub mod bilibili_wbi;
 pub mod clipboard;
 pub mod channel_fetcher;
 pub mod youtube_api;
+pub mod api_usage;
 pub mod channel_cache;
 pub mod ytdlp_runner;
 pub mod ytdlp_update;
@@ -69,6 +70,9 @@ pub fn run() {
                 .expect("app_data_dir resolves on supported platforms");
             std::fs::create_dir_all(&data_dir).ok();
             let db_path = data_dir.join("state.db");
+
+            // Bộ đếm ước tính quota YouTube API (theo app) — nạp số liệu hôm nay.
+            crate::api_usage::init(data_dir.join("api_usage.json"));
 
             // Initialize stores.
             let (settings_store, settings_warn) = SettingsStore::load(settings_path);
@@ -286,6 +290,7 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::validate_youtube_api_key,
+            commands::youtube_api_usage,
             commands::pick_folder,
             commands::pick_file,
             commands::check_folder_writable,

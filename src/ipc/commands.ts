@@ -354,6 +354,22 @@ export async function validateYoutubeApiKey(
   }
 }
 
+export interface ApiKeyUsage {
+  used: number;
+  quota: number;
+  remaining: number;
+}
+export interface ApiUsageReport {
+  day: string;
+  keys: ApiKeyUsage[];
+}
+/** Quota YouTube API ước tính đã tiêu hôm nay cho từng key (theo app). */
+export async function youtubeApiUsage(): Promise<ApiUsageReport> {
+  if (IS_WEB) return { day: "", keys: [] };
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<ApiUsageReport>("youtube_api_usage");
+}
+
 // ── Filesystem helpers ───────────────────────────────────────────────────────
 
 export async function pickFolder(): Promise<string | null> {
