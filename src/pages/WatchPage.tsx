@@ -393,14 +393,6 @@ export function WatchPage() {
     setPickerSel((sel) => sel.filter((p) => !shownIds.has(p.id)));
   };
 
-  const togglePick = (v: ChannelVideo) => {
-    const id = videoIdOf(v.url);
-    setPickerSel((sel) =>
-      sel.some((p) => p.id === id)
-        ? sel.filter((p) => p.id !== id)
-        : [...sel, { id, url: v.url, title: v.title, viewCount: v.viewCount ?? null, thumbnail: v.thumbnail ?? null }],
-    );
-  };
   /** Đặt trạng thái tích của 1 video về đúng `on` (dùng cho KÉO-CHỌN). */
   const setPickTo = (v: ChannelVideo, on: boolean) => {
     const id = videoIdOf(v.url);
@@ -811,32 +803,39 @@ export function WatchPage() {
           {isFirstInGroup && (
             <button
               onClick={() => setOpenGroups((m) => ({ ...m, [g]: !gOpen }))}
-              className="w-full flex items-center gap-2 pt-2 px-1 text-left"
-              title={gOpen ? "Gập nhóm" : "Mở nhóm"}
+              className="w-full flex items-center gap-2.5 mt-4 first:mt-0 px-3 py-2 text-left rounded-lg border border-border hover:brightness-95 transition"
+              style={{
+                background: `hsl(${hue} 60% 96%)`,
+                borderLeft: `4px solid hsl(${hue} 65% 50%)`,
+              }}
+              title={gOpen ? "Gập nhóm — bấm để thu gọn cả nhóm này" : "Mở nhóm — bấm để xổ danh sách kênh"}
             >
-              <span className="text-xs text-muted w-3">{gOpen ? "▾" : "▸"}</span>
-              <span
-                className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
-                style={{ background: `hsl(${groupHue(g)} 70% 55%)` }}
-              />
-              <span className="text-xs font-semibold text-fg uppercase tracking-wide">
+              <span className="text-sm text-muted w-4 shrink-0">{gOpen ? "▾" : "▸"}</span>
+              <span className="text-sm font-bold text-fg uppercase tracking-wide truncate">
                 🏷 {g || "Chưa phân nhóm"}
               </span>
-              <span className="text-xs text-muted">{inGroup.length} kênh</span>
+              <span
+                className="text-xs font-semibold px-2 py-0.5 rounded-full shrink-0 text-white"
+                style={{ background: `hsl(${hue} 55% 45%)` }}
+              >
+                {inGroup.length} kênh
+              </span>
               {gDry > 0 && (
-                <span className="text-xs text-danger font-medium">🔴 {gDry} hết video</span>
+                <span className="text-xs text-danger font-semibold px-2 py-0.5 rounded-full bg-danger/15 border border-danger shrink-0">
+                  🔴 {gDry} hết video
+                </span>
               )}
-              <div className="flex-1 border-t border-border" />
+              <span className="flex-1" />
+              <span className="text-xs text-muted shrink-0">{gOpen ? "thu gọn" : "mở ra"}</span>
             </button>
           )}
           {gOpen && (
           <div
-            className={`rounded-lg border bg-surface ${dry ? "border-danger" : "border-border"}`}
-            style={{ borderLeft: `3px solid hsl(${hue} 70% 55%)` }}
+            className={`ml-3 rounded-xl border bg-surface shadow-sm ${dry ? "border-danger ring-1 ring-danger/30" : "border-border"} ${anyOn ? "" : "opacity-75"}`}
           >
             {/* Dòng THU GỌN của kênh — bấm để xổ chi tiết */}
             <div
-              className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-2/50"
+              className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer hover:bg-surface-2/50 rounded-xl"
               onClick={() => setOpenKenh((m) => ({ ...m, [k.key]: !kOpen }))}
             >
               <span className="text-xs text-muted w-3 shrink-0">{kOpen ? "▾" : "▸"}</span>
@@ -850,13 +849,21 @@ export function WatchPage() {
                 className="h-4 w-4 shrink-0"
                 title={anyOn ? "Kênh đang chạy — bỏ tích để tạm dừng mọi key" : "Kênh đang tạm dừng"}
               />
+              {/* Huy hiệu số thứ tự trong nhóm — màu nhóm, nhìn phát biết vị trí */}
+              <span
+                className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold text-white"
+                style={{ background: anyOn ? `hsl(${hue} 55% 45%)` : "hsl(0 0% 65%)" }}
+                title={`Kênh số ${stt} trong nhóm ${g || "Chưa phân nhóm"}`}
+              >
+                {stt}
+              </span>
               <span
                 className={`text-sm font-semibold truncate ${anyOn ? "text-fg" : "text-muted"}`}
               >
-                {stt}. {k.name || "(chưa đặt tên)"}
+                {k.name || "(chưa đặt tên)"}
               </span>
               {!anyOn && <span className="text-xs text-muted shrink-0">⏸ tạm dừng</span>}
-              <span className="text-xs text-muted shrink-0">{k.keys.length} key</span>
+              <span className="text-xs text-muted shrink-0 px-1.5 py-0.5 rounded bg-surface-2">{k.keys.length} key</span>
               {/* Đang chờ bao nhiêu video trong hàng chờ (đã tích) */}
               {pickedTotal > 0 && (
                 <span className="text-xs text-accent shrink-0" title="Số video trong HÀNG CHỜ (anh đã tích) — sẽ tải ưu tiên trước, hết mới vét view">
