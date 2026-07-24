@@ -408,8 +408,38 @@ export function WatchPage() {
   // KÉO-CHỌN: đè chuột lên 1 dòng rồi KÉO xuống — các dòng lướt qua tự tích
   // (hoặc tự bỏ tích, theo trạng thái dòng đầu). Đỡ phải tick từng cái.
   const dragSel = useRef<{ on: boolean; target: boolean }>({ on: false, target: true });
+  // TỰ CUỘN khi kéo tới mép khung: giữ chuột kéo xuống sát đáy -> danh sách
+  // tự trôi lên để chọn tiếp các video PHÍA DƯỚI (không chỉ phần đang hiện).
+  // Khi list trôi dưới con trỏ, trình duyệt tự bắn onMouseEnter từng dòng ->
+  // vẫn tích đúng theo target đã chốt lúc onMouseDown.
+  const pickerScrollRef = useRef<HTMLDivElement | null>(null);
+  const dragScroll = useRef<{ y: number; raf: number | null }>({ y: 0, raf: null });
+  const stepAutoScroll = () => {
+    const el = pickerScrollRef.current;
+    if (!el || !dragSel.current.on) { dragScroll.current.raf = null; return; }
+    const r = el.getBoundingClientRect();
+    const edge = 60;                     // vùng nhạy sát trên/dưới
+    const y = dragScroll.current.y;
+    let dy = 0;
+    if (y < r.top + edge) dy = -Math.min(24, (r.top + edge - y) * 0.4 + 4);
+    else if (y > r.bottom - edge) dy = Math.min(24, (y - (r.bottom - edge)) * 0.4 + 4);
+    if (dy !== 0) el.scrollTop += dy;
+    dragScroll.current.raf = requestAnimationFrame(stepAutoScroll);
+  };
+  const beginDragAutoScroll = (clientY: number) => {
+    dragScroll.current.y = clientY;
+    if (dragScroll.current.raf == null) {
+      dragScroll.current.raf = requestAnimationFrame(stepAutoScroll);
+    }
+  };
   useEffect(() => {
-    const up = () => { dragSel.current.on = false; };
+    const up = () => {
+      dragSel.current.on = false;
+      if (dragScroll.current.raf != null) {
+        cancelAnimationFrame(dragScroll.current.raf);
+        dragScroll.current.raf = null;
+      }
+    };
     window.addEventListener("mouseup", up);
     return () => window.removeEventListener("mouseup", up);
   }, []);
@@ -1899,7 +1929,13 @@ export function WatchPage() {
                 🔄 Làm mới
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto">
+            <div
+              ref={pickerScrollRef}
+              className="flex-1 overflow-y-auto"
+              onMouseMove={(e) => {
+                if (dragSel.current.on) beginDragAutoScroll(e.clientY);
+              }}
+            >
               {pickerLoading && (
                 <div className="p-6 text-center text-sm text-muted">Đang lấy kho video…</div>
               )}
