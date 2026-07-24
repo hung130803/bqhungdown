@@ -483,7 +483,13 @@ pub async fn fetch_channel(
 
     let mut info: Option<ChannelInfo> = None;
     let mut videos: Vec<ChannelVideo> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Dedup theo VIDEO-ID (KHÔNG theo URL): cùng 1 video ở tab /videos là
+    // `watch?v=X` còn ở /shorts là `/shorts/X` — KHÁC URL. Nếu dedup theo URL
+    // sẽ giữ CẢ 2 bản, và bản `watch` (is_short=false) rơi nhầm vào "Video
+    // dài". Dedup theo id + ƯU TIÊN cờ Short: id nào từng xuất hiện ở tab
+    // /shorts (hoặc là short) thì LUÔN là Short, bất kể bản kia nói gì.
+    let mut id_to_idx: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     // Keep the last real yt-dlp error so we can surface *why* nothing came back
     // (bot wall vs. private channel vs. network) instead of a generic message.
     let mut last_err: Option<String> = None;
@@ -508,7 +514,15 @@ pub async fn fetch_channel(
                     if mark_short || looks_like_short(&v) {
                         v.is_short = true;
                     }
-                    if seen.insert(v.url.clone()) {
+                    let id = extract_video_id(&v.url).unwrap_or_else(|| v.url.clone());
+                    if let Some(&idx) = id_to_idx.get(&id) {
+                        // Đã thấy id này ở tab trước -> KHÔNG thêm trùng, chỉ
+                        // gộp cờ Short (tab /shorts thắng bản /videos).
+                        if v.is_short {
+                            videos[idx].is_short = true;
+                        }
+                    } else {
+                        id_to_idx.insert(id, videos.len());
                         videos.push(v);
                     }
                 }
@@ -531,10 +545,8 @@ pub async fn fetch_channel(
     };
 
     // Sort descending by upload_date so newest videos come first.
+    // (Đã khử trùng theo video-id ngay trong vòng lặp merge phía trên.)
     videos.sort_by(|a, b| b.upload_date.cmp(&a.upload_date));
-
-    // Deduplicate across /videos + /shorts tabs.
-    videos = videos.into_iter().filter(|v| seen.remove(&v.url)).collect();
 
     // "Bỏ qua video đã tải" — hide entries already in the download-archive so
     // the user doesn't re-pick videos they've downloaded (and likely deleted
