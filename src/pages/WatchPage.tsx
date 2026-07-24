@@ -798,6 +798,24 @@ export function WatchPage() {
           // Mỗi NHÓM một màu viền trái cố định → lướt 50-300 kênh vẫn phân
           // biệt được nhóm nào với nhóm nào ngay bằng mắt.
           const hue = groupHue(g);
+          // MỘT chỉ báo trạng thái duy nhất cho cả hàng — gộp mọi tình huống
+          // (tạm dừng / hết video / đã tải / chờ lượt) thành 1 chip sạch, hết
+          // cảnh rối mắt vì 4-5 nhãn emoji chọi nhau.
+          const status = !anyOn
+            ? { label: "Tạm dừng", cls: "text-muted bg-surface-2" }
+            : dry
+            ? { label: "Hết video — đổi key", cls: "text-danger bg-danger/10" }
+            : downloadedToday
+            ? { label: `Đã tải ${dlToday} hôm nay`, cls: "text-success bg-success/10" }
+            : { label: "Chờ lượt", cls: "text-accent bg-accent/10" };
+          // Dòng phụ (màu nhạt): số key · loại · chế độ · hạn mức — thông tin
+          // cấu hình, tách khỏi tên kênh cho dễ đọc.
+          const meta = [
+            `${k.keys.length} key`,
+            (k.rep.tab === "shorts" ? "Shorts" : "Video dài"),
+            (mode === "new" ? "Video mới" : "Tự động"),
+            `${k.rep.dailyLimit ?? 1}/ngày`,
+          ].join("  ·  ");
           return (
           <Fragment key={k.key}>
           {isFirstInGroup && (
@@ -835,7 +853,7 @@ export function WatchPage() {
           >
             {/* Dòng THU GỌN của kênh — bấm để xổ chi tiết */}
             <div
-              className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer hover:bg-surface-2/50 rounded-xl"
+              className="flex items-center gap-3 px-3.5 py-2.5 cursor-pointer hover:bg-surface-2/40 rounded-xl"
               onClick={() => setOpenKenh((m) => ({ ...m, [k.key]: !kOpen }))}
             >
               <span className="text-xs text-muted w-3 shrink-0">{kOpen ? "▾" : "▸"}</span>
@@ -851,43 +869,34 @@ export function WatchPage() {
               />
               {/* Huy hiệu số thứ tự trong nhóm — màu nhóm, nhìn phát biết vị trí */}
               <span
-                className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold text-white"
-                style={{ background: anyOn ? `hsl(${hue} 55% 45%)` : "hsl(0 0% 65%)" }}
+                className="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold text-white"
+                style={{ background: anyOn ? `hsl(${hue} 55% 45%)` : "hsl(0 0% 68%)" }}
                 title={`Kênh số ${stt} trong nhóm ${g || "Chưa phân nhóm"}`}
               >
                 {stt}
               </span>
-              <span
-                className={`text-sm font-semibold truncate ${anyOn ? "text-fg" : "text-muted"}`}
-              >
-                {k.name || "(chưa đặt tên)"}
-              </span>
-              {!anyOn && <span className="text-xs text-muted shrink-0">⏸ tạm dừng</span>}
-              <span className="text-xs text-muted shrink-0 px-1.5 py-0.5 rounded bg-surface-2">{k.keys.length} key</span>
-              {/* Đang chờ bao nhiêu video trong hàng chờ (đã tích) */}
+              {/* KHỐI ĐỊNH DANH 2 tầng: tên (nổi) + dòng cấu hình (nhạt) */}
+              <div className="flex-1 min-w-0">
+                <div className={`text-sm font-semibold truncate leading-tight ${anyOn ? "text-fg" : "text-muted"}`}>
+                  {k.name || "(chưa đặt tên)"}
+                </div>
+                <div className="text-[11px] text-muted truncate leading-tight mt-0.5">
+                  {meta}
+                  {!dirOk && <span className="text-warning font-medium">  ·  ⚠ chưa có thư mục</span>}
+                </div>
+              </div>
+              {/* CỘT PHẢI căn thẳng hàng: hàng chờ · lỗi · trạng thái · nút */}
               {pickedTotal > 0 && (
-                <span className="text-xs text-accent shrink-0" title="Số video trong HÀNG CHỜ (anh đã tích) — sẽ tải ưu tiên trước, hết mới vét view">
-                  🎯 chờ {pickedTotal} video
+                <span
+                  className="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full text-accent bg-accent/10"
+                  title="Số video trong HÀNG CHỜ (anh đã tích) — tải ưu tiên trước, hết mới vét view"
+                >
+                  🎯 {pickedTotal}
                 </span>
               )}
-              {/* Trạng thái NGÀY HÔM NAY: ✅ đã tải N / ⏳ chưa / 🔴 hết nguồn */}
-              {downloadedToday ? (
-                <span className="text-xs text-success font-semibold shrink-0" title="Hôm nay kênh này đã tự tải — bên cắt cứ thế xử lý">
-                  ✅ đã tải {dlToday} video hôm nay
-                </span>
-              ) : dry ? (
-                <span className="text-xs text-danger font-semibold shrink-0">🔴 HẾT video — đổi key</span>
-              ) : anyOn ? (
-                <span className="text-xs text-muted shrink-0" title="Chưa có video nào tải hôm nay — bấm ▶ hoặc chờ lượt quét">
-                  ⏳ chưa tải hôm nay
-                </span>
-              ) : null}
-              {/* 🔴 KÊNH CÓ VIDEO TẢI LỖI (24h): hiện rõ số lỗi + LÝ DO khi
-                  rê chuột (giới hạn tuổi cần cookie, mạng…) — user biết ngay
-                  kênh nào cần xử lý, không bị "✅ thành công" che mất. */}
               {kErrs.length > 0 && (
                 <span
-                  className="text-xs text-danger font-bold shrink-0 px-1.5 py-0.5 rounded-md bg-danger/15 border border-danger cursor-help"
+                  className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full text-danger bg-danger/10 border border-danger/30 cursor-help"
                   title={
                     "Video tải LỖI (đang nằm ở tab Đang tải):\n"
                     + kErrs.slice(0, 3).map((h) =>
@@ -897,44 +906,43 @@ export function WatchPage() {
                     + "\n\nMở tab ĐANG TẢI để xem chi tiết / Thử lại."
                   }
                 >
-                  🔴 {kErrs.length} lỗi tải
+                  ⚠ {kErrs.length} lỗi
                 </span>
               )}
-              {/* ▶ chạy RIÊNG kênh này · 🔄 không ưng video hôm nay thì đổi cái khác */}
+              {/* MỘT chip trạng thái duy nhất — có chấm màu, đọc phát hiểu ngay */}
+              <span
+                className={`shrink-0 inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full ${status.cls}`}
+                title={
+                  !anyOn ? "Kênh đang tạm dừng — tích ô vuông để chạy lại"
+                  : dry ? "Kho video đã cạn — dán key nguồn mới để tải tiếp"
+                  : downloadedToday ? "Hôm nay kênh này đã tự tải xong — bên cắt cứ thế xử lý"
+                  : "Đang chờ tới lượt quét (hoặc bấm ▶ để chạy ngay)"
+                }
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                {status.label}
+              </span>
+              {/* NÚT hành động — vị trí cố định cuối hàng, luôn cùng chỗ */}
               {anyOn && !downloadedToday && (
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void runOne(k);
-                  }}
+                  onClick={(e) => { e.stopPropagation(); void runOne(k); }}
                   disabled={!!busyKenh[k.key]}
-                  className="px-2 py-0.5 rounded-md bg-accent text-accent-fg text-xs font-medium shrink-0 disabled:opacity-50"
+                  className="shrink-0 w-7 h-7 inline-flex items-center justify-center rounded-lg bg-accent text-accent-fg text-xs font-medium disabled:opacity-50"
                   title="Chạy RIÊNG kênh này ngay: có video mới thì tải, không có thì tự vét theo chế độ"
                 >
                   {busyKenh[k.key] ? "…" : "▶"}
                 </button>
               )}
-              {downloadedToday && (
+              {anyOn && downloadedToday && (
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void redoOne(k);
-                  }}
+                  onClick={(e) => { e.stopPropagation(); void redoOne(k); }}
                   disabled={!!busyKenh[k.key]}
-                  className="px-2 py-0.5 rounded-md bg-accent/15 border border-accent text-fg text-xs shrink-0 disabled:opacity-50"
+                  className="shrink-0 inline-flex items-center gap-1 px-2 h-7 rounded-lg border border-accent text-accent text-xs font-medium hover:bg-accent/10 disabled:opacity-50"
                   title={"TẢI THÊM 1 video nữa cho hôm nay (GIỮ video đã tải, lấy thêm cái kế tiếp theo view).\nDùng khi muốn nhiều hơn 1 video/ngày để làm."}
                 >
-                  {busyKenh[k.key] ? "…" : "➕ Tải thêm"}
+                  {busyKenh[k.key] ? "…" : "➕ Thêm"}
                 </button>
               )}
-              {!dirOk && <span className="text-xs text-warning shrink-0">⚠ thiếu thư mục</span>}
-              {k.keys.some((c) => c.lastError) && (
-                <span className="text-xs text-danger shrink-0">⚠ lỗi key</span>
-              )}
-              <span className="flex-1" />
-              <span className="text-[11px] text-muted shrink-0">
-                {mode === "new" ? "🆕" : "🤖"} · {k.rep.dailyLimit ?? 1}/ngày
-              </span>
             </div>
             {/* Kênh đang TẢI → thanh tiến trình + tốc độ ngay dưới (kể cả khi gập) */}
             {activeFor(k.rep.destDir).map((it) => {
