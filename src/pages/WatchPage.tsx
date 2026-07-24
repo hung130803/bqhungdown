@@ -542,19 +542,31 @@ export function WatchPage() {
 
   const checkNow = async () => {
     if (checking) return;
+    // CHỈ CHẠY NHÓM ĐANG XEM: nếu đang lọc 1 nhóm (groupFilter != null) thì chỉ
+    // kênh nhóm đó; groupFilter = null (xem hết) mới chạy mọi nhóm. Tránh lỗi
+    // "ấn 1 nhóm mà kích cả các nhóm khác".
+    const inActiveGroup = (c: { group?: string | null }) =>
+      groupFilter === null || (c.group?.trim() ?? "") === groupFilter;
     // XÁC NHẬN trước khi chạy hàng loạt — tránh bấm nhầm kích cả loạt kênh.
     // Đếm theo KÊNH đích đang tích (gom key cùng tên), không đếm theo key.
     const enabledKenh = new Set(
       channels
-        .filter((c) => c.enabled)
+        .filter((c) => c.enabled && inActiveGroup(c))
         .map((c) => c.targetName?.trim() || (c.destDir ? baseName(c.destDir) : c.id)),
     ).size;
+    const scopeTxt =
+      groupFilter === null
+        ? "mọi nhóm"
+        : `nhóm "${groupFilter || "Chưa phân nhóm"}"`;
     if (enabledKenh === 0) {
-      setError("Chưa có kênh nào đang tích ✓ để chạy — tích kênh muốn chạy rồi thử lại.");
+      setError(
+        `Chưa có kênh nào đang tích ✓ trong ${scopeTxt} để chạy — ` +
+          "tích kênh muốn chạy (hoặc bỏ lọc nhóm) rồi thử lại.",
+      );
       return;
     }
     const ok = await cmd.confirmDialog(
-      `Chạy TẤT CẢ ${enabledKenh} kênh đang tích ✓ ngay bây giờ?\n\n` +
+      `Chạy ${enabledKenh} kênh đang tích ✓ của ${scopeTxt} ngay bây giờ?\n\n` +
         "Mỗi kênh sẽ tự tải cho đủ hạn mức hôm nay (1-3 video/ngày).\n" +
         "Kênh đã đủ suất sẽ đứng yên, không tải trùng.",
       "Chạy tất cả?",
@@ -563,7 +575,7 @@ export function WatchPage() {
     setChecking(true);
     setError(null);
     try {
-      setChannels(await cmd.checkWatchedNow());
+      setChannels(await cmd.checkWatchedNow(groupFilter));
     } catch (e) {
       setError(formatErr(e));
     } finally {
@@ -703,7 +715,8 @@ export function WatchPage() {
         </button>
       </div>
       <p className="text-sm text-muted -mt-2">
-        Chỉ tải khi ANH BẤM ▶ (Chạy tất cả = mọi kênh đang tích ✓; kênh bỏ tích không tải).
+        Chỉ tải khi ANH BẤM ▶. Đang chọn 1 NHÓM → nút chỉ chạy kênh nhóm đó (bỏ chọn nhóm =
+        chạy mọi nhóm). Chỉ kênh đang tích ✓ mới chạy; bỏ tích không tải.
         Mỗi lần chạy: video MỚI → HÀNG CHỜ đã tích → hết thì vét video NHIỀU VIEW nhất chưa làm —
         vét cạn kho sẽ báo 🔴 để anh đổi key.
       </p>
@@ -736,9 +749,18 @@ export function WatchPage() {
           onClick={() => void checkNow()}
           disabled={checking || channels.length === 0}
           className="px-3 py-1.5 rounded-md bg-accent text-accent-fg font-medium disabled:opacity-50"
-          title={"Chạy MỌI kênh đang tích ✓ một phát — mỗi kênh tải cho ĐỦ hạn mức hôm nay của nó (1-3/ngày).\nBấm lại KHÔNG tải trùng: kênh đã đủ suất sẽ đứng yên (đổi hạn mức 1→2 rồi bấm ▶ là tải nốt phần chênh).\nMuốn VƯỢT hạn mức cho 1 kênh: dùng ➕ Tải thêm ở kênh đó (+1 mỗi lần bấm)."}
+          title={
+            (groupFilter === null
+              ? "Chạy MỌI kênh đang tích ✓ (mọi nhóm) một phát"
+              : `Chạy kênh đang tích ✓ của NHÓM "${groupFilter || "Chưa phân nhóm"}" — KHÔNG đụng nhóm khác`) +
+            " — mỗi kênh tải cho ĐỦ hạn mức hôm nay của nó (1-3/ngày).\nBấm lại KHÔNG tải trùng: kênh đã đủ suất sẽ đứng yên (đổi hạn mức 1→2 rồi bấm ▶ là tải nốt phần chênh).\nMuốn VƯỢT hạn mức cho 1 kênh: dùng ➕ Tải thêm ở kênh đó (+1 mỗi lần bấm)."
+          }
         >
-          {checking ? "Đang chạy…" : "▶ Chạy tất cả"}
+          {checking
+            ? "Đang chạy…"
+            : groupFilter === null
+              ? "▶ Chạy tất cả"
+              : `▶ Chạy nhóm ${groupFilter || "Chưa phân nhóm"}`}
         </button>
         {nActive > 0 && (
           <button
