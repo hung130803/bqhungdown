@@ -261,32 +261,32 @@ async fn apply(
             .cloned()
             .collect()
     };
-    // RSS KHÔNG trả thời lượng -> không nhận diện được Shorts. Probe duration
-    // cho các video mới thiếu thời lượng (chỉ vài cái, 1 batch --print) rồi
-    // mới lọc — kênh "Video dài" không bao giờ dính Shorts từ đường video-mới.
-    if !new_fetched.is_empty()
-        && new_fetched.iter().any(|f| f.video.duration_sec.is_none())
-    {
-        let cvs: Vec<ChannelVideo> =
-            new_fetched.iter().map(|f| f.video.clone()).collect();
-        if let Ok(probed) =
-            crate::channel_fetcher::probe_views(app, cvs, &settings).await
-        {
-            for f in new_fetched.iter_mut() {
-                if f.video.duration_sec.is_none() {
-                    if let Some(p) = probed.iter().find(|p| p.url == f.video.url) {
-                        f.video.duration_sec = p.duration_sec;
-                    }
+    // RSS KHÔNG cho biết tab -> phân loại Short bằng cách HỎI CHÍNH YOUTUBE
+    // từng video mới (redirect check /shorts/<id>) — CHUẨN 100%, không đoán
+    // thời lượng: kênh video-thường 2-5 phút vẫn tải bình thường, Short 3
+    // phút vẫn bị loại đúng. Chỉ vài video mới mỗi lượt nên rất nhẹ.
+    // Lỗi mạng -> fallback heuristic thời lượng (hiếm, thà lọc nhầm 1 lượt
+    // còn hơn tải nhầm Short vào kênh cắt).
+    for f in new_fetched.iter_mut() {
+        if f.video.is_short || f.video.url.contains("/shorts/") {
+            f.video.is_short = true;
+            continue;
+        }
+        let is_yt = f.video.url.contains("youtube.com") || f.video.url.contains("youtu.be");
+        if is_yt && !f.id.is_empty() {
+            match probe_is_short_http(&f.id).await {
+                Some(s) => f.video.is_short = s,
+                None => {
+                    f.video.is_short =
+                        crate::channel_fetcher::looks_like_short(&f.video);
                 }
             }
+        } else if crate::channel_fetcher::looks_like_short(&f.video) {
+            f.video.is_short = true;
         }
     }
     // Kênh "Video dài" LOẠI Shorts (và ngược lại) — tôn trọng cấu hình.
-    new_fetched.retain(|f| {
-        let sh = f.video.is_short
-            || crate::channel_fetcher::looks_like_short(&f.video);
-        sh == want_shorts
-    });
+    new_fetched.retain(|f| f.video.is_short == want_shorts);
     let new_count = new_fetched.len() as u32;
     let auto = channel.auto_download;
 
@@ -682,10 +682,16 @@ fn pick_auto_candidates(
         if v.is_photo {
             continue;
         }
-        // Nhận diện Shorts NGAY Ở KHÂU CHỌN (không chỉ dựa cờ is_short đã lưu):
-        // kho cache cũ có thể chưa đánh dấu -> tự soi lại (URL/duration/#shorts)
-        // để chế độ "Video dài" KHÔNG bao giờ rót nhầm Shorts.
-        let is_short = v.is_short || crate::channel_fetcher::looks_like_short(v);
+        // PHÂN LOẠI THEO TAB YOUTUBE: kho vét lấy theo tab (/videos hoặc
+        // /shorts) nên cờ is_short đã chuẩn từ nguồn (cache v5+ luôn có).
+        // Chỉ cộng thêm dấu hiệu CHẮC CHẮN (URL /shorts/, #shorts). KHÔNG
+        // dùng thời lượng -> kênh video-thường 2-5 phút vẫn được vét đủ,
+        // không video dài nào bị loại nhầm vì "ngắn".
+        let tl = v.title.to_lowercase();
+        let is_short = v.is_short
+            || v.url.contains("/shorts/")
+            || tl.contains("#shorts")
+            || tl.contains("#short");
         if want == "shorts" {
             if !is_short {
                 continue;
@@ -840,6 +846,40 @@ async fn fetch_rss_videos(channel_id: &str) -> Result<Vec<Fetched>, String> {
         .await
         .map_err(|e| e.to_string())?;
     Ok(parse_rss(&body))
+}
+
+/// Hỏi CHÍNH YouTube 1 video có phải Short không — CHUẨN 100%, không đoán
+/// thời lượng: GET `youtube.com/shorts/<id>` KHÔNG theo redirect.
+///   • 200 (OK)        -> LÀ Short (YouTube phục vụ trang Shorts thật)
+///   • 3xx (redirect)  -> KHÔNG phải Short (YouTube đá về /watch?v=<id>)
+///   • lỗi mạng/khác   -> None (caller tự fallback, không đoán bừa)
+/// Nhẹ (1 request HEAD-like, không tải body), chỉ dùng cho vài video MỚI
+/// mỗi lượt quét RSS nên không tốn kém.
+async fn probe_is_short_http(video_id: &str) -> Option<bool> {
+    let url = format!("https://www.youtube.com/shorts/{video_id}");
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .build()
+        .ok()?;
+    let resp = client
+        .get(&url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        )
+        .send()
+        .await
+        .ok()?;
+    let s = resp.status();
+    if s.is_redirection() {
+        return Some(false);
+    }
+    if s.is_success() {
+        return Some(true);
+    }
+    None
 }
 
 fn parse_rss(xml: &str) -> Vec<Fetched> {
