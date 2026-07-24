@@ -413,7 +413,12 @@ impl YtDlpRunner {
         let mut exit_code: Option<i32> = None;
         let started_at = std::time::Instant::now();
         let mut last_activity = std::time::Instant::now();
-        const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+        // 240s (không phải 90s): yt-dlp IM LẶNG hợp lệ khá lâu ở nhiều pha —
+        // trích format / tạo PO token (JS runtime nặng) / ffmpeg GHÉP video+
+        // audio file lớn (yt-dlp không in gì suốt lúc ghép) / YouTube bóp băng
+        // thông lúc chạy nhiều. 90s giết oan hàng loạt. 240s vẫn để HARD_TIMEOUT
+        // 30 phút bắt treo thật, và stall thật giờ được tự retry (xem queue).
+        const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(240);
         const HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
         let child_pid = child.pid();

@@ -1103,6 +1103,11 @@ impl QueueManager {
                 .unwrap_or(false)
         };
         let is_bot = crate::error::is_bot_error(&reason) || is_forbidden_yt;
+        // Watchdog giết vì "treo" thường là NGHẼN TẠM THỜI (YouTube bóp băng
+        // thông lúc chạy nhiều), không phải hỏng thật → tự thử lại sau nghỉ
+        // NGẮN (mượn cơ chế cooldown của bot) thay vì 3 lần nhanh rồi Failed
+        // cứng. Không ép update yt-dlp (không phải bot wall).
+        let is_stall = reason.contains("[watchdog] no activity");
         // Thông báo user-facing: tiếng Việt rõ ràng + hướng dẫn làm gì tiếp
         // (raw reason giữ lại ở dòng "Chi tiết kỹ thuật" để chẩn đoán).
         let friendly = crate::error::friendly_reason(&reason);
@@ -1117,22 +1122,29 @@ impl QueueManager {
         let (should_retry, delay) = {
             let mut map = self.items.write().unwrap();
             let it = match map.get_mut(&id) { Some(i) => i, None => return };
-            if is_bot {
-                // Rate-limited / bot wall: don't give up — wait the configured
-                // cooldown and retry (counted separately from `attempt`). The
-                // IP cools down (or a proxy rotates in) and it eventually lands.
+            if is_bot || is_stall {
+                // Nghẽn tạm / bot wall: đừng bỏ cuộc — nghỉ cooldown rồi tự thử
+                // lại (đếm riêng bằng bot_retries). IP hạ nhiệt (hoặc proxy xoay)
+                // là tải được. Stall (nghẽn) nghỉ NGẮN 1 phút; bot wall nghỉ
+                // theo cấu hình (mặc định lâu hơn).
                 if it.bot_retries < BOT_RETRY_CAP {
                     it.bot_retries += 1;
-                    let mins = settings_snapshot.rate_limit_cooldown_min.max(1);
+                    let mins = if is_stall { 1 } else { settings_snapshot.rate_limit_cooldown_min.max(1) };
                     let now = chrono::Local::now();
                     let retry_at = now + chrono::Duration::minutes(mins as i64);
-                    it.error_message = Some(format!(
-                        "⏳ YouTube đang giới hạn (lúc {}) — app sẽ TỰ tải lại lúc {} (lần {}). \
-                         Không cần làm gì; muốn nhanh hơn thì mở Cài đặt → bấm \"Sửa lỗi tải ngay\".",
-                        now.format("%H:%M"),
-                        retry_at.format("%H:%M"),
-                        it.bot_retries
-                    ));
+                    it.error_message = Some(if is_stall {
+                        format!(
+                            "🐌 Tải bị chậm/nghẽn (lúc {}) — app sẽ TỰ tải lại lúc {} (lần {}). \
+                             Không cần làm gì; giảm bớt kênh chạy cùng lúc sẽ nhanh hơn.",
+                            now.format("%H:%M"), retry_at.format("%H:%M"), it.bot_retries
+                        )
+                    } else {
+                        format!(
+                            "⏳ YouTube đang giới hạn (lúc {}) — app sẽ TỰ tải lại lúc {} (lần {}). \
+                             Không cần làm gì; muốn nhanh hơn thì mở Cài đặt → bấm \"Sửa lỗi tải ngay\".",
+                            now.format("%H:%M"), retry_at.format("%H:%M"), it.bot_retries
+                        )
+                    });
                     it.state = DownloadState::Queued; // show as waiting, not failed
                     let cloned = it.clone();
                     drop(map);
