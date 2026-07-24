@@ -336,12 +336,14 @@ export function WatchPage() {
     isPickerArchived(id);
 
   // Nhận diện Shorts kể cả khi cờ isShort chưa được đánh (kho cache cũ):
-  // URL /shorts/ · thời lượng <=60s · tiêu đề có #short/#shorts. Khớp logic
+  // URL /shorts/ · thời lượng <=90s · tiêu đề có #short/#shorts. Khớp logic
   // backend để danh sách "Video dài" KHÔNG hiện Shorts.
+  // Ngưỡng 90s (không phải 60s): YouTube Shorts nay dài tới 3 phút; nhiều
+  // short chạy 61-90s (1:01, 1:26…) — 60s bỏ lọt, xếp nhầm vào Video dài.
   const looksShort = (v: ChannelVideo): boolean => {
     if (v.isShort) return true;
     if ((v.url ?? "").includes("/shorts/")) return true;
-    if (v.durationSec != null && v.durationSec > 0 && v.durationSec <= 60) return true;
+    if (v.durationSec != null && v.durationSec > 0 && v.durationSec <= 90) return true;
     const t = (v.title ?? "").toLowerCase();
     return t.includes("#shorts") || t.includes("#short");
   };

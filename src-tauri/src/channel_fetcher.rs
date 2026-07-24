@@ -264,13 +264,15 @@ fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
 /// `tab` is one of: "videos", "shorts", "streams", or empty/other (leave as-is).
 /// Video này CÓ PHẢI SHORTS không (để chế độ "Video dài" không rót nhầm)?
 /// YouTube nay trộn Shorts vào tab /videos nên KHÔNG chỉ dựa tab. Dấu hiệu:
-/// URL có "/shorts/" · thời lượng <=60s · tiêu đề/hashtag có #shorts/#short.
-/// (Với kênh reup, clip <=60s cũng coi như short — quá ngắn để cắt.)
+/// URL có "/shorts/" · thời lượng <=90s · tiêu đề/hashtag có #shorts/#short.
+/// Ngưỡng 90s (không phải 60s): YouTube Shorts nay tới 3 phút, nhiều short
+/// chạy 61-90s (1:01, 1:26…) — 60s bỏ lọt nên xếp nhầm vào "Video dài".
+/// (Với kênh reup, clip <=90s quá ngắn để cắt highlight -> coi như short.)
 /// Hàm THUẦN để unit-test.
 pub(crate) fn looks_like_short(v: &ChannelVideo) -> bool {
     let tl = v.title.to_lowercase();
     v.url.contains("/shorts/")
-        || v.duration_sec.map(|d| d > 0 && d <= 60).unwrap_or(false)
+        || v.duration_sec.map(|d| d > 0 && d <= 90).unwrap_or(false)
         || tl.contains("#shorts")
         || tl.contains("#short")
         || v.hashtags.iter().any(|h| {

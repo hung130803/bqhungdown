@@ -10,11 +10,20 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// Phiên bản SƠ ĐỒ cache. Tăng số này khi CÁCH phân loại/đánh dấu video đổi
+/// (vd: v2 sửa nhận diện Shorts theo tab + ngưỡng 90s). Kho lưu bởi bản CŨ có
+/// version khác -> coi như MISS -> tự lấy lại 1 lần cho đúng. Nhờ vậy 300 máy
+/// nhân viên có kho cũ mis-tag Shorts tự khỏi mà không cần bấm gì.
+const CACHE_SCHEMA_VERSION: u32 = 2;
+
 #[derive(Serialize, Deserialize)]
 struct CachedChannel {
     /// Unix giây lúc lưu — chưa dùng để hết hạn, để dành cho sau.
     #[serde(default)]
     fetched_at: u64,
+    /// Version sơ đồ — thiếu (kho đời đầu) = 0, khác hiện tại -> bỏ, lấy lại.
+    #[serde(default)]
+    schema_version: u32,
     videos: Vec<ChannelVideo>,
 }
 
@@ -51,6 +60,11 @@ impl ChannelCache {
         let path = self.path_for(channel_id)?;
         let text = fs::read_to_string(&path).ok()?;
         let parsed: CachedChannel = serde_json::from_str(&text).ok()?;
+        // Kho tạo bởi bản CŨ (version khác) -> bỏ qua để lấy lại 1 lần cho
+        // đúng (nhất là phân loại Shorts). Coi như chưa có cache.
+        if parsed.schema_version != CACHE_SCHEMA_VERSION {
+            return None;
+        }
         let age = now_unix().saturating_sub(parsed.fetched_at);
         Some((parsed.videos, age))
     }
@@ -67,6 +81,7 @@ impl ChannelCache {
         }
         let data = CachedChannel {
             fetched_at: now_unix(),
+            schema_version: CACHE_SCHEMA_VERSION,
             videos: videos.to_vec(),
         };
         let json = match serde_json::to_string(&data) {
