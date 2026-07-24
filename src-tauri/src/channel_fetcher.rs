@@ -179,6 +179,7 @@ async fn fetch_bilibili_tv_series(
                 is_photo: false,
                 is_short: false,
                 hashtags: Vec::new(),
+                downloaded: false,
             });
         }
     }
@@ -258,6 +259,23 @@ fn load_archive_ids(app: &AppHandle) -> std::collections::HashSet<String> {
         }
     }
     set
+}
+
+/// Đánh dấu video nào ĐÃ CÓ trong sổ tải (download_archive.txt) -> downloaded
+/// = true. KHÔNG xoá khỏi danh sách (khác hành vi "ẩn" cũ). Khớp theo bare
+/// video id (giống lúc ghi archive). Rẻ (đọc 1 file text) nên gọi mọi lần.
+fn mark_downloaded(app: &AppHandle, videos: &mut [ChannelVideo]) {
+    let archived = load_archive_ids(app);
+    if archived.is_empty() {
+        return;
+    }
+    for v in videos.iter_mut() {
+        if let Some(id) = extract_video_id(&v.url) {
+            if archived.contains(&id) {
+                v.downloaded = true;
+            }
+        }
+    }
 }
 
 /// Normalise a raw channel/user URL so we can append the correct tab suffix.
@@ -563,17 +581,11 @@ pub async fn fetch_channel(
     // the user doesn't re-pick videos they've downloaded (and likely deleted
     // after re-uploading). Done before the slow detail probe so we don't waste
     // work on hidden videos. Matches by bare video id.
-    if settings.skip_downloaded {
-        let archived = load_archive_ids(app);
-        if !archived.is_empty() {
-            let before = videos.len();
-            videos.retain(|v| match extract_video_id(&v.url) {
-                Some(id) => !archived.contains(&id),
-                None => true, // can't determine id → keep (don't hide blindly)
-            });
-            info.hidden_downloaded = Some((before - videos.len()) as u32);
-        }
-    }
+    // ĐÁNH DẤU video đã tải (KHÔNG ẩn nữa — user muốn thấy đủ, tích vàng "đã
+    // tải" + Khôi phục). Luôn nạp sổ tải để đánh dấu; skip_downloaded chỉ điều
+    // khiển việc yt-dlp có bỏ qua khi TẢI hay không, không liên quan hiển thị.
+    mark_downloaded(app, &mut videos);
+    info.hidden_downloaded = None;
 
     // Step 2: probe details only when user explicitly opts in via "detailed".
     // Default mode trusts the flat-playlist response — yt-dlp's
@@ -596,21 +608,13 @@ fn finalize_listing(
     app: &AppHandle,
     mut info: ChannelInfo,
     mut videos: Vec<ChannelVideo>,
-    settings: &Settings,
+    _settings: &Settings,
 ) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
     videos.sort_by(|a, b| b.upload_date.cmp(&a.upload_date));
 
-    if settings.skip_downloaded {
-        let archived = load_archive_ids(app);
-        if !archived.is_empty() {
-            let before = videos.len();
-            videos.retain(|v| match extract_video_id(&v.url) {
-                Some(id) => !archived.contains(&id),
-                None => true,
-            });
-            info.hidden_downloaded = Some((before - videos.len()) as u32);
-        }
-    }
+    // ĐÁNH DẤU video đã tải (không ẩn) — xem mark_downloaded.
+    mark_downloaded(app, &mut videos);
+    info.hidden_downloaded = None;
 
     Ok((info, videos))
 }
@@ -803,6 +807,7 @@ fn parse_tikwm_entry(v: &serde_json::Value) -> Option<ChannelVideo> {
         is_short: false,
         is_photo,
         hashtags: Vec::new(),
+        downloaded: false,
     })
 }
 
@@ -1333,6 +1338,7 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
         is_short: false,
         is_photo,
         hashtags: Vec::new(),
+        downloaded: false,
     })
 }
 
@@ -1346,6 +1352,7 @@ mod tests {
             view_count: None, upload_date: None, thumbnail: None,
             is_photo: false, is_short: false,
             hashtags: tags.iter().map(|s| s.to_string()).collect(),
+            downloaded: false,
         }
     }
 

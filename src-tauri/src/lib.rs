@@ -293,6 +293,7 @@ pub fn run() {
             commands::youtube_api_usage,
             commands::pick_folder,
             commands::pick_file,
+            commands::restore_downloaded,
             commands::check_folder_writable,
             commands::open_in_folder,
             commands::open_file,

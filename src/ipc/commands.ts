@@ -393,6 +393,14 @@ export async function pickFile(): Promise<string | null> {
   return invoke<string | null>("pick_file");
 }
 
+/** KHÔI PHỤC "chưa tải": gỡ các video (theo URL) khỏi sổ tải để bỏ dấu "đã
+ *  tải" và cho phép tải lại. Trả số id đã gỡ. */
+export async function restoreDownloaded(urls: string[]): Promise<number> {
+  if (IS_WEB) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("restore_downloaded", { urls });
+}
+
 export async function checkFolderWritable(path: string): Promise<boolean> {
   if (IS_WEB) return true;
   const { invoke } = await import("@tauri-apps/api/core");

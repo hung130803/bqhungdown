@@ -589,6 +589,7 @@ fn parse_video_item(it: &Value) -> Option<(String, ChannelVideo)> {
             is_photo: false,
             is_short,
             hashtags,
+            downloaded: false,
         },
     ))
 }
@@ -920,6 +921,7 @@ mod tests {
             is_photo: false,
             is_short: false,
             hashtags: vec![],
+            downloaded: false,
         }
     }
 

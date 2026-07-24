@@ -131,6 +131,7 @@ mod tests {
             is_photo: false,
             is_short: false,
             hashtags: vec![],
+            downloaded: false,
         }
     }
 
