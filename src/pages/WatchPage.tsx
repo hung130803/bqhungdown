@@ -78,8 +78,19 @@ export function WatchPage() {
   // Ô "dán key mới" trong từng thẻ kênh (map theo key của thẻ).
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   // 50-300 kênh: nhóm GẬP/MỞ được + thẻ kênh THU GỌN 1 dòng, bấm mới xổ.
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
-  const [openKenh, setOpenKenh] = useState<Record<string, boolean>>({});
+  // LƯU localStorage → chuyển tab (Đang tải…) rồi quay lại KHÔNG bị gập hết
+  // về trống trơn; giữ đúng nhóm/kênh đang mở.
+  const loadOpenState = (k: string): Record<string, boolean> => {
+    try { return JSON.parse(localStorage.getItem(k) || "{}"); } catch { return {}; }
+  };
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => loadOpenState("watch.openGroups"));
+  const [openKenh, setOpenKenh] = useState<Record<string, boolean>>(() => loadOpenState("watch.openKenh"));
+  useEffect(() => {
+    localStorage.setItem("watch.openGroups", JSON.stringify(openGroups));
+  }, [openGroups]);
+  useEffect(() => {
+    localStorage.setItem("watch.openKenh", JSON.stringify(openKenh));
+  }, [openKenh]);
 
   const reload = async () => {
     try {
@@ -847,11 +858,16 @@ export function WatchPage() {
           // Mỗi NHÓM một màu viền trái cố định → lướt 50-300 kênh vẫn phân
           // biệt được nhóm nào với nhóm nào ngay bằng mắt.
           const hue = groupHue(g);
+          // Kênh CÒN video đang tải/chờ tải (chưa xong) → hiện "Đang tải…"
+          // chứ KHÔNG báo "đã tải" (drip_count tăng ngay lúc xếp hàng, nhưng
+          // video chưa chạy xong). Chỉ khi tải xong (hết mục active) mới "đã tải".
+          const nowDownloading = activeFor(k.rep.destDir).length > 0;
           // MỘT chỉ báo trạng thái duy nhất cho cả hàng — gộp mọi tình huống
-          // (tạm dừng / hết video / đã tải / chờ lượt) thành 1 chip sạch, hết
-          // cảnh rối mắt vì 4-5 nhãn emoji chọi nhau.
+          // (tạm dừng / đang tải / hết video / đã tải / chờ lượt) thành 1 chip.
           const status = !anyOn
             ? { label: "Tạm dừng", cls: "text-muted bg-surface-2" }
+            : nowDownloading
+            ? { label: "Đang tải…", cls: "text-accent bg-accent/10" }
             : dry
             ? { label: "Hết video — đổi key", cls: "text-danger bg-danger/10" }
             : downloadedToday
@@ -963,16 +979,17 @@ export function WatchPage() {
                 className={`shrink-0 inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full ${status.cls}`}
                 title={
                   !anyOn ? "Kênh đang tạm dừng — tích ô vuông để chạy lại"
+                  : nowDownloading ? "Đang tải video — chờ chạy xong mới tính là đã tải"
                   : dry ? "Kho video đã cạn — dán key nguồn mới để tải tiếp"
                   : downloadedToday ? "Hôm nay kênh này đã tự tải xong — bên cắt cứ thế xử lý"
                   : "Đang chờ tới lượt quét (hoặc bấm ▶ để chạy ngay)"
                 }
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                <span className={`w-1.5 h-1.5 rounded-full bg-current ${nowDownloading ? "animate-pulse" : ""}`} />
                 {status.label}
               </span>
-              {/* NÚT hành động — vị trí cố định cuối hàng, luôn cùng chỗ */}
-              {anyOn && !downloadedToday && (
+              {/* NÚT hành động — vị trí cố định cuối hàng. Ẩn khi đang tải (bận). */}
+              {anyOn && !nowDownloading && !downloadedToday && (
                 <button
                   onClick={(e) => { e.stopPropagation(); void runOne(k); }}
                   disabled={!!busyKenh[k.key]}
@@ -982,7 +999,7 @@ export function WatchPage() {
                   {busyKenh[k.key] ? "…" : "▶"}
                 </button>
               )}
-              {anyOn && downloadedToday && (
+              {anyOn && !nowDownloading && downloadedToday && (
                 <button
                   onClick={(e) => { e.stopPropagation(); void redoOne(k); }}
                   disabled={!!busyKenh[k.key]}
