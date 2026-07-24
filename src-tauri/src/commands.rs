@@ -711,7 +711,14 @@ pub fn youtube_api_usage(settings: State<Arc<SettingsStore>>) -> ApiUsageReport 
 pub async fn pick_folder(app: AppHandle) -> AppResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog().file().pick_folder(move |path| {
+    // GẮN CỬA SỔ CHA (window "main"): trên Windows, hộp chọn thư mục không có
+    // cha dễ bị đẩy ra sau rồi tự đóng ngay ("hiện lúc rồi tự tắt"). Có cha thì
+    // nó modal đúng nghĩa, ở yên cho user chọn.
+    let mut dlg = app.dialog().file();
+    if let Some(win) = app.get_webview_window("main") {
+        dlg = dlg.set_parent(&win);
+    }
+    dlg.pick_folder(move |path| {
         let _ = tx.send(path);
     });
     let path = rx.await.map_err(|e| AppError::Other(e.to_string()))?;
@@ -725,12 +732,13 @@ pub async fn pick_folder(app: AppHandle) -> AppResult<Option<String>> {
 pub async fn pick_file(app: AppHandle) -> AppResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .add_filter("Cookies / Text", &["txt"])
-        .pick_file(move |path| {
-            let _ = tx.send(path);
-        });
+    let mut dlg = app.dialog().file().add_filter("Cookies / Text", &["txt"]);
+    if let Some(win) = app.get_webview_window("main") {
+        dlg = dlg.set_parent(&win);   // có cửa sổ cha -> không bị tự đóng
+    }
+    dlg.pick_file(move |path| {
+        let _ = tx.send(path);
+    });
     let path = rx.await.map_err(|e| AppError::Other(e.to_string()))?;
     Ok(path
         .and_then(|fp| fp.into_path().ok())
