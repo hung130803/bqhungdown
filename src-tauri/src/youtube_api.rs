@@ -188,21 +188,27 @@ async fn api_get_opt(
     }
 }
 
-/// Lấy TẬP ID Shorts của kênh qua playlist hệ thống `UUSH<suffix>` — YouTube
-/// tự duy trì playlist này = đúng nội dung tab /shorts. Đây là PHÂN LOẠI CỦA
-/// CHÍNH YOUTUBE (không đoán thời lượng), khớp đường yt-dlp phân theo tab.
-///   • Kênh không có Shorts -> playlist không tồn tại -> Some(rỗng).
-///   • Lỗi khác (mạng, hết sạch key giữa chừng) -> None (caller giữ cờ
-///     heuristic dự phòng, không làm hỏng cả lượt lấy kênh).
-/// Chi phí: 1 quota unit / 50 shorts (kênh 300 shorts ~ 7 unit) — không đáng kể.
-async fn fetch_shorts_id_set(
+/// Lấy TẬP ID VIDEO DÀI của kênh qua playlist hệ thống `UULF<suffix>` —
+/// YouTube tự duy trì playlist này = ĐÚNG nội dung tab /videos (đã kiểm
+/// chứng: khớp 75/75 và 1085/1085 trên 2 kênh thật). Đây là PHÂN LOẠI CỦA
+/// CHÍNH YOUTUBE (không đoán thời lượng).
+///
+/// DÙNG UULF chứ KHÔNG dùng UUSH (shorts): playlist UUSH bị YouTube CẮT còn
+/// ~100 mục (kênh 301 short chỉ trả 100) -> phân loại theo UUSH sẽ gán nhầm
+/// short thừa thành video dài. UULF trả ĐỦ (phân trang hết, không cap).
+/// -> Quy tắc: id CÓ trong UULF = Video dài; KHÔNG có = Short.
+///   • Kênh chỉ toàn Shorts -> UULF không tồn tại/rỗng -> Some(rỗng) -> mọi
+///     video coi là Short (đúng).
+///   • Lỗi khác (mạng, hết sạch key) -> None (caller giữ cờ heuristic dự phòng).
+/// Chi phí: 1 quota unit / 50 video dài — không đáng kể.
+async fn fetch_longform_id_set(
     client: &reqwest::Client,
     pool: &Arc<Mutex<KeyPool>>,
     uploads_playlist: &str,
 ) -> Option<HashSet<String>> {
-    // uploads = "UU" + suffix; playlist Shorts hệ thống = "UUSH" + suffix.
+    // uploads = "UU" + suffix; playlist video-dài hệ thống = "UULF" + suffix.
     let suffix = uploads_playlist.strip_prefix("UU")?;
-    let pl = format!("UUSH{suffix}");
+    let pl = format!("UULF{suffix}");
     let mut ids: HashSet<String> = HashSet::new();
     let mut page_token: Option<String> = None;
     loop {
@@ -739,17 +745,17 @@ pub async fn fetch_channel(
         }
     };
 
-    // PHÂN LOẠI SHORT CHUẨN 100% THEO CHÍNH YOUTUBE (đường API): tra tập id
-    // trong playlist hệ thống UUSH (= tab /shorts). Có trong đó = Short, còn
-    // lại = VIDEO DÀI — kể cả video thường 2-5 phút (không đoán thời lượng),
-    // khớp hệt đường yt-dlp phân theo tab. Lỗi lấy UUSH (hiếm) -> giữ cờ
-    // heuristic có sẵn từ parse_video_item làm dự phòng.
-    if let Some(shorts_ids) =
-        fetch_shorts_id_set(&client, &pool, &resolved.uploads_playlist).await
+    // PHÂN LOẠI CHUẨN 100% THEO CHÍNH YOUTUBE (đường API): tra tập id VIDEO
+    // DÀI trong playlist hệ thống UULF (= tab /videos, trả ĐỦ không cap).
+    // Có trong đó = VIDEO DÀI; KHÔNG có = Short — kể cả video thường 2-5 phút
+    // (không đoán thời lượng), khớp hệt đường yt-dlp phân theo tab. Lỗi lấy
+    // UULF (hiếm) -> giữ cờ heuristic có sẵn từ parse_video_item làm dự phòng.
+    if let Some(longform_ids) =
+        fetch_longform_id_set(&client, &pool, &resolved.uploads_playlist).await
     {
         for v in videos.iter_mut() {
             if let Some(id) = crate::channel_fetcher::extract_video_id(&v.url) {
-                v.is_short = shorts_ids.contains(&id);
+                v.is_short = !longform_ids.contains(&id);
             }
         }
     }
