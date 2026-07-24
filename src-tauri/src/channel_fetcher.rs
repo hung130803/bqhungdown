@@ -501,7 +501,7 @@ pub async fn fetch_channel(
                     // Đánh dấu SHORTS chắc chắn — không chỉ dựa tab "shorts":
                     // YouTube nay trộn Shorts vào tab /videos. Dấu hiệu:
                     //  • lấy từ tab shorts, hoặc URL có "/shorts/"
-                    //  • thời lượng <= 60s (Short cổ điển; clip <=60s với kênh
+                    //  • thời lượng <= 90s (Short cổ điển; clip <=90s với kênh
                     //    reup coi như short, không đáng cắt)
                     //  • tiêu đề / hashtag có "#shorts"
                     // -> để chế độ "Video dài" KHÔNG rót nhầm Shorts.
@@ -1337,7 +1337,14 @@ mod tests {
             "'Why Are Your Pants Half Off?' #shorts #cops", None, &[])));
         // hashtag "shorts"
         assert!(looks_like_short(&v("https://y/watch?v=3", "x", None, &["#shorts"])));
-        // VIDEO DÀI thật: watch, dài >60s, không #shorts -> KHÔNG phải short
+        // Short 61-90s (ca NEP&UNC: 1:01, 1:26) -> PHẢI nhận là short
+        assert!(looks_like_short(&v("https://y/watch?v=1a", "I dressed as a gang member", Some(61), &[])));
+        assert!(looks_like_short(&v("https://y/watch?v=1b", "old age filter", Some(86), &[])));
+        // 90s = biên -> vẫn short
+        assert!(looks_like_short(&v("https://y/watch?v=1c", "x", Some(90), &[])));
+        // 91s trở lên (không dấu hiệu khác) -> video dài, KHÔNG loại nhầm
+        assert!(!looks_like_short(&v("https://y/watch?v=1d", "2 phút clip", Some(120), &[])));
+        // VIDEO DÀI thật: watch, dài >90s, không #shorts -> KHÔNG phải short
         assert!(!looks_like_short(&v("https://y/watch?v=4",
             "Traffic Stop Treasures | Cops TV Show", Some(720), &["cops"])));
         // không có duration + không dấu hiệu -> coi là dài (không loại nhầm)
