@@ -18,17 +18,44 @@ pub struct WatchlistStore {
 }
 
 impl WatchlistStore {
-    /// Load the watchlist from `path`. Missing or corrupt file → empty list
-    /// (non-fatal; the user just hasn't added channels yet).
+    /// Load the watchlist from `path`. KHÔNG được im lặng trả rỗng khi file có
+    /// dữ liệu mà chỉ parse hỏng — vì persist() kế tiếp sẽ GHI ĐÈ rỗng =
+    /// MẤT SẠCH kênh của user (bug cập nhật). Chiến lược:
+    ///   1. Parse chuẩn -> ok.
+    ///   2. Parse hỏng nhưng là JSON mảng -> cứu TỪNG phần tử (bỏ phần tử lỗi),
+    ///      đồng thời sao lưu file gốc ra .bak để còn khôi phục.
+    ///   3. Hỏng hẳn -> sao lưu ra .corrupt rồi mới coi như rỗng (KHÔNG xoá gốc).
     pub fn load(path: PathBuf) -> Self {
-        let inner = match fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str::<Vec<WatchedChannel>>(&text).unwrap_or_default(),
-            Err(_) => Vec::new(),
-        };
+        let inner = Self::read_list(&path);
         Self {
             inner: RwLock::new(inner),
             path,
         }
+    }
+
+    fn read_list(path: &Path) -> Vec<WatchedChannel> {
+        let text = match fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(_) => return Vec::new(), // chưa có file = chưa thêm kênh nào
+        };
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+        // 1) parse chuẩn
+        if let Ok(list) = serde_json::from_str::<Vec<WatchedChannel>>(&text) {
+            return list;
+        }
+        // 2) cứu từng phần tử (file cũ/lệch schema 1 vài kênh)
+        if let Ok(vals) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+            let _ = fs::copy(path, backup_path(path, "bak")); // giữ bản gốc để cứu
+            return vals
+                .into_iter()
+                .filter_map(|v| serde_json::from_value::<WatchedChannel>(v).ok())
+                .collect();
+        }
+        // 3) hỏng hẳn: SAO LƯU rồi mới rỗng — tuyệt đối không để mất dữ liệu gốc
+        let _ = fs::copy(path, backup_path(path, "corrupt"));
+        Vec::new()
     }
 
     pub fn list(&self) -> Vec<WatchedChannel> {
@@ -106,6 +133,20 @@ impl WatchlistStore {
     }
 }
 
+/// `watchlist.json` -> `watchlist.json.<suffix>` (bản sao lưu để cứu dữ liệu).
+fn backup_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from("watchlist.json"));
+    name.push(".");
+    name.push(suffix);
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
+        _ => PathBuf::from(name),
+    }
+}
+
 fn tmp_sibling(path: &Path) -> PathBuf {
     let mut name = path
         .file_name()
@@ -115,5 +156,67 @@ fn tmp_sibling(path: &Path) -> PathBuf {
     match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
         _ => PathBuf::from(name),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_file(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("wl_test_{}_{}.json", std::process::id(), tag));
+        let _ = fs::remove_file(&p);
+        p
+    }
+
+    #[test]
+    fn file_cu_thieu_truong_moi_van_giu_nguyen_kenh() {
+        // watchlist.json kiểu CŨ: chỉ có id/url/title/enabled/addedAt, THIẾU
+        // tab/group/sourceMode... (các trường thêm ở bản mới). Trước bản vá,
+        // parse hỏng -> load rỗng -> MẤT kênh. Nay phải giữ nguyên.
+        let p = tmp_file("old");
+        fs::write(
+            &p,
+            r#"[{"id":"c1","url":"https://youtube.com/@x","title":"X","enabled":true,"addedAt":"2024-01-01T00:00:00Z"}]"#,
+        )
+        .unwrap();
+        let store = WatchlistStore::load(p.clone());
+        let list = store.list();
+        assert_eq!(list.len(), 1, "kênh cũ phải còn, không bị xoá");
+        assert_eq!(list[0].id, "c1");
+        assert!(list[0].enabled, "giữ nguyên trạng thái tích ✓");
+        assert_eq!(list[0].tab, "all", "thiếu tab -> mặc định 'all'");
+        let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn file_hong_han_duoc_sao_luu_khong_mat_goc() {
+        let p = tmp_file("corrupt");
+        fs::write(&p, "{{{ khong phai json").unwrap();
+        let store = WatchlistStore::load(p.clone());
+        assert_eq!(store.list().len(), 0);
+        assert!(
+            backup_path(&p, "corrupt").exists(),
+            "file hỏng phải được sao lưu .corrupt để cứu"
+        );
+        let _ = fs::remove_file(&p);
+        let _ = fs::remove_file(backup_path(&p, "corrupt"));
+    }
+
+    #[test]
+    fn cuu_tung_phan_tu_khi_1_kenh_loi() {
+        // 1 phần tử hợp lệ + 1 phần tử rác -> cứu được phần tử hợp lệ.
+        let p = tmp_file("partial");
+        fs::write(
+            &p,
+            r#"[{"id":"ok","url":"u","enabled":true,"addedAt":"2024-01-01T00:00:00Z"}, 12345]"#,
+        )
+        .unwrap();
+        let store = WatchlistStore::load(p.clone());
+        assert_eq!(store.list().len(), 1);
+        assert_eq!(store.list()[0].id, "ok");
+        let _ = fs::remove_file(&p);
+        let _ = fs::remove_file(backup_path(&p, "bak"));
     }
 }

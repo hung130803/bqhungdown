@@ -23,8 +23,28 @@ use chrono::Utc;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
+
+/// TRUE khi đang mở hộp thoại chọn file/thư mục (native). Bộ theo dõi clipboard
+/// (poll 1s, mở clipboard Windows mỗi nhịp) TẠM NGƯNG lúc này để không quấy hộp
+/// thoại đang mở khiến nó "hiện 2-3s rồi tự tắt". Xem clipboard.rs.
+pub static DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// RAII: bật cờ DIALOG_OPEN khi mở hộp thoại, TỰ tắt khi rời scope (kể cả lỗi).
+struct DialogGuard;
+impl DialogGuard {
+    fn new() -> Self {
+        DIALOG_OPEN.store(true, Ordering::SeqCst);
+        DialogGuard
+    }
+}
+impl Drop for DialogGuard {
+    fn drop(&mut self) {
+        DIALOG_OPEN.store(false, Ordering::SeqCst);
+    }
+}
 
 /// Pending conflict resolutions, keyed by short_id. Frontend sends choice via
 /// `resolve_conflict`; queue/runner reads from this map (future use).
@@ -713,7 +733,8 @@ pub async fn pick_folder(app: AppHandle) -> AppResult<Option<String>> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     // GẮN CỬA SỔ CHA (window "main"): trên Windows, hộp chọn thư mục không có
     // cha dễ bị đẩy ra sau rồi tự đóng ngay ("hiện lúc rồi tự tắt"). Có cha thì
-    // nó modal đúng nghĩa, ở yên cho user chọn.
+    // nó modal đúng nghĩa, ở yên cho user chọn. + TẠM NGƯNG clipboard watcher.
+    let _guard = DialogGuard::new();
     let mut dlg = app.dialog().file();
     if let Some(win) = app.get_webview_window("main") {
         dlg = dlg.set_parent(&win);
@@ -732,6 +753,7 @@ pub async fn pick_folder(app: AppHandle) -> AppResult<Option<String>> {
 pub async fn pick_file(app: AppHandle) -> AppResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let _guard = DialogGuard::new();   // tạm ngưng clipboard watcher khi mở hộp
     let mut dlg = app.dialog().file().add_filter("Cookies / Text", &["txt"]);
     if let Some(win) = app.get_webview_window("main") {
         dlg = dlg.set_parent(&win);   // có cửa sổ cha -> không bị tự đóng
