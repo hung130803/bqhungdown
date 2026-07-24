@@ -1291,6 +1291,22 @@ pub fn archived_video_ids(
         .collect()
 }
 
+/// KHOÁ TÊN (chữ+số thường hoá) của FILE VIDEO đang nằm trong các thư mục
+/// lưu — để Kho video đánh dấu "đã tải" cả những video chỉ còn dấu vết là
+/// FILE trên đĩa (lịch sử bị xoá / tải bằng bản cũ).
+#[tauri::command]
+pub fn downloaded_title_keys(
+    store: State<Arc<WatchlistStore>>,
+    settings: State<Arc<SettingsStore>>,
+) -> Vec<String> {
+    let st = settings.get();
+    crate::watcher::disk_title_keys(
+        &crate::watcher::watch_folders(store.inner(), &st),
+    )
+    .into_iter()
+    .collect()
+}
+
 /// THAY link key nguồn bằng link mới nhưng GIỮ NGUYÊN kênh (tên, nhóm,
 /// thư mục, chế độ, chất lượng, sổ đã-làm). Reset phần thuộc nguồn cũ:
 /// baseline seen_ids (lượt quét đầu chỉ ghi mốc, không tải kho cũ),

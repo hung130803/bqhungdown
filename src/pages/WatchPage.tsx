@@ -281,14 +281,18 @@ export function WatchPage() {
   const [pickerType, setPickerType] = useState<"videos" | "shorts">("videos");
   // Tuổi kho đã lưu (giây); null = vừa lấy thật từ mạng.
   const [pickerCacheAge, setPickerCacheAge] = useState<number | null>(null);
-  // ID video ĐÃ TẢI (download-archive) — tô dấu "đã tải" trong kho.
+  // ID video ĐÃ TẢI (archive ∪ lịch sử) — tô dấu "đã tải" trong kho.
   const [pickerArchived, setPickerArchived] = useState<Set<string>>(new Set());
+  // KHOÁ TÊN file đang nằm trên đĩa — bắt cả video chỉ còn dấu vết là FILE.
+  const [pickerDiskKeys, setPickerDiskKeys] = useState<Set<string>>(new Set());
 
   const openPicker = async (c: WatchedChannel, forceRefresh = false) => {
     setPickerFor(c);
-    // Nạp danh sách ĐÃ TẢI (archive) để tô dấu — lỗi thì bỏ qua (không chặn).
+    // Nạp 2 sổ ĐÃ TẢI (id + tên file trên đĩa) — lỗi thì bỏ qua, không chặn.
     void cmd.archivedVideoIds().then((ids) => setPickerArchived(new Set(ids)))
       .catch(() => setPickerArchived(new Set()));
+    void cmd.downloadedTitleKeys().then((ks) => setPickerDiskKeys(new Set(ks)))
+      .catch(() => setPickerDiskKeys(new Set()));
     if (!forceRefresh) {
       setPickerSel(c.picked ?? []);
       setPickerSearch("");
@@ -314,7 +318,16 @@ export function WatchPage() {
     }
   };
 
-  // Video ĐÃ TẢI (download-archive) — dấu riêng, tô vàng cho dễ phân biệt.
+  // KHOÁ TÊN: thường hoá về "chỉ chữ+số, viết thường" — PHẢI khớp cách
+  // backend làm (watcher::norm_title_key) để so tên video ↔ tên file.
+  const normTitleKey = (s: string): string =>
+    (s.toLowerCase().match(/[\p{L}\p{N}]/gu) ?? []).join("");
+  // FILE đang nằm trong thư mục lưu (nguồn sự thật thứ 3 — không cần sổ).
+  const isOnDisk = (title: string): boolean => {
+    const k = normTitleKey(title ?? "");
+    return k.length >= 8 && pickerDiskKeys.has(k);
+  };
+  // Video ĐÃ TẢI (archive ∪ lịch sử) — dấu riêng, tô cam cho dễ phân biệt.
   const isPickerArchived = (id: string) => pickerArchived.has(id);
   // Video đã làm / đang tải dở / ĐÃ TẢI → khóa không cho tích lại.
   const isPickerDone = (id: string) =>
@@ -360,7 +373,8 @@ export function WatchPage() {
       const add = pickerShown
         .filter((v) => {
           const id = videoIdOf(v.url);
-          return !have.has(id) && !isPickerDone(id);
+          // bỏ video đã làm + video FILE còn trên đĩa (đã tải, chỉ thiếu sổ)
+          return !have.has(id) && !isPickerDone(id) && !isOnDisk(v.title);
         })
         .map((v) => ({
           id: videoIdOf(v.url),
@@ -1849,8 +1863,9 @@ export function WatchPage() {
               )}
               {pickerShown.map((v) => {
                 const id = videoIdOf(v.url);
-                const archived = isPickerArchived(id);   // đã tải (archive)
-                const done = isPickerDone(id);            // gồm cả archived
+                // đã tải = có trong sổ (archive/lịch sử) HOẶC file còn trên đĩa
+                const archived = isPickerArchived(id) || isOnDisk(v.title);
+                const done = isPickerDone(id) || archived;
                 const sel = pickerSel.some((p) => p.id === id);
                 const order = sel ? pickerSel.findIndex((p) => p.id === id) + 1 : 0;
                 return (

@@ -624,11 +624,19 @@ export async function reconcileWatched(): Promise<void> {
   return invoke<void>("reconcile_watched");
 }
 
-/** ID video ĐÃ TẢI (download-archive) — để Kho video tô dấu "đã tải". */
+/** ID video ĐÃ TẢI (archive ∪ lịch sử) — để Kho video tô dấu "đã tải". */
 export async function archivedVideoIds(): Promise<string[]> {
   if (IS_WEB) return [];
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string[]>("archived_video_ids");
+}
+
+/** KHOÁ TÊN file video đang nằm trong các thư mục lưu (chữ+số thường hoá)
+ *  — nhận diện "đã tải" cả khi chỉ còn FILE trên đĩa (không còn sổ nào). */
+export async function downloadedTitleKeys(): Promise<string[]> {
+  if (IS_WEB) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string[]>("downloaded_title_keys");
 }
 
 /** THAY link key bằng link mới, GIỮ NGUYÊN kênh (tên/nhóm/thư mục/cấu hình). */

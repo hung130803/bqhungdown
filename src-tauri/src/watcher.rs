@@ -241,13 +241,22 @@ async fn apply(
     let settings = settings_store.get();
     // BỘ LOẠI-TRÙNG "ĐÃ TẢI" dùng chung (archive ∪ lịch sử Completed).
     let downloaded = downloaded_ids(app, history, &settings);
+    // Lớp 3: FILE THẬT trên đĩa (so tên) — video chỉ còn dấu vết là file
+    // trong thư mục lưu (lịch sử bị xoá / tải bằng bản quá cũ) vẫn bị né.
+    let disk = disk_title_keys(&watch_folders(store, &settings));
+    let on_disk = |title: &str| {
+        let k = norm_title_key(title);
+        k.chars().count() >= 8 && disk.contains(&k)
+    };
     // New = fetched videos CHƯA thấy VÀ CHƯA tải (none on baseline).
     let want_shorts = channel.tab == "shorts";
     let mut new_fetched: Vec<Fetched> = if is_baseline {
         Vec::new()
     } else {
         fetched.iter()
-            .filter(|f| !seen.contains(&f.id) && !downloaded.contains(&f.id))
+            .filter(|f| !seen.contains(&f.id)
+                && !downloaded.contains(&f.id)
+                && !on_disk(&f.video.title))
             .cloned()
             .collect()
     };
@@ -322,7 +331,7 @@ async fn apply(
         // 1. Hàng chờ tích trước (video mới đã chiếm suất ở trên nếu có);
         //    bỏ video ĐÃ TẢI (archive ∪ lịch sử — `downloaded` ở trên).
         dripped = plan_drip(channel, drip_count);
-        dripped.retain(|p| !downloaded.contains(&p.id));
+        dripped.retain(|p| !downloaded.contains(&p.id) && !on_disk(&p.title));
         let after_picked = drip_count + dripped.len() as u32;
         // 2. Còn suất → vét kho view cao nhất (quét TỐI ĐA 1 lần/ngày).
         if after_picked < limit
@@ -340,7 +349,9 @@ async fn apply(
             done_plus.extend(downloaded.iter().cloned());
             // KHO CẢ KÊNH (quét 1 lần, lưu đĩa, lần sau lấy thẳng) → chọn
             // video NHIỀU VIEW NHẤT của cả kênh chưa làm.
-            let videos = vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
+            let mut videos =
+                vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
+            videos.retain(|v| !on_disk(&v.title));   // file còn trên đĩa = đã tải
             if !videos.is_empty() {
                 let cand = pick_auto_candidates(
                     &videos, &done_plus, (limit - after_picked) as usize, &tab,
@@ -492,6 +503,73 @@ pub(crate) fn downloaded_ids(
         }
     }
     set
+}
+
+/// KHOÁ SO TÊN: thường hoá tiêu đề/tên file về "chỉ chữ + số, viết thường"
+/// để so TÊN VIDEO với TÊN FILE yt-dlp đã lưu (sanitize mỗi bên khác nhau
+/// vài ký tự cấm, nhưng phần chữ+số luôn giữ nguyên). Hàm thuần để test.
+pub(crate) fn norm_title_key(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// NGUỒN SỰ THẬT THỨ 3 — FILE THẬT TRÊN Ổ ĐĨA: tên (đã thường hoá) của các
+/// file video đang nằm trong các thư mục lưu. Video chỉ còn dấu vết là FILE
+/// (lịch sử bị xoá / tải bằng bản quá cũ) vẫn bị né. Tên < 8 ký tự bỏ qua
+/// (quá ngắn, dễ trùng oan). Chỉ quét TẦNG TRÊN mỗi thư mục — nhẹ.
+pub(crate) fn disk_title_keys(
+    folders: &[std::path::PathBuf],
+) -> std::collections::HashSet<String> {
+    const EXTS: [&str; 8] =
+        ["mp4", "mkv", "webm", "mov", "m4v", "mp3", "m4a", "opus"];
+    let mut out = std::collections::HashSet::new();
+    let mut seen_dir = std::collections::HashSet::new();
+    for d in folders {
+        if !seen_dir.insert(d.clone()) {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if !p.is_file() {
+                continue;
+            }
+            let ext_ok = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| EXTS.contains(&x.to_lowercase().as_str()))
+                .unwrap_or(false);
+            if !ext_ok {
+                continue;
+            }
+            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                let k = norm_title_key(stem);
+                if k.chars().count() >= 8 {
+                    out.insert(k);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// MỌI thư mục lưu app đang biết: thư mục tải mặc định + thư mục của TỪNG
+/// kênh theo dõi (dest_dir / watch_root+target_name) — máy nào theo cấu
+/// hình máy đó, nhân viên lưu đâu quét đó.
+pub(crate) fn watch_folders(
+    store: &WatchlistStore,
+    settings: &crate::models::Settings,
+) -> Vec<std::path::PathBuf> {
+    let mut v = vec![settings.default_folder.clone()];
+    for c in store.list() {
+        v.push(resolve_watch_folder(
+            &c.dest_dir, &c.target_name, &settings.watch_root,
+            &settings.default_folder,
+        ));
+    }
+    v
 }
 
 /// Các dòng archive CÒN THIẾU cho danh sách (extractor, url) đã tải xong —
@@ -875,6 +953,28 @@ mod tests {
         let got = parse_archive_ids(text);
         assert_eq!(got.len(), 2);
         assert!(got.contains("aaa") && got.contains("bbb"));
+    }
+
+    #[test]
+    fn khoa_ten_va_quet_dia_nhan_dien_file_da_tai() {
+        // Khoá tên: bỏ ký tự cấm/khoảng trắng, thường hoá — tiêu đề YouTube
+        // và tên file yt-dlp (sanitize khác nhau) ra CÙNG một khoá.
+        assert_eq!(
+            norm_title_key("US COPS: Son Beats His Mom | Nye County, NV | S1E2"),
+            norm_title_key("US COPS？Son Beats His Mom ｜ Nye County, NV ｜ S1E2")
+        );
+        assert_eq!(norm_title_key("Ăn Tối Ở SÀI GÒN!"), "ăntốiởsàigòn");
+        // Quét đĩa: nhận .mp4/.mkv, bỏ file .txt + tên quá ngắn (<8 ký tự).
+        let d = std::env::temp_dir().join(format!("bqh_dt_{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("GETTING STUCK ON A WATERPARK RIDE!!!.mp4"), b"x").unwrap();
+        std::fs::write(d.join("abc.mp4"), b"x").unwrap();      // quá ngắn
+        std::fs::write(d.join("ghi chú dài dài.txt"), b"x").unwrap(); // không phải video
+        let keys = disk_title_keys(&[d.clone()]);
+        assert!(keys.contains(&norm_title_key("GETTING STUCK ON A WATERPARK RIDE!!!")));
+        assert!(!keys.contains("abc"));
+        assert_eq!(keys.len(), 1);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -1271,6 +1371,12 @@ pub async fn force_one_more(
     // thêm" KHÔNG lọc bộ này nên cứ chọn lại video đã tải (bị "Bỏ qua"),
     // bấm tiếp lại dính cái đã-tải kế → không bao giờ tới video chưa tải.
     let downloaded = downloaded_ids(app, history, &settings);
+    // Lớp 3: file thật trên đĩa (so tên) — như apply().
+    let disk = disk_title_keys(&watch_folders(store, &settings));
+    let on_disk = |title: &str| {
+        let k = norm_title_key(title);
+        k.chars().count() >= 8 && disk.contains(&k)
+    };
 
     // 1. Ưu tiên hàng chờ user đã tích (bỏ video đã làm / đang tải / ĐÃ TẢI).
     let mut cand: Option<PickedVideo> = channel
@@ -1278,7 +1384,8 @@ pub async fn force_one_more(
         .iter()
         .find(|p| !channel.done_ids.contains(&p.id)
             && !channel.dl_pending.contains(&p.id)
-            && !downloaded.contains(&p.id))
+            && !downloaded.contains(&p.id)
+            && !on_disk(&p.title))
         .cloned();
     // 2. Hết hàng chờ → quét kho lấy video view cao nhất chưa làm (bỏ qua
     //    giới hạn "1 lần quét/ngày" vì đây là lệnh tay).
@@ -1288,7 +1395,9 @@ pub async fn force_one_more(
         done_plus.extend(channel.dl_pending.clone());
         done_plus.extend(downloaded.iter().cloned());
         // KHO CẢ KÊNH (đã lưu → lấy thẳng; cạn → quét lại 1 phát).
-        let videos = vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
+        let mut videos =
+            vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
+        videos.retain(|v| !on_disk(&v.title));
         cand = pick_auto_candidates(&videos, &done_plus, 1, &tab).into_iter().next();
     }
     let Some(p) = cand else {
