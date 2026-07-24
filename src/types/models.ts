@@ -182,6 +182,9 @@ export interface ChannelVideo {
   isPhoto?: boolean;
   /** Hashtag (#abc) lấy từ tiêu đề + mô tả — chỉ có khi dùng YouTube Data API. */
   hashtags?: string[];
+  /** True khi video đã có trong sổ tải = ĐÃ TẢI. UI hiện "tích vàng · đã tải"
+   *  (không ẩn nữa); bấm Khôi phục để coi như chưa tải + tải lại được. */
+  downloaded?: boolean;
 }
 
 export interface ChannelFetchResult {

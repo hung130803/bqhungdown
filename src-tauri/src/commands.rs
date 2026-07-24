@@ -767,6 +767,64 @@ pub async fn pick_file(app: AppHandle) -> AppResult<Option<String>> {
         .map(|p| p.to_string_lossy().to_string()))
 }
 
+/// KHÔI PHỤC "chưa tải" cho các video: xoá id của chúng khỏi sổ tải
+/// (download_archive.txt) để (1) kho bỏ dấu "đã tải" và (2) lần sau tải lại
+/// được (yt-dlp `--download-archive` sẽ không còn né). Nhận danh sách URL,
+/// tự rút bare video-id để khớp dòng "<extractor> <id>". Ghi lại nguyên tử
+/// (file tạm + rename). Trả SỐ id đã gỡ.
+/// Lọc sổ tải: giữ các dòng KHÔNG thuộc `ids`, đếm số dòng bị gỡ. Hàm THUẦN
+/// để unit-test (không đụng đĩa). Dòng dạng "<extractor> <id>".
+fn strip_archive_ids(text: &str, ids: &std::collections::HashSet<String>) -> (String, u32) {
+    let mut removed = 0u32;
+    let mut kept = String::with_capacity(text.len());
+    for line in text.lines() {
+        let is_target = line
+            .split_whitespace()
+            .nth(1)
+            .map(|id| ids.contains(id))
+            .unwrap_or(false);
+        if is_target {
+            removed += 1;
+        } else {
+            kept.push_str(line);
+            kept.push('\n');
+        }
+    }
+    (kept, removed)
+}
+
+#[tauri::command]
+pub fn restore_downloaded(app: AppHandle, urls: Vec<String>) -> AppResult<u32> {
+    use std::collections::HashSet;
+    let ids: HashSet<String> = urls
+        .iter()
+        .filter_map(|u| crate::channel_fetcher::extract_video_id(u))
+        .collect();
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let dir = match app.path().app_data_dir() {
+        Ok(d) => d,
+        Err(_) => return Ok(0),
+    };
+    let path = dir.join("download_archive.txt");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return Ok(0), // chưa có sổ = không có gì để gỡ
+    };
+    let (kept, removed) = strip_archive_ids(&text, &ids);
+    if removed > 0 {
+        // ghi nguyên tử: tmp + rename để không hỏng sổ nếu gián đoạn.
+        let tmp = path.with_extension("txt.tmp");
+        std::fs::write(&tmp, kept.as_bytes())?;
+        if let Err(e) = std::fs::rename(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.into());
+        }
+    }
+    Ok(removed)
+}
+
 #[tauri::command]
 pub fn check_folder_writable(path: String) -> AppResult<bool> {
     let p = PathBuf::from(&path);
@@ -1820,4 +1878,29 @@ pub fn preflight_conflict(
         emit_conflict(app, short_id, suggested, conflicting);
     }
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_archive_ids;
+    use std::collections::HashSet;
+
+    #[test]
+    fn khoi_phuc_go_dung_id_giu_phan_con_lai() {
+        let text = "youtube aaa\nyoutube bbb\nyoutube ccc\n";
+        let ids: HashSet<String> = ["bbb".to_string()].into_iter().collect();
+        let (kept, removed) = strip_archive_ids(text, &ids);
+        assert_eq!(removed, 1, "gỡ đúng 1 dòng");
+        assert!(kept.contains("aaa") && kept.contains("ccc"));
+        assert!(!kept.contains("bbb"), "id khôi phục phải biến mất khỏi sổ");
+    }
+
+    #[test]
+    fn khong_khop_thi_giu_nguyen() {
+        let text = "youtube aaa\nyoutube bbb\n";
+        let ids: HashSet<String> = ["zzz".to_string()].into_iter().collect();
+        let (kept, removed) = strip_archive_ids(text, &ids);
+        assert_eq!(removed, 0);
+        assert!(kept.contains("aaa") && kept.contains("bbb"));
+    }
 }

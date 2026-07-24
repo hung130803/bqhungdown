@@ -104,6 +104,19 @@ export function ChannelInput({ onSubmit }: Props) {
   /** Số video đã scrape được (Douyin WebView scraper). */
   const [scrapeProgress, setScrapeProgress] = useState(0);
 
+  /** URL các video vừa bấm "Khôi phục" trong phiên này -> bỏ dấu "đã tải"
+   *  ngay trên UI (backend đã gỡ khỏi sổ tải). */
+  const [restoredUrls, setRestoredUrls] = useState<Set<string>>(new Set());
+  const isDownloaded = (v: ChannelVideo) => !!v.downloaded && !restoredUrls.has(v.url);
+  const restoreOne = async (u: string) => {
+    try {
+      await cmd.restoreDownloaded([u]);
+      setRestoredUrls((prev) => new Set(prev).add(u));
+    } catch {
+      /* im lặng — không chặn thao tác khác */
+    }
+  };
+
   /** Tên thư mục lưu cho kênh này (mặc định = tên kênh, sửa được). */
   const channelSubfolder = useSettingsStore((s) => s.settings?.channelSubfolder ?? true);
   const [folderName, setFolderName] = useState("");
@@ -551,11 +564,12 @@ export function ChannelInput({ onSubmit }: Props) {
         {items.map((v: ChannelVideo) => {
           const checked = !excluded.has(v.url);
           const date = parseDate(v.uploadDate);
+          const dled = isDownloaded(v);
           return (
             <div
               key={v.url}
               data-vid-url={v.url}
-              className={`flex items-center gap-3 px-3 py-2 cursor-pointer ${checked ? "bg-accent/5" : "bg-surface"}`}
+              className={`flex items-center gap-3 px-3 py-2 cursor-pointer ${dled ? "bg-warning/10" : checked ? "bg-accent/5" : "bg-surface"}`}
             >
               <input
                 type="checkbox"
@@ -574,12 +588,33 @@ export function ChannelInput({ onSubmit }: Props) {
                       📷 Ảnh
                     </span>
                   )}
+                  {dled && (
+                    <span
+                      className="px-1.5 py-0.5 rounded bg-warning/25 text-warning text-[10px] font-semibold shrink-0"
+                      title="Video này đã tải trước đó (vẫn hiện để anh biết). Bấm Khôi phục để tải lại."
+                    >
+                      ✓ Đã tải
+                    </span>
+                  )}
                   <span className="truncate">{v.title || v.url}</span>
                 </div>
                 <div className="text-xs text-muted truncate flex items-center gap-2">
                   {v.durationSec != null && <span>{formatDuration(v.durationSec)}</span>}
                   {v.viewCount != null && <span>{formatComma(v.viewCount)} view</span>}
                   {date && <span>{date.toLocaleDateString("vi-VN")}</span>}
+                  {dled && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void restoreOne(v.url);
+                      }}
+                      className="ml-1 px-1.5 py-0.5 rounded border border-warning/50 text-warning hover:bg-warning/15 text-[11px] shrink-0"
+                      title="Coi như CHƯA tải: gỡ khỏi sổ đã tải để lần sau tải lại được."
+                    >
+                      ↩ Khôi phục
+                    </button>
+                  )}
                 </div>
                 {v.hashtags && v.hashtags.length > 0 && (
                   <div className="text-[11px] text-accent truncate" title={v.hashtags.join(" ")}>
@@ -681,9 +716,10 @@ export function ChannelInput({ onSubmit }: Props) {
                 {isYoutube
                   ? `Đã lấy ${videos.length} (${longList.length} dài + ${shortList.length} shorts)`
                   : `Đã lấy ${videos.length} bài`}
-                {info.hiddenDownloaded
-                  ? ` · đã ẩn ${formatComma(info.hiddenDownloaded)} video đã tải`
-                  : ""}
+                {(() => {
+                  const n = videos.filter(isDownloaded).length;
+                  return n > 0 ? ` · ${formatComma(n)} đã tải (tích vàng)` : "";
+                })()}
               </div>
             </div>
           </div>

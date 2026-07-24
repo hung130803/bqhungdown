@@ -224,6 +224,7 @@ async fn fetch_page(
                 is_photo: false,
                 is_short: false,
                 hashtags: Vec::new(),
+                downloaded: false,
             });
         }
         let got = (pn * ps) as i64;

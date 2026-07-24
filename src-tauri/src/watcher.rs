@@ -826,6 +826,7 @@ fn picked_to_channel_video(p: &PickedVideo) -> ChannelVideo {
         is_photo: false,
         is_short: false,
         hashtags: Vec::new(),
+        downloaded: false,
     }
 }
 
@@ -905,6 +906,7 @@ fn parse_rss(xml: &str) -> Vec<Fetched> {
                 is_short: false,
                 is_photo: false,
                 hashtags: Vec::new(),
+                downloaded: false,
             },
         });
     }
@@ -1168,6 +1170,7 @@ mod tests {
             is_photo: photo,
             is_short: false,
             hashtags: Vec::new(),
+            downloaded: false,
         }
     }
 

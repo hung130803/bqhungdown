@@ -170,6 +170,10 @@ pub struct ChannelVideo {
     /// Hashtag lấy từ tiêu đề + mô tả (chỉ điền khi dùng YouTube Data API).
     #[serde(default)]
     pub hashtags: Vec<String>,
+    /// True khi video đã có trong sổ tải (download_archive.txt) = ĐÃ TẢI. UI
+    /// hiện "tích vàng · đã tải" thay vì ẩn đi; bấm Khôi phục để tải lại.
+    #[serde(default)]
+    pub downloaded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
