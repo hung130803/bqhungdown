@@ -505,14 +505,24 @@ pub async fn fetch_channel(
                 }
                 let mark_short = t == "shorts";
                 for mut v in vids {
-                    // Đánh dấu SHORTS chắc chắn — không chỉ dựa tab "shorts":
-                    // YouTube nay trộn Shorts vào tab /videos. Dấu hiệu:
-                    //  • lấy từ tab shorts, hoặc URL có "/shorts/"
-                    //  • thời lượng <= 90s (Short cổ điển; clip <=90s với kênh
-                    //    reup coi như short, không đáng cắt)
-                    //  • tiêu đề / hashtag có "#shorts"
-                    // -> để chế độ "Video dài" KHÔNG rót nhầm Shorts.
-                    if mark_short || looks_like_short(&v) {
+                    // PHÂN LOẠI THEO TAB CỦA YOUTUBE (nguồn sự thật, không đoán
+                    // theo thời lượng):
+                    //  • tab /shorts  -> Short (dù dài 1:47, 2:30…)
+                    //  • tab /videos  -> Video dài (dù NGẮN — YouTube coi là
+                    //    video thường) => video dài KHÔNG BAO GIỜ lọt sang
+                    //    Shorts vì độ dài.
+                    // Chỉ bắt thêm Short TRỘN LẪN qua dấu hiệu CHẮC CHẮN: URL
+                    // có "/shorts/" hoặc #shorts trong tiêu đề/hashtag. Thời
+                    // lượng để dành cho đường RSS/vét (nơi không biết tab).
+                    let title_l = v.title.to_lowercase();
+                    let short_marker = v.url.contains("/shorts/")
+                        || title_l.contains("#shorts")
+                        || title_l.contains("#short")
+                        || v.hashtags.iter().any(|h| {
+                            let h = h.trim_start_matches('#').to_lowercase();
+                            h == "shorts" || h == "short"
+                        });
+                    if mark_short || short_marker {
                         v.is_short = true;
                     }
                     let id = extract_video_id(&v.url).unwrap_or_else(|| v.url.clone());

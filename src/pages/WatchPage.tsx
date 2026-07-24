@@ -335,16 +335,14 @@ export function WatchPage() {
     (pickerFor?.dlPending?.includes(id) ?? false) ||
     isPickerArchived(id);
 
-  // Nhận diện Shorts kể cả khi cờ isShort chưa được đánh (kho cache cũ):
-  // URL /shorts/ · thời lượng <=180s · tiêu đề có #short/#shorts. Khớp logic
-  // backend để danh sách "Video dài" KHÔNG hiện Shorts.
-  // NGƯỠNG 180s = ĐÚNG giới hạn YouTube Shorts (tới 3 phút). Video >180s mới
-  // CHẮC CHẮN là video dài; clip <=180s (kể cả 1:47, 2:30) là short/quá ngắn
-  // để cắt reup. Tính theo thời lượng nên sửa được cả trên kho cache cũ.
+  // PHÂN LOẠI THEO TAB CỦA YOUTUBE (backend đã gắn cờ isShort theo tab
+  // /videos vs /shorts). Ở đây TIN theo cờ đó + dấu hiệu chắc chắn (URL
+  // /shorts/, #shorts). KHÔNG dùng thời lượng: tôn trọng phân loại YouTube ->
+  // VIDEO DÀI (kể cả 2-3 phút) KHÔNG bao giờ bị nhầm sang Shorts; còn Short
+  // (kể cả 1:47) vẫn đúng vì nằm tab /shorts -> đã có cờ isShort.
   const looksShort = (v: ChannelVideo): boolean => {
     if (v.isShort) return true;
     if ((v.url ?? "").includes("/shorts/")) return true;
-    if (v.durationSec != null && v.durationSec > 0 && v.durationSec <= 180) return true;
     const t = (v.title ?? "").toLowerCase();
     return t.includes("#shorts") || t.includes("#short");
   };
