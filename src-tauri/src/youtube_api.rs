@@ -151,6 +151,92 @@ async fn api_get(
     }
 }
 
+/// Như `api_get` nhưng KHOAN DUNG với "không tìm thấy playlist": trả Ok(None)
+/// khi reason là playlistNotFound/notFound (vd kênh KHÔNG có Shorts -> UUSH
+/// không tồn tại — tình huống hợp lệ, không phải lỗi).
+async fn api_get_opt(
+    client: &reqwest::Client,
+    pool: &Arc<Mutex<KeyPool>>,
+    url_no_key: &str,
+) -> AppResult<Option<Value>> {
+    loop {
+        let (key, my_idx) = {
+            let p = pool.lock().await;
+            (p.current()?, p.idx)
+        };
+        let sep = if url_no_key.contains('?') { '&' } else { '?' };
+        let url = format!("{url_no_key}{sep}key={key}");
+        let body = single_get(client, &url).await?;
+        if let Some(err) = body.get("error") {
+            if is_quota_reason(err) {
+                let mut p = pool.lock().await;
+                if p.idx == my_idx {
+                    p.advance();
+                }
+                continue;
+            }
+            let reason = err
+                .pointer("/errors/0/reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if reason == "playlistNotFound" || reason == "notFound" {
+                return Ok(None);
+            }
+            return Err(AppError::YtDlpFailed(friendly_api_error(err)));
+        }
+        return Ok(Some(body));
+    }
+}
+
+/// Lấy TẬP ID Shorts của kênh qua playlist hệ thống `UUSH<suffix>` — YouTube
+/// tự duy trì playlist này = đúng nội dung tab /shorts. Đây là PHÂN LOẠI CỦA
+/// CHÍNH YOUTUBE (không đoán thời lượng), khớp đường yt-dlp phân theo tab.
+///   • Kênh không có Shorts -> playlist không tồn tại -> Some(rỗng).
+///   • Lỗi khác (mạng, hết sạch key giữa chừng) -> None (caller giữ cờ
+///     heuristic dự phòng, không làm hỏng cả lượt lấy kênh).
+/// Chi phí: 1 quota unit / 50 shorts (kênh 300 shorts ~ 7 unit) — không đáng kể.
+async fn fetch_shorts_id_set(
+    client: &reqwest::Client,
+    pool: &Arc<Mutex<KeyPool>>,
+    uploads_playlist: &str,
+) -> Option<HashSet<String>> {
+    // uploads = "UU" + suffix; playlist Shorts hệ thống = "UUSH" + suffix.
+    let suffix = uploads_playlist.strip_prefix("UU")?;
+    let pl = format!("UUSH{suffix}");
+    let mut ids: HashSet<String> = HashSet::new();
+    let mut page_token: Option<String> = None;
+    loop {
+        let token_param = page_token
+            .as_deref()
+            .map(|t| format!("&pageToken={t}"))
+            .unwrap_or_default();
+        let url = format!(
+            "{API_BASE}/playlistItems?part=contentDetails&maxResults=50&playlistId={pl}{token_param}"
+        );
+        match api_get_opt(client, pool, &url).await {
+            Ok(Some(body)) => {
+                if let Some(items) = body.get("items").and_then(|i| i.as_array()) {
+                    for it in items {
+                        if let Some(id) = it
+                            .pointer("/contentDetails/videoId")
+                            .and_then(|v| v.as_str())
+                        {
+                            ids.insert(id.to_string());
+                        }
+                    }
+                }
+                match body.get("nextPageToken").and_then(|v| v.as_str()) {
+                    Some(t) => page_token = Some(t.to_string()),
+                    None => break,
+                }
+            }
+            Ok(None) => return Some(HashSet::new()), // kênh không có Shorts
+            Err(_) => return None, // lỗi thật -> fallback heuristic ở caller
+        }
+    }
+    Some(ids)
+}
+
 /// Gửi 1 GET, trả body JSON (kể cả khi body chứa `error`). Chỉ lỗi mạng/parse
 /// mới thành Err ở đây — lỗi API do caller xử lý.
 async fn single_get(client: &reqwest::Client, url: &str) -> AppResult<Value> {
@@ -474,8 +560,9 @@ fn parse_video_item(it: &Value) -> Option<(String, ChannelVideo)> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let hashtags = extract_hashtags(&title, description);
-    // YouTube Data API không gắn cờ Shorts; dùng heuristic thời lượng ngắn
-    // (≤ 180s) khớp looks_like_short — đúng giới hạn YouTube Shorts (3 phút).
+    // Cờ DỰ PHÒNG theo thời lượng (≤180s). fetch_channel sẽ GHI ĐÈ bằng
+    // phân loại chuẩn của YouTube (playlist UUSH = tab /shorts) — chỉ khi
+    // lấy UUSH lỗi (hiếm) cờ heuristic này mới được giữ.
     let is_short = duration_sec.map(|d| d > 0 && d <= 180).unwrap_or(false);
     Some((
         id.clone(),
@@ -618,7 +705,7 @@ pub async fn fetch_channel(
     let mut info = resolved.info;
     let mut used_cache_note: Option<String> = None;
 
-    let videos: Vec<ChannelVideo> = if let Some(cached_videos) = cached {
+    let mut videos: Vec<ChannelVideo> = if let Some(cached_videos) = cached {
         // ----- Incremental: chỉ lấy video mới hơn cái mới nhất đã cache -----
         let cached_ids: HashSet<String> = cached_videos
             .iter()
@@ -651,6 +738,21 @@ pub async fn fetch_channel(
             order_by_ids(&ids, &mut details)
         }
     };
+
+    // PHÂN LOẠI SHORT CHUẨN 100% THEO CHÍNH YOUTUBE (đường API): tra tập id
+    // trong playlist hệ thống UUSH (= tab /shorts). Có trong đó = Short, còn
+    // lại = VIDEO DÀI — kể cả video thường 2-5 phút (không đoán thời lượng),
+    // khớp hệt đường yt-dlp phân theo tab. Lỗi lấy UUSH (hiếm) -> giữ cờ
+    // heuristic có sẵn từ parse_video_item làm dự phòng.
+    if let Some(shorts_ids) =
+        fetch_shorts_id_set(&client, &pool, &resolved.uploads_playlist).await
+    {
+        for v in videos.iter_mut() {
+            if let Some(id) = crate::channel_fetcher::extract_video_id(&v.url) {
+                v.is_short = shorts_ids.contains(&id);
+            }
+        }
+    }
 
     // `statistics.videoCount` của Google hay sai (bỏ Shorts, bị trễ) → dùng số
     // video THỰC SỰ có để "bài trên kênh" khớp danh sách. (Sửa "số lượng lệch".)
