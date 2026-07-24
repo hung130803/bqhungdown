@@ -45,6 +45,12 @@ impl ClipboardWatcher {
                 if !self.settings.get().clipboard_watcher {
                     continue;
                 }
+                // ĐANG mở hộp chọn thư mục/file? -> KHÔNG đụng clipboard (mở
+                // clipboard Windows mỗi giây có thể quấy hộp thoại native làm nó
+                // tự tắt sau 2-3s). Xem commands::DIALOG_OPEN.
+                if crate::commands::DIALOG_OPEN.load(std::sync::atomic::Ordering::SeqCst) {
+                    continue;
+                }
                 self.tick();
             }
         });

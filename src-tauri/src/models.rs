@@ -190,15 +190,26 @@ pub struct PlaylistEntry {
 pub struct WatchedChannel {
     pub id: String,
     pub url: String,
+    // MỌI trường (trừ id/url định danh) đều CÓ default: bản mới thêm trường mới
+    // thì watchlist.json CŨ (thiếu trường đó) VẪN đọc được. Thiếu default =
+    // parse hỏng = load() trả rỗng = MẤT SẠCH kênh khi cập nhật (bug đã gặp:
+    // trường "tab" thêm sau làm file cũ hỏng).
+    #[serde(default)]
     pub title: Option<String>,
+    #[serde(default = "default_true")]
     pub enabled: bool,
     /// Which tab to watch: "all" | "videos" | "shorts".
+    #[serde(default = "default_tab")]
     pub tab: String,
+    #[serde(default = "now_utc")]
     pub added_at: DateTime<Utc>,
+    #[serde(default)]
     pub last_checked: Option<DateTime<Utc>>,
     /// How many new videos the last check enqueued.
+    #[serde(default)]
     pub last_new_count: Option<u32>,
     /// Last error message (e.g. bot block), shown in UI; None when OK.
+    #[serde(default)]
     pub last_error: Option<String>,
     /// YouTube channel id (`UC...`), resolved on first add. Enables the fast
     /// RSS-feed check (~1-2 min latency) instead of a heavy yt-dlp scrape.
@@ -287,6 +298,17 @@ fn default_daily_limit() -> u32 {
 
 fn default_source_mode() -> String {
     "new".into()
+}
+
+/// Tab theo dõi mặc định khi watchlist.json cũ thiếu trường `tab`.
+fn default_tab() -> String {
+    "all".into()
+}
+
+/// Mốc thời gian mặc định khi file cũ thiếu `added_at` (chỉ để không hỏng
+/// parse; giá trị thật sẽ có khi kênh được thêm/sửa lại).
+fn now_utc() -> DateTime<Utc> {
+    Utc::now()
 }
 
 /// Video user đã TÍCH CHỌN từ kho kênh nguồn — "hàng chờ làm". Watcher mỗi
