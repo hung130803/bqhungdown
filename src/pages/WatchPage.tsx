@@ -4,6 +4,7 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useQueueStore } from "@/stores/useQueueStore";
 import type { ChannelVideo, HistoryEntry, PickedVideo, WatchedChannel } from "@/types/models";
 import { EmptyState } from "@/components/EmptyState";
+import { planAddMore, pickKeyForMore } from "@/lib/bulk-more";
 
 /** 1 KÊNH đích của user (kênh TikTok) = nhiều key nguồn chung tên kênh.
  *  `rep` = key đầu tiên, đại diện cấu hình mức kênh (nhóm/chế độ/thư mục). */
@@ -684,6 +685,101 @@ export function WatchPage() {
       k.keys.every((c) => (c.picked?.length ?? 0) === 0),
   ).length;
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // ➕ THÊM 1 LƯỢT CHO CẢ NHÓM — khỏi bấm "➕ Thêm" từng kênh.
+  //
+  // QUY TẮC (chọn cho DỄ ĐOÁN, không bao giờ tải ồ ạt):
+  //   MỖI kênh đang tích ✓ được tải THÊM ĐÚNG 1 video — bất kể hôm nay đã tải
+  //   hay còn "Chờ lượt". Kênh chưa tải cũng chạy, và cũng chỉ 1 video thôi.
+  //   Bấm 2 lần = mỗi kênh 2 video. Không có đường nào ra 4-5 video một phát.
+  //
+  // Vì sao dùng `downloadMoreToday` cho CẢ kênh chưa tải, thay vì
+  // `checkWatchedOne`: `checkWatchedOne` tải cho ĐỦ hạn mức ngày (1-3), nên
+  // kênh đặt 3/ngày mà chưa tải gì sẽ ra 3 video — lệch với "thêm 1 lượt".
+  // `downloadMoreToday` (force_one_more) luôn lấy ĐÚNG 1: hàng chờ đã tích
+  // trước, hết thì vét video view cao nhất chưa làm.
+  // ─────────────────────────────────────────────────────────────────────────
+  const [moreRun, setMoreRun] = useState(false);
+  const [moreProg, setMoreProg] = useState({ done: 0, total: 0 });
+  const stopMore = useRef(false);
+
+  const addMoreAll = async () => {
+    if (moreRun || checking) return;
+    // Chia nhóm bằng HÀM THUẦN đã unit-test (src/lib/bulk-more.ts) — hộp xác
+    // nhận và vòng chạy dùng CHUNG kết quả này, không đếm hai kiểu khác nhau.
+    const { run, off, busy, dry } = planAddMore(
+      kenhAll, groupFilter, (k) => activeFor(k.rep.destDir).length > 0,
+    );
+    const scope =
+      groupFilter === null ? "mọi nhóm" : `nhóm "${groupFilter || "Chưa phân nhóm"}"`;
+    if (run.length === 0) {
+      const why = [
+        busy.length ? `${busy.length} kênh đang tải` : "",
+        dry.length ? `${dry.length} kênh hết kho (đổi key)` : "",
+        off.length ? `${off.length} kênh chưa tích ✓` : "",
+      ].filter(Boolean).join(", ");
+      setError(
+        `Không có kênh nào để thêm lượt ở ${scope}.` +
+          (why ? ` Đang bị bỏ qua: ${why}.` : ""),
+      );
+      return;
+    }
+    const skip = [
+      busy.length ? `• ${busy.length} kênh ĐANG TẢI — chờ xong rồi bấm lại` : "",
+      dry.length ? `• ${dry.length} kênh HẾT KHO — cần đổi key nguồn` : "",
+      off.length ? `• ${off.length} kênh chưa tích ✓` : "",
+    ].filter(Boolean).join("\n");
+    const ok = await cmd.confirmDialog(
+      `Tải THÊM 1 video cho ${run.length} kênh của ${scope}?\n\n` +
+        `➜ Tổng cộng ${run.length} video (mỗi kênh ĐÚNG 1, kể cả kênh đang ` +
+        `"Chờ lượt").\n` +
+        "GIỮ nguyên video đã tải hôm nay, chỉ lấy thêm cái kế tiếp.\n" +
+        (skip ? `\nBỎ QUA:\n${skip}\n` : "") +
+        "\nVideo xếp hàng theo số luồng, không tải ồ ạt cùng lúc.",
+      "Thêm 1 lượt cho cả nhóm?",
+    );
+    if (!ok) return;
+    stopMore.current = false;
+    setMoreRun(true);
+    setError(null);
+    setNotice(null);
+    setMoreProg({ done: 0, total: run.length });
+    let added = 0, empty = 0, failed = 0, stopped = false;
+    try {
+      for (let i = 0; i < run.length; i++) {
+        if (stopMore.current) { stopped = true; break; }
+        const k = run[i];
+        setBusyKenh((m) => ({ ...m, [k.key]: true }));
+        try {
+          const got = await cmd.downloadMoreToday(
+            pickKeyForMore(k.keys, k.rep, todayStr).id);
+          if (got > 0) added += got; else empty += 1;
+        } catch {
+          // 1 kênh lỗi KHÔNG được làm đứt cả loạt — đếm lại rồi đi tiếp.
+          failed += 1;
+        } finally {
+          setBusyKenh((m) => ({ ...m, [k.key]: false }));
+        }
+        setMoreProg({ done: i + 1, total: run.length });
+        // Làm tươi thưa (mỗi 5 kênh) để thấy video hiện ra dần mà không dựng
+        // lại danh sách 47 lần liên tiếp (giật).
+        if ((i + 1) % 5 === 0) await reload();
+      }
+      await reload();
+      const parts = [`Đã thêm ${added} video`];
+      if (empty) parts.push(`${empty} kênh hết video chưa làm`);
+      if (failed) parts.push(`${failed} kênh lỗi`);
+      if (busy.length) parts.push(`${busy.length} kênh đang tải — bỏ qua`);
+      if (dry.length) parts.push(`${dry.length} kênh hết kho — bỏ qua`);
+      setNotice((stopped ? "⏹ Đã dừng giữa lượt. " : "") + parts.join(" · ") + ".");
+    } catch (e) {
+      setError(formatErr(e));
+    } finally {
+      setMoreRun(false);
+      setBusyKenh({});
+    }
+  };
+
   return (
     <div className="max-w-3xl mx-auto space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
@@ -745,9 +841,39 @@ export function WatchPage() {
         >
           📊 Thống kê
         </button>
+        {/* ➕ THÊM 1 LƯỢT cả nhóm — đặt NGAY TRƯỚC nút Chạy nhóm vì cùng là
+            "hành động chạy hàng loạt", đọc từ trái sang: thêm lượt / chạy nhóm.
+            Đang chạy thì hoá thành nút DỪNG có số tiến độ. */}
+        <button
+          onClick={() => {
+            if (moreRun) { stopMore.current = true; return; }
+            void addMoreAll();
+          }}
+          disabled={checking || kenhAll.length === 0}
+          className={`px-3 py-1.5 rounded-md font-medium border disabled:opacity-50 ${
+            moreRun
+              ? "bg-danger text-white border-danger"
+              : "bg-surface-2 text-fg border-border hover:bg-surface-3"
+          }`}
+          title={
+            "TẢI THÊM 1 VIDEO cho MỖI kênh đang tích ✓ của " +
+            (groupFilter === null
+              ? "MỌI nhóm"
+              : `nhóm "${groupFilter || "Chưa phân nhóm"}"`) +
+            " — khỏi bấm ➕ Thêm từng kênh.\n\n" +
+            "• Mỗi kênh ĐÚNG 1 video, kể cả kênh đang \"Chờ lượt\" — bấm 2 lần thì mỗi kênh 2 video.\n" +
+            "• GIỮ video đã tải hôm nay, chỉ lấy thêm cái kế tiếp (hàng chờ đã tích trước, hết thì vét view cao nhất).\n" +
+            "• BỎ QUA kênh đang tải, kênh hết kho, kênh chưa tích ✓.\n" +
+            "• Có hỏi xác nhận + nói rõ số kênh; đang chạy bấm lại để DỪNG."
+          }
+        >
+          {moreRun
+            ? `⏹ Dừng (${moreProg.done}/${moreProg.total})`
+            : "➕ Thêm 1 lượt"}
+        </button>
         <button
           onClick={() => void checkNow()}
-          disabled={checking || channels.length === 0}
+          disabled={checking || moreRun || channels.length === 0}
           className="px-3 py-1.5 rounded-md bg-accent text-accent-fg font-medium disabled:opacity-50"
           title={
             (groupFilter === null
