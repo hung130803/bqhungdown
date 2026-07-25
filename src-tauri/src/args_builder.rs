@@ -258,8 +258,21 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
     args.push("--encoding".into());
     args.push("utf-8".into());
     args.push("--no-mtime".into());
+    // TỰ THỬ LẠI NGAY TRONG TIẾN TRÌNH khi kết nối bị ngắt giữa dòng.
+    //
+    // TRƯỚC ĐÂY để `--retries 0` ("để queue lo retry"), nhưng đó là nguyên nhân
+    // thật của "lúc nó dừng": googlevideo hay cắt giữa dòng
+    // (`ERROR: [download] Got error: 2097136 bytes read, 7950349 more expected`)
+    // → retries 0 = chết ngay cả video → queue phải khởi động LẠI tiến trình +
+    // lấy lại link (mất 2-5s, có khi lặp nhiều lần). Để yt-dlp tự nối tiếp thì
+    // nó dùng lại đúng file `.part` đang có, nhanh và êm hơn nhiều.
+    // Queue vẫn là lưới an toàn NGOÀI (retry khi cả tiến trình chết).
+    // ĐO THẬT (file 148MB, 2 lượt): retries 0 = 20.7 / 18.5 MB/s;
+    //                              retries 10 = 22.1 / 21.2 MB/s → không chậm hơn.
     args.push("--retries".into());
-    args.push("0".into()); // queue mgr drives retry
+    args.push("10".into());
+    args.push("--retry-sleep".into());
+    args.push("linear=1::5".into());   // nghỉ 1s, 2s, 3s… tối đa 5s giữa các lần
     args.push("--socket-timeout".into());
     args.push("30".into());
 
@@ -402,9 +415,10 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             args.push("after_move:FINALPATH|%(filepath,_filename)s".into());
 
             // Multi-connection (concurrent fragment downloads).
-            // -N 32 + http-chunk-size lớn = nhiều stream + ít overhead per chunk.
-            // YouTube CDN cho phép tới ~32 connection per IP, vượt qua sẽ bị
-            // throttle. 32 là sweet spot.
+            // LƯU Ý: `-N` CHỈ có tác dụng với video CHIA MẢNH (HLS/DASH
+            // segments). Video YouTube thường giờ là `proto=https`, MỘT file
+            // đơn (đã kiểm: `frag=NA`) → `-N` không làm gì cả, tốc độ phụ thuộc
+            // hoàn toàn vào 1 kết nối. Giữ `-N` cho các video/site có chia mảnh.
             // Riêng lần retry sau 403: hạ xuống -N 4, bỏ chunk-size — pattern
             // tải song song dồn dập trên URL thiếu PO token là chính thứ làm
             // googlevideo trả 403 tiếp.
@@ -418,15 +432,21 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
                 let n = conns_per_item(settings.max_concurrency, 32);
                 args.push("-N".into());
                 args.push(n.to_string());
-                // Bigger HTTP chunk → giảm số request, mỗi request lấy được nhiều
-                // hơn → tốc độ ổn định hơn (thay vì lúc nhanh lúc chậm do TCP slow-start).
-                args.push("--http-chunk-size".into());
-                args.push("10485760".into()); // 10 MiB / chunk
             }
 
-            // NOTE: removed `--throttled-rate` — on a rate-limited IP it makes
-            // yt-dlp re-extract URLs in a loop (download stuck at 0 B) instead
-            // of just downloading slowly. Net effect was slower, not faster.
+            // ĐÃ BỎ `--http-chunk-size` — comment cũ bảo nó cho "tốc độ ổn định
+            // hơn", ĐO THẬT thì ngược lại, và cỡ lớn còn gây thảm hoạ:
+            //   file 148MB  (2 lượt): không chunk 25.3 / 22.2 MB/s
+            //                         chunk 10M   22.1 / 21.2 MB/s
+            //                         chunk 100M   0.2 /  0.2 MB/s  (639s!! ×2)
+            //   file 1.27GB (cỡ video anh Hùng): không chunk 49.1 MB/s
+            //                                    chunk 10M   40.3 MB/s
+            // Kết luận: chunk request kiểu Range làm googlevideo bóp băng thông,
+            // chunk càng lớn bóp càng nặng. Tải một dòng liền là NHANH NHẤT ở
+            // mọi cỡ file đã đo. Đừng thêm lại nếu chưa đo lại bằng file >1GB.
+            //
+            // (`--throttled-rate` cũng đã bỏ từ trước: trên IP đang bị bóp, nó
+            // làm yt-dlp lấy lại link trong vòng lặp, tải đứng ở 0 B.)
 
             // Polite mode — a light random sleep BETWEEN videos so big channel
             // batches don't trip rate limits too fast. Kept light (1-2s) for
@@ -642,6 +662,39 @@ mod tests {
     /// file trần. ĐÃ ĐO THẬT bằng yt-dlp: nếu `-o` là đường dẫn tuyệt đối thì
     /// `-P temp` bị BỎ QUA im lặng và mảnh vẫn rơi vào thư mục kênh — đúng lỗi
     /// "[Errno 2] ... .part-Frag4". Test này khoá lại hành vi đó.
+    /// KHOÁ LẠI KẾT LUẬN ĐO ĐƯỢC 2026-07-25 — đừng thêm `--http-chunk-size`
+    /// lại nếu chưa đo lại bằng file >1GB:
+    ///   148MB : không chunk 25.3 MB/s · chunk 10M 22.1 · chunk 100M 0.2 (!!)
+    ///   1.27GB: không chunk 49.1 MB/s · chunk 10M 40.3
+    #[test]
+    fn khong_bao_gio_dung_http_chunk_size() {
+        for retry in [false, true] {
+            let args = build(
+                &req(),
+                &Settings::default(),
+                BuildMode::Download {
+                    resume: false, force_generic: false, output_stem: None,
+                    safe_retry: retry, temp_tag: Some("t1".into()),
+                },
+            );
+            assert!(
+                !args.iter().any(|a| a == "--http-chunk-size"),
+                "chunk-size làm googlevideo bóp băng thông — xem số đo ở comment"
+            );
+        }
+    }
+
+    /// yt-dlp phải TỰ nối tiếp khi kết nối đứt giữa dòng, thay vì chết cả video
+    /// rồi để queue khởi động lại tiến trình (nguyên nhân "lúc nó dừng").
+    #[test]
+    fn cho_ytdlp_tu_thu_lai_khi_dut_ket_noi() {
+        let args = build(&req(), &Settings::default(), BuildMode::FetchMetadata);
+        let i = args.iter().position(|a| a == "--retries").expect("phải có --retries");
+        assert_ne!(args[i + 1], "0", "retries 0 = đứt kết nối là chết cả video");
+        assert!(args[i + 1].parse::<u32>().unwrap() >= 5, "{}", args[i + 1]);
+        assert!(args.iter().any(|a| a == "--retry-sleep"), "cần nghỉ giữa các lần thử");
+    }
+
     #[test]
     fn thu_muc_tam_rieng_khi_co_tag() {
         let args = build(
