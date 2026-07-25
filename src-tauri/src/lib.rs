@@ -103,6 +103,20 @@ pub fn run() {
             // not pass through aria2c's progress, so the UI progress bar stays
             // empty until the file is fully downloaded.
 
+            // ffmpeg BUNDLE: bắt buộc chỉ đường cho yt-dlp (--ffmpeg-location),
+            // nếu không máy thiếu ffmpeg trong PATH sẽ GHÉP THẤT BẠI → để lại
+            // mảnh rời (.f399.mp4 + .f140.m4a) thay vì 1 video hoàn chỉnh.
+            // Dò 1 LẦN qua cả 2 nơi: cạnh file .exe (bản đóng gói) trước, rồi
+            // thư mục dev. Truyền hết trong 1 lần vì OnceLock chỉ set được 1 lần.
+            {
+                let mut cands: Vec<&std::path::Path> = Vec::new();
+                if let Some(d) = bundled_dir.as_deref() {
+                    cands.push(d);
+                }
+                cands.push(&dev_bin_dir);
+                crate::sidecar_detect::init_ffmpeg(&cands);
+            }
+
             let queue_path = data_dir.join("queue.json");
             let queue = QueueManager::new(
                 handle.clone(),

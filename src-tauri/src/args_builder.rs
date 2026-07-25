@@ -208,6 +208,13 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
 
     // Common flags
     args.push("--no-warnings".into());
+    // CHỈ ĐƯỜNG ffmpeg BUNDLE — bắt buộc để GHÉP video+tiếng. Thiếu cờ này,
+    // yt-dlp chỉ tìm ffmpeg trong PATH; máy nhân viên không có -> ghép THẤT BẠI,
+    // để lại mảnh rời (.f399.mp4 + .f140.m4a) thay vì 1 video hoàn chỉnh.
+    if let Some(p) = crate::sidecar_detect::ffmpeg_path() {
+        args.push("--ffmpeg-location".into());
+        args.push(p.to_string_lossy().to_string());
+    }
     args.push("--encoding".into());
     args.push("utf-8".into());
     args.push("--no-mtime".into());
