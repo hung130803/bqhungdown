@@ -1,6 +1,6 @@
 {
   "productName": "BQHungDown",
-  "version": "0.1.130",
+  "version": "0.1.131",
   "identifier": "com.prodown.app",
   "build": {
     "beforeDevCommand": "npm run dev",

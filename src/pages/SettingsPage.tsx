@@ -169,7 +169,7 @@ export function SettingsPage() {
           <input
             type="number"
             min={1}
-            max={8}
+            max={32}
             value={settings.maxConcurrency}
             onChange={e => {
               // Cho phép xoá rỗng trong khi đang gõ. Chỉ commit khi giá trị
@@ -182,12 +182,19 @@ export function SettingsPage() {
             }}
             className="w-24 px-3 py-2 rounded-md bg-surface border border-border text-fg"
           />
-          {/* Đặt quá cao KHÔNG nhanh hơn: băng thông bị chia nhỏ + YouTube bóp
-              IP khi thấy quá nhiều kết nối. Khuyên 3-6. */}
+          {/* NÓI THẬT thay vì cấm: trần nới lên 32 vì bão-kết-nối đã được
+              ngân sách conns_per_item chặn. Khuyên 3-6 nhưng để user tự quyết,
+              kèm dấu hiệu để họ tự biết khi nào là quá nhiều. */}
           <p className="text-xs text-muted">
-            Khuyên dùng <b>3–6</b> (tối đa 8). Đặt cao hơn <b>không</b> nhanh hơn —
-            băng thông bị chia nhỏ và YouTube bóp tốc độ IP của anh. Video vượt
-            số này <b>xếp hàng chờ</b>, kể cả video bấm Thử lại.
+            Khuyên dùng <b>3–6</b> (tối đa 32) — anh cứ tự đặt, app không hạ
+            xuống nữa. Video vượt số này <b>xếp hàng chờ</b>, kể cả video bấm
+            Thử lại.
+          </p>
+          <p className="text-xs text-muted">
+            Đặt cao <b>không chắc</b> nhanh hơn: YouTube bóp tốc độ từng kết nối
+            và bóp theo IP khi thấy tải dồn dập. Dấu hiệu <b>quá nhiều</b>: mỗi
+            video chỉ còn ~1 MB/s, hay gặp lỗi <i>“Tải bị treo”</i> / <i>“429”</i>.
+            Gặp vậy thì hạ về 4–6.
           </p>
         </div>
       </Field>

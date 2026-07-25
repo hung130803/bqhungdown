@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "bqhungdown"
-version = "0.1.129"
+version = "0.1.130"
 dependencies = [
  "anyhow",
  "arboard",
