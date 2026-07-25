@@ -361,13 +361,20 @@ impl YtDlpRunner {
         let mut args = args_builder::build(
             &item.request,
             settings,
-            BuildMode::Download { resume, force_generic, output_stem, safe_retry: force_clients },
+            BuildMode::Download {
+                resume,
+                force_generic,
+                output_stem,
+                safe_retry: force_clients,
+                // MỖI LƯỢT TẢI MỘT THƯ MỤC TẠM RIÊNG (`.bqd-temp/<short_id>`).
+                // Bản cũ ghi mảnh thẳng vào thư mục kênh — nơi bộ dọn rác, lượt
+                // tải khác và luồng dọn-sau-huỷ cùng thò tay vào → mảnh bị xoá
+                // giữa lúc đang tải → "[Errno 2] ... .part-Frag4" + hàng chục
+                // file rời rạc. Nhãn dùng `short_id` nên BỀN qua khởi động lại
+                // (resume vẫn thấy đúng mảnh cũ của chính nó).
+                temp_tag: Some(item.short_id.clone()),
+            },
         );
-
-        // (Đã bỏ `-P temp` thư mục tạm ẩn) — để yt-dlp ghi file tạm NGAY trong
-        // thư mục đích như "kiểu cũ" (video HLS nhiều mảnh + `-N 32` = tải nhiều
-        // mảnh song song, rất nhanh). File tạm hiện ra lúc tải; khi HUỶ / LỖI sẽ
-        // được cleanup_partials tự xoá sạch (quét đúng thư mục đích).
 
         // "Bỏ qua video đã tải": record finished downloads in an archive file and
         // skip anything already listed. yt-dlp accepts options after the URL, so

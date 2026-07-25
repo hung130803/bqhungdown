@@ -1659,11 +1659,45 @@ fn is_junk_file(name: &str, size: u64) -> bool {
     size == 0
 }
 
+/// Dọn cây `.bqd-temp`: mỗi thư mục con là 1 lượt tải (`short_id`).
+///
+/// TUYỆT ĐỐI KHÔNG mò vào từng file như phần còn lại — mảnh của một video đang
+/// tải có thể đã nằm im hơn 2 phút (yt-dlp tải song song, mảnh số 4 xong sớm
+/// trong khi mảnh 50 còn đang chạy). Xoá theo mtime ở đây là tự tạo lại đúng
+/// lỗi `[Errno 2] ... .part-Frag4`. Quy tắc duy nhất an toàn: lượt tải nào CÒN
+/// SỐNG thì miễn nhiễm hoàn toàn, còn lại xoá cả thư mục con.
+fn clean_temp_tree(
+    dir: &std::path::Path,
+    count: &mut u64,
+    live_tags: &std::collections::HashSet<String>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if live_tags.contains(&name) {
+            continue;
+        }
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            let n = std::fs::read_dir(&path).map(|e| e.count()).unwrap_or(0) as u64;
+            if std::fs::remove_dir_all(&path).is_ok() {
+                *count += n;
+            }
+        } else if std::fs::remove_file(&path).is_ok() {
+            *count += 1;
+        }
+    }
+}
+
 fn clean_dir(
     dir: &std::path::Path,
     count: &mut u64,
     depth: u32,
     protected: &std::collections::HashSet<String>,
+    live_tags: &std::collections::HashSet<String>,
 ) {
     if depth > 6 {
         return;
@@ -1679,7 +1713,11 @@ fn clean_dir(
             Err(_) => continue,
         };
         if ft.is_dir() {
-            clean_dir(&path, count, depth + 1, protected);
+            if entry.file_name().to_string_lossy() == crate::args_builder::TEMP_DIRNAME {
+                clean_temp_tree(&path, count, live_tags);
+            } else {
+                clean_dir(&path, count, depth + 1, protected, live_tags);
+            }
             continue;
         }
         let meta = match entry.metadata() {
@@ -1711,12 +1749,16 @@ fn clean_dir(
 /// Recursively delete leftover/broken download files under `root`, skipping any
 /// whose name starts with a `protected` prefix (active downloads). Shared by the
 /// manual command and the queue's automatic cleanup.
-pub(crate) fn clean_junk_in(root: &std::path::Path, protected: &std::collections::HashSet<String>) -> u64 {
+pub(crate) fn clean_junk_in(
+    root: &std::path::Path,
+    protected: &std::collections::HashSet<String>,
+    live_tags: &std::collections::HashSet<String>,
+) -> u64 {
     if !root.is_dir() {
         return 0;
     }
     let mut count = 0u64;
-    clean_dir(root, &mut count, 0, protected);
+    clean_dir(root, &mut count, 0, protected, live_tags);
     count
 }
 
@@ -1724,7 +1766,11 @@ pub(crate) fn clean_junk_in(root: &std::path::Path, protected: &std::collections
 /// per-channel subfolders), protecting files of currently-downloading videos.
 #[tauri::command]
 pub fn clean_junk_files(folder: String, queue: State<Arc<QueueManager>>) -> AppResult<u64> {
-    Ok(clean_junk_in(std::path::Path::new(&folder), &queue.protected_prefixes()))
+    Ok(clean_junk_in(
+        std::path::Path::new(&folder),
+        &queue.protected_prefixes(),
+        &queue.live_temp_tags(),
+    ))
 }
 
 /// DỌN RÁC TỰ ĐỘNG mọi thư mục tải (mặc định + gốc theo dõi + từng thư mục
@@ -1745,6 +1791,7 @@ pub(crate) fn sweep_junk_all(
 ) -> u64 {
     let s = settings.get();
     let protected = queue.protected_prefixes();
+    let live_tags = queue.live_temp_tags();
     let mut dirs = crate::watcher::watch_folders(watchlist, &s);
     if let Some(root) = s.watch_root.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
         dirs.push(std::path::PathBuf::from(root));
@@ -1756,7 +1803,7 @@ pub(crate) fn sweep_junk_all(
         if d.as_os_str().is_empty() || !seen.insert(d.clone()) {
             continue;
         }
-        total += clean_junk_in(&d, &protected);
+        total += clean_junk_in(&d, &protected, &live_tags);
     }
     total
 }
@@ -1951,5 +1998,52 @@ mod tests {
         let (kept, removed) = strip_archive_ids(text, &ids);
         assert_eq!(removed, 0);
         assert!(kept.contains("aaa") && kept.contains("bbb"));
+    }
+}
+
+#[cfg(test)]
+mod tests_don_rac {
+    use std::collections::HashSet;
+    use std::fs;
+
+    /// LỖI THẬT ĐÃ GẶP: bộ dọn rác chạy mỗi 2 phút xoá mảnh `.part-FragN` của
+    /// video ĐANG tải (mảnh tải xong sớm nên mtime già hơn 2 phút) →
+    /// "[Errno 2] No such file or directory: '....mp4.part-Frag4'".
+    /// Nay mảnh nằm trong `.bqd-temp/<short_id>`; lượt tải còn sống phải MIỄN
+    /// NHIỄM tuyệt đối, không phụ thuộc mtime hay tên file.
+    #[test]
+    fn khong_xoa_manh_cua_luot_tai_dang_song() {
+        let root = std::env::temp_dir().join("bqd_test_junk_live");
+        let _ = fs::remove_dir_all(&root);
+        let live = root.join(".bqd-temp").join("sqnivr");
+        let dead = root.join(".bqd-temp").join("cuxxxx");
+        fs::create_dir_all(&live).unwrap();
+        fs::create_dir_all(&dead).unwrap();
+        let f_live = live.join("Video dai.mp4.part-Frag4");
+        let f_dead = dead.join("Video khac.mp4.part-Frag9");
+        fs::write(&f_live, b"x").unwrap();
+        fs::write(&f_dead, b"y").unwrap();
+
+        let live_tags: HashSet<String> = ["sqnivr".to_string()].into_iter().collect();
+        super::clean_junk_in(&root, &HashSet::new(), &live_tags);
+
+        assert!(f_live.exists(), "mảnh của lượt tải ĐANG SỐNG bị xoá — lỗi cũ tái diễn");
+        assert!(!f_dead.exists(), "mảnh mồ côi phải được dọn");
+        assert!(!dead.exists(), "thư mục tạm mồ côi phải bị xoá cả cây");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// File rác ở TẦNG GỐC thư mục kênh (do bản CŨ để lại) vẫn phải dọn được,
+    /// nhưng chỉ khi đã cũ hơn 2 phút — file vừa ghi thì để yên.
+    #[test]
+    fn van_don_duoc_manh_ban_cu_o_tang_goc() {
+        let root = std::env::temp_dir().join("bqd_test_junk_old");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let moi = root.join("Vua tai.mp4.part");
+        fs::write(&moi, b"z").unwrap();
+        super::clean_junk_in(&root, &HashSet::new(), &HashSet::new());
+        assert!(moi.exists(), "file vừa ghi (<2 phút) không được xoá");
+        let _ = fs::remove_dir_all(&root);
     }
 }

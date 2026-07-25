@@ -211,7 +211,13 @@ fn cleanup_partials_inner(item: &DownloadItem, aggressive: bool) {
         false
     };
 
-    for dir in [folder.clone(), folder.join(".bqd-temp")] {
+    // Thư mục tạm RIÊNG của lượt tải này: xoá cả cây, gọn và chắc chắn. Đây là
+    // nơi bản mới đặt toàn bộ mảnh, nên chỉ 1 dòng này là sạch.
+    let _ = std::fs::remove_dir_all(crate::args_builder::temp_dir_for(folder, &item.short_id));
+
+    // Vẫn quét thư mục kênh + `.bqd-temp` chung: dọn nốt mảnh do BẢN CŨ để lại
+    // (máy nào cập nhật lên cũng còn tồn từ trước).
+    for dir in [folder.clone(), folder.join(crate::args_builder::TEMP_DIRNAME)] {
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
             Err(_) => continue,
@@ -293,9 +299,14 @@ impl QueueManager {
                     continue;
                 }
                 let protected = cleaner.protected_prefixes();
+                // `live_temp_tags` là lớp chặn CHÍNH XÁC (so `short_id` bằng
+                // nhau), khác với `protected` chỉ đoán theo 25 ký tự đầu tiêu
+                // đề. Chính vòng lặp 2 phút này từng xoá mảnh của video ĐANG
+                // tải khi cách đoán kia trượt → "[Errno 2] ... .part-Frag4".
+                let live_tags = cleaner.live_temp_tags();
                 // Blocking FS walk on a worker thread so the runtime isn't blocked.
                 std::thread::spawn(move || {
-                    let _ = crate::commands::clean_junk_in(&folder, &protected);
+                    let _ = crate::commands::clean_junk_in(&folder, &protected, &live_tags);
                 });
             }
         });
@@ -318,6 +329,24 @@ impl QueueManager {
                     .collect::<String>()
             })
             .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    /// Nhãn thư mục tạm (`short_id`) của MỌI lượt tải chưa kết thúc — kể cả mục
+    /// đang CHỜ / TẠM DỪNG, vì mảnh của chúng phải sống sót để tải tiếp. Bộ dọn
+    /// rác lấy danh sách này để không bao giờ chạm vào `.bqd-temp/<nhãn>` sống.
+    pub fn live_temp_tags(&self) -> std::collections::HashSet<String> {
+        self.items
+            .read()
+            .unwrap()
+            .values()
+            .filter(|it| {
+                matches!(
+                    it.state,
+                    DownloadState::Queued | DownloadState::Downloading | DownloadState::Paused
+                )
+            })
+            .map(|it| it.short_id.clone())
             .collect()
     }
 
@@ -540,6 +569,14 @@ impl QueueManager {
     }
 
     pub fn enqueue(self: &Arc<Self>, item: DownloadItem) -> AppResult<()> {
+        // CHỐNG TẢI TRÙNG CÙNG LÚC: cùng URL + cùng thư mục lưu mà đã có lượt
+        // chưa kết thúc thì bỏ qua. Hai tiến trình yt-dlp tải cùng 1 video vào
+        // cùng thư mục sẽ tranh nhau file trung gian và ra 2 file gần trùng tên
+        // trong thư mục kênh (đúng cái anh Hùng thấy ở "kênh 53").
+        // Mục ĐÃ xong/lỗi/huỷ KHÔNG chặn — user vẫn tải lại được bình thường.
+        if self.has_live_same_request(&item) {
+            return Ok(());
+        }
         let id = item.short_id.clone();
         self.items.write().unwrap().insert(id.clone(), item.clone());
         self.emit_state(&item);
@@ -594,6 +631,22 @@ impl QueueManager {
                 cleanup_partials_inner(&item, true);
             }
         });
+    }
+
+    /// true nếu đã có lượt tải CHƯA KẾT THÚC của ĐÚNG yêu cầu này (cùng URL +
+    /// cùng thư mục lưu). So URL chuẩn hoá chữ thường/bỏ khoảng trắng hai đầu.
+    fn has_live_same_request(&self, item: &DownloadItem) -> bool {
+        let url = item.request.url.trim().to_lowercase();
+        let folder = norm_folder(&item.request.save_folder);
+        self.items.read().unwrap().values().any(|it| {
+            it.short_id != item.short_id
+                && matches!(
+                    it.state,
+                    DownloadState::Queued | DownloadState::Downloading | DownloadState::Paused
+                )
+                && it.request.url.trim().to_lowercase() == url
+                && norm_folder(&it.request.save_folder) == folder
+        })
     }
 
     /// true nếu đang có LƯỢT TẢI SỐNG của cùng video này trong hàng đợi.
@@ -967,6 +1020,16 @@ impl QueueManager {
 
         match outcome {
             Ok(RunOutcome::Completed { output_path, title, thumbnail, channel }) => {
+                // Dọn thư mục tạm — CHỈ khi đã XONG. yt-dlp dời file cuối ra
+                // ngoài nhưng để lại thư mục con rỗng; không dọn thì `.bqd-temp`
+                // phình ra hàng nghìn thư mục rỗng sau vài tháng.
+                //
+                // CỐ Ý KHÔNG dọn ở nhánh LỖI: mảnh `.part` phải còn để nút
+                // "Thử lại" tải tiếp từ chỗ dở, chứ không phải làm lại từ 0%.
+                let _ = std::fs::remove_dir_all(crate::args_builder::temp_dir_for(
+                    &item.request.save_folder,
+                    &id,
+                ));
                 let mut map = self.items.write().unwrap();
                 if let Some(it) = map.get_mut(&id) {
                     it.state = DownloadState::Completed;
