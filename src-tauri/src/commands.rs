@@ -473,9 +473,24 @@ pub fn cancel_all_downloads(
     queue: State<Arc<QueueManager>>,
     watchlist: State<Arc<WatchlistStore>>,
     history: State<Arc<HistoryStore>>,
+    settings: State<'_, Arc<SettingsStore>>,
 ) -> AppResult<u32> {
     let n = queue.cancel_all();
     crate::watcher::reconcile_all(watchlist.inner(), queue.inner(), history.inner());
+    // DỌN MẢNH ngay sau khi huỷ hàng loạt: mục chưa kịp biết tên file thì
+    // cleanup theo-tiêu-đề không bắt được -> quét rác toàn bộ thư mục tải.
+    // Chạy nền để không chặn UI (huỷ phải tức thời).
+    {
+        let q = queue.inner().clone();
+        let w = watchlist.inner().clone();
+        let s = settings.inner().clone();
+        std::thread::spawn(move || {
+            let n = sweep_junk_all(&q, &w, &s);
+            if n > 0 {
+                eprintln!("[junk] đã dọn {n} file mảnh tải dở sau khi huỷ tất cả");
+            }
+        });
+    }
     let _ = app.emit(
         crate::events::EV_WATCH_UPDATED,
         crate::events::WatchUpdatedPayload { channel_id: String::new(), new_count: 0 },
@@ -1710,6 +1725,40 @@ pub(crate) fn clean_junk_in(root: &std::path::Path, protected: &std::collections
 #[tauri::command]
 pub fn clean_junk_files(folder: String, queue: State<Arc<QueueManager>>) -> AppResult<u64> {
     Ok(clean_junk_in(std::path::Path::new(&folder), &queue.protected_prefixes()))
+}
+
+/// DỌN RÁC TỰ ĐỘNG mọi thư mục tải (mặc định + gốc theo dõi + từng thư mục
+/// kênh). Trả tổng số file đã dọn.
+///
+/// VÌ SAO CẦN: mảnh tải dở (`.part`, `.part-FragN`, `.f137.mp4`…) chỉ được dọn
+/// khi khớp TIÊU ĐỀ hoặc đường dẫn file đã biết (cleanup_partials). Huỷ hàng
+/// loạt / app bị kill khi nhiều mục CHƯA kịp biết tên file -> không khớp ->
+/// mảnh nằm lại VĨNH VIỄN, dồn thành "hàng 50 file rời" trong thư mục kênh.
+/// Hàm dọn rác vốn CHỈ chạy khi user bấm nút trong Cài đặt — nay gọi tự động.
+///
+/// AN TOÀN: chỉ xoá file khớp mẫu rác rất chặt, BỎ QUA file vừa đổi trong 2
+/// phút (đang tải) và file thuộc mục đang tải (protected_prefixes).
+pub(crate) fn sweep_junk_all(
+    queue: &Arc<QueueManager>,
+    watchlist: &Arc<WatchlistStore>,
+    settings: &Arc<SettingsStore>,
+) -> u64 {
+    let s = settings.get();
+    let protected = queue.protected_prefixes();
+    let mut dirs = crate::watcher::watch_folders(watchlist, &s);
+    if let Some(root) = s.watch_root.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        dirs.push(std::path::PathBuf::from(root));
+    }
+    // Khử trùng để không quét lặp cùng 1 thư mục.
+    let mut seen = std::collections::HashSet::new();
+    let mut total = 0u64;
+    for d in dirs {
+        if d.as_os_str().is_empty() || !seen.insert(d.clone()) {
+            continue;
+        }
+        total += clean_junk_in(&d, &protected);
+    }
+    total
 }
 
 // ---------- Saved bookmarks ----------

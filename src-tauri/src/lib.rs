@@ -170,6 +170,25 @@ pub fn run() {
                 history.clone(),
             );
 
+            // DỌN MẢNH TẢI DỞ CÒN TỒN từ phiên trước (app bị kill / huỷ hàng
+            // loạt / mất điện). Trước đây việc này CHỈ chạy khi user bấm nút
+            // trong Cài đặt -> mảnh dồn thành hàng chục file rời trong thư mục
+            // kênh. Chạy nền để không làm chậm lúc mở app.
+            {
+                let q = queue.clone();
+                let w = watchlist.clone();
+                let s = settings.clone();
+                std::thread::spawn(move || {
+                    // Chờ chút cho hàng đợi khôi phục xong (khỏi dọn oan file
+                    // của mục sắp tiếp tục tải).
+                    std::thread::sleep(std::time::Duration::from_secs(20));
+                    let n = crate::commands::sweep_junk_all(&q, &w, &s);
+                    if n > 0 {
+                        eprintln!("[junk] khởi động: đã dọn {n} file mảnh tải dở còn tồn");
+                    }
+                });
+            }
+
             // PO Token provider (bgutil) — opt-in anti-bot helper. Start it in
             // the background when enabled; killed on shutdown.
             let po_proc = Arc::new(crate::po_token::ProviderProcess::default());
