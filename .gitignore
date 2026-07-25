@@ -18,3 +18,11 @@ src-tauri/Cargo.lock.bak
 # OS
 Thumbs.db
 .DS_Store
+
+# File SINH RA khi build — không commit.
+# CẢNH BÁO đã gặp: Vite ưu tiên `vite.config.js` TRƯỚC `vite.config.ts`, nên
+# nếu bản .js commit sẵn bị cũ thì build âm thầm dùng cấu hình cũ, sửa .ts
+# không có tác dụng. Để tsc tự sinh mỗi lần build là chắc chắn không lệch.
+vite.config.js
+vite.config.d.ts
+*.tsbuildinfo
