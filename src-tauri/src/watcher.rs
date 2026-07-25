@@ -221,6 +221,17 @@ pub async fn check_channel(
     }
 }
 
+/// Số video MỚI được phép TỰ TẢI lượt này = hạn mức ngày (kẹp 1..=3) trừ số
+/// đã tải hôm nay, rồi kẹp trong [0, số video mới]. Trước đây đường "video mới"
+/// KHÔNG áp hạn mức -> kênh đăng 4 video là tải cả 4 dù để 1/ngày. Hàm THUẦN
+/// để unit-test. Phần dư (không lấy lượt này) được để "chưa thấy" -> lần quét
+/// sau tải tiếp, nhỏ giọt đúng hạn mức.
+fn new_take_count(new_len: usize, daily_limit: u32, taken_today: u32) -> usize {
+    let limit = daily_limit.clamp(1, 3);
+    let slots = limit.saturating_sub(taken_today) as usize;
+    new_len.min(slots)
+}
+
 /// Diff `fetched` against the channel's `seen_ids`, enqueue new videos (none on
 /// baseline), and persist the updated channel. Returns count enqueued.
 #[allow(clippy::too_many_arguments)]
@@ -287,6 +298,15 @@ async fn apply(
     }
     // Kênh "Video dài" LOẠI Shorts (và ngược lại) — tôn trọng cấu hình.
     new_fetched.retain(|f| f.video.is_short == want_shorts);
+    // TẢI THEO THỨ TỰ: video mới CŨ NHẤT trước (tăng dần theo ngày đăng) — khi
+    // kênh đăng 1 đống trong ngày mà hạn mức 1, mỗi lượt lấy 1 theo đúng thứ tự
+    // đăng, không nhảy cóc / không bỏ sót video ở giữa. Nguồn (RSS) dùng chung
+    // 1 định dạng ngày cho cả kênh nên so sánh chuỗi là đủ.
+    new_fetched.sort_by(|a, b| {
+        let ka = a.published.clone().or_else(|| a.video.upload_date.clone()).unwrap_or_default();
+        let kb = b.published.clone().or_else(|| b.video.upload_date.clone()).unwrap_or_default();
+        ka.cmp(&kb)
+    });
     let new_count = new_fetched.len() as u32;
     let auto = channel.auto_download;
 
@@ -299,20 +319,32 @@ async fn apply(
         0
     };
 
+    // Video mới KHÔNG tải quá hạn mức ngày. Phần DƯ (không lấy lượt này) để
+    // "chưa thấy" -> lần quét sau tải tiếp (nhỏ giọt). Chỉ áp khi auto tải.
+    let mut overflow_new_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     if new_count > 0 {
         let chan_name = channel.title.clone().unwrap_or_else(|| channel.url.clone());
         let first = new_fetched.first().map(|f| f.video.title.clone()).unwrap_or_default();
         crate::notification::notify_new_videos(app, &settings, &chan_name, new_count, &first, auto);
 
         if auto {
-            let vids: Vec<ChannelVideo> = new_fetched.iter().map(|f| f.video.clone()).collect();
-            let folder = resolve_watch_folder(
-                &channel.dest_dir, &channel.target_name,
-                &settings.watch_root, &settings.default_folder,
-            );
-            let got = enqueue_new(app, queue, settings_store, history, &channel.title,
-                                  folder, channel.max_height, &vids, &settings).await;
-            drip_count += got;
+            let take_n = new_take_count(new_fetched.len(), channel.daily_limit, drip_count);
+            // đánh dấu phần DƯ để KHÔNG ghi vào seen_ids (lần sau tải tiếp).
+            for f in new_fetched.iter().skip(take_n) {
+                overflow_new_ids.insert(f.id.clone());
+            }
+            let vids: Vec<ChannelVideo> =
+                new_fetched.iter().take(take_n).map(|f| f.video.clone()).collect();
+            if !vids.is_empty() {
+                let folder = resolve_watch_folder(
+                    &channel.dest_dir, &channel.target_name,
+                    &settings.watch_root, &settings.default_folder,
+                );
+                let got = enqueue_new(app, queue, settings_store, history, &channel.title,
+                                      folder, channel.max_height, &vids, &settings).await;
+                drip_count += got;
+            }
         }
     }
 
@@ -390,7 +422,7 @@ async fn apply(
     };
     let new_done: Vec<String> = new_fetched
         .iter()
-        .filter(|_| auto)
+        .filter(|f| auto && !overflow_new_ids.contains(&f.id))  // chỉ video ĐÃ enqueue
         .map(|f| f.id.clone())
         .chain(dripped.iter().map(|p| p.id.clone()))
         .collect();
@@ -416,6 +448,11 @@ async fn apply(
 
     let _ = store.update(id, |c| {
         for f in &fetched {
+            // Video mới DƯ hạn mức: CHƯA đánh dấu "đã thấy" -> lần quét sau tải
+            // tiếp cho đủ nhỏ giọt (không thì mất luôn, hoặc tải lố như trước).
+            if overflow_new_ids.contains(&f.id) {
+                continue;
+            }
             if !c.seen_ids.contains(&f.id) {
                 c.seen_ids.push(f.id.clone());
             }
@@ -990,6 +1027,26 @@ async fn enqueue_new(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_moi_khong_tai_qua_han_muc_ngay() {
+        // limit 1, chưa tải hôm nay: 4 video mới -> chỉ lấy 1, dư 3 để dành.
+        assert_eq!(new_take_count(4, 1, 0), 1);
+        // đã tải 1/1 hôm nay -> hết suất, lấy 0 (dù còn video mới).
+        assert_eq!(new_take_count(3, 1, 1), 0);
+        // limit 3, chưa tải: 5 mới -> lấy 3.
+        assert_eq!(new_take_count(5, 3, 0), 3);
+        // limit 3, đã tải 2 -> còn 1 suất.
+        assert_eq!(new_take_count(5, 3, 2), 1);
+        // ít video hơn suất -> lấy hết số có.
+        assert_eq!(new_take_count(2, 3, 0), 2);
+        // daily_limit=0 (dữ liệu cũ) vẫn kẹp về tối thiểu 1 suất.
+        assert_eq!(new_take_count(4, 0, 0), 1);
+        // daily_limit khủng bị kẹp 3.
+        assert_eq!(new_take_count(9, 99, 0), 3);
+        // taken_today > limit (bất thường) -> 0, không âm.
+        assert_eq!(new_take_count(4, 1, 5), 0);
+    }
 
     #[test]
     fn chay_dung_nhom_dang_xem_khong_kich_nhom_khac() {
