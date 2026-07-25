@@ -1690,6 +1690,10 @@ fn clean_temp_tree(
             *count += 1;
         }
     }
+    // Dọn nốt CÁI VỎ `.bqd-temp` khi đã rỗng — không thì mỗi thư mục kênh còn
+    // lại 1 thư mục trống nhìn như rác (anh Hùng đã báo). `remove_dir` chỉ ăn
+    // khi rỗng nên lượt tải đang chạy không bị ảnh hưởng.
+    let _ = std::fs::remove_dir(dir);
 }
 
 fn clean_dir(

@@ -213,7 +213,7 @@ fn cleanup_partials_inner(item: &DownloadItem, aggressive: bool) {
 
     // Thư mục tạm RIÊNG của lượt tải này: xoá cả cây, gọn và chắc chắn. Đây là
     // nơi bản mới đặt toàn bộ mảnh, nên chỉ 1 dòng này là sạch.
-    let _ = std::fs::remove_dir_all(crate::args_builder::temp_dir_for(folder, &item.short_id));
+    crate::args_builder::purge_temp_dir(folder, &item.short_id);
 
     // Vẫn quét thư mục kênh + `.bqd-temp` chung: dọn nốt mảnh do BẢN CŨ để lại
     // (máy nào cập nhật lên cũng còn tồn từ trước).
@@ -1008,10 +1008,7 @@ impl QueueManager {
                 // Nhánh LỖI không dọn ở đây vì đã có `cleanup_partials` trong
                 // `handle_failure` (khi bỏ cuộc hẳn); còn lượt tự thử lại giữa
                 // chừng thì CỐ Ý giữ mảnh để tải tiếp từ chỗ dở.
-                let _ = std::fs::remove_dir_all(crate::args_builder::temp_dir_for(
-                    &item.request.save_folder,
-                    &id,
-                ));
+                crate::args_builder::purge_temp_dir(&item.request.save_folder, &id);
                 let mut map = self.items.write().unwrap();
                 if let Some(it) = map.get_mut(&id) {
                     it.state = DownloadState::Completed;
