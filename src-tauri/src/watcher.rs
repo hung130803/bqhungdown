@@ -319,96 +319,99 @@ async fn apply(
         0
     };
 
-    // Video mới KHÔNG tải quá hạn mức ngày. Phần DƯ (không lấy lượt này) để
-    // "chưa thấy" -> lần quét sau tải tiếp (nhỏ giọt). Chỉ áp khi auto tải.
+    // Video mới DƯ hạn mức -> để "chưa thấy" (điền ở TIER 2). Báo có video mới
+    // 1 lần (dù có tải hay không).
     let mut overflow_new_ids: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     if new_count > 0 {
         let chan_name = channel.title.clone().unwrap_or_else(|| channel.url.clone());
         let first = new_fetched.first().map(|f| f.video.title.clone()).unwrap_or_default();
         crate::notification::notify_new_videos(app, &settings, &chan_name, new_count, &first, auto);
+    }
 
-        if auto {
-            let take_n = new_take_count(new_fetched.len(), channel.daily_limit, drip_count);
-            // đánh dấu phần DƯ để KHÔNG ghi vào seen_ids (lần sau tải tiếp).
-            for f in new_fetched.iter().skip(take_n) {
-                overflow_new_ids.insert(f.id.clone());
-            }
-            let vids: Vec<ChannelVideo> =
-                new_fetched.iter().take(take_n).map(|f| f.video.clone()).collect();
-            if !vids.is_empty() {
-                let folder = resolve_watch_folder(
-                    &channel.dest_dir, &channel.target_name,
-                    &settings.watch_root, &settings.default_folder,
-                );
-                let got = enqueue_new(app, queue, settings_store, history, &channel.title,
-                                      folder, channel.max_height, &vids, &settings).await;
-                drip_count += got;
-            }
+    // THỨ TỰ ƯU TIÊN chọn video mỗi ngày (theo yêu cầu user):
+    //   ① HÀNG CHỜ đã tích 🎯  →  ② VIDEO MỚI  →  ③ VIEW CAO NHẤT (tự vét).
+    // Mỗi tier chỉ lấy trong SỐ SUẤT CÒN LẠI của hạn mức ngày; enqueue THEO
+    // ĐÚNG thứ tự trên -> cái ưu tiên tải trước. Không rót ở lượt baseline.
+    let limit = channel.daily_limit.clamp(1, 3);
+    let mut dripped: Vec<PickedVideo> = Vec::new();   // picked + vét đã enqueue
+    let mut auto_scanned = false;
+    let mut pick_note: Option<String> = None;
+    let folder = resolve_watch_folder(
+        &channel.dest_dir, &channel.target_name,
+        &settings.watch_root, &settings.default_folder,
+    );
+
+    // ① HÀNG CHỜ (video user tự tích) — mọi chế độ trừ "new".
+    if !is_baseline && channel.source_mode != "new" && drip_count < limit {
+        let mut picks = plan_drip(channel, drip_count);
+        picks.retain(|p| !downloaded.contains(&p.id)
+            && !channel.skipped_ids.contains(&p.id)
+            && !on_disk(&p.title));
+        if !picks.is_empty() {
+            let vids: Vec<ChannelVideo> = picks.iter().map(picked_to_channel_video).collect();
+            let got = enqueue_new(app, queue, settings_store, history, &channel.title,
+                                  folder.clone(), channel.max_height, &vids, &settings).await;
+            picks.truncate(got as usize);
+            drip_count += got;
+            dripped.extend(picks);
         }
     }
 
-    // Còn suất hôm nay thì lấy thêm video theo CHẾ ĐỘ NGUỒN của kênh
-    // (video mới đăng vừa enqueue ở trên đã chiếm suất trước). Không rót ở
-    // lượt baseline — kênh vừa thêm, đợi vòng quét kế cho ổn định.
-    let mut dripped: Vec<PickedVideo> = Vec::new();
-    let mut auto_scanned = false;
-    // Ghi chú minh bạch cho lần tự vét (video nào + bao nhiêu view).
-    let mut pick_note: Option<String> = None;
-    // Chế độ "new" = CHỈ video mới, không rót gì thêm. Mọi chế độ khác
-    // (auto / picked cũ) = TỰ ĐỘNG: hàng chờ tích ƯU TIÊN trước (bất kể
-    // view nhiều/ít, đúng thứ tự tích) → HẾT hàng chờ mới vét video view
-    // cao nhất CHƯA làm. Bỏ qua video đã tải (done_ids).
-    if !is_baseline && channel.source_mode != "new" {
-        let limit = channel.daily_limit.clamp(1, 3);
-        // 1. Hàng chờ tích trước (video mới đã chiếm suất ở trên nếu có);
-        //    bỏ video ĐÃ TẢI (archive ∪ lịch sử — `downloaded` ở trên).
-        dripped = plan_drip(channel, drip_count);
-        dripped.retain(|p| !downloaded.contains(&p.id)
-            && !channel.skipped_ids.contains(&p.id)
-            && !on_disk(&p.title));
-        let after_picked = drip_count + dripped.len() as u32;
-        // 2. Còn suất → vét kho view cao nhất (quét TỐI ĐA 1 lần/ngày).
-        if after_picked < limit
-            && channel.auto_fetch_date.as_deref() != Some(today.as_str())
-        {
-            auto_scanned = true;
-            // Chỉ VIDEO DÀI hoặc SHORTS — không còn "all" trộn lẫn (bỏ theo
-            // yêu cầu: vét lẫn shorts+dài là hỏng format cắt).
-            let tab = if channel.tab == "shorts" { "shorts".to_string() } else { "videos".to_string() };
-            // Loại video đã làm + vừa lấy từ hàng chờ + ĐÃ TẢI
-            // (archive ∪ lịch sử Completed — không bao giờ vét lại đồ cũ).
-            let mut done_plus: Vec<String> = channel.done_ids.clone();
-            done_plus.extend(channel.skipped_ids.clone());  // ⛔ user bỏ qua
-            done_plus.extend(channel.dl_pending.clone());
-            done_plus.extend(dripped.iter().map(|p| p.id.clone()));
-            done_plus.extend(downloaded.iter().cloned());
-            // KHO CẢ KÊNH (quét 1 lần, lưu đĩa, lần sau lấy thẳng) → chọn
-            // video NHIỀU VIEW NHẤT của cả kênh chưa làm.
-            let mut videos =
-                vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
-            videos.retain(|v| !on_disk(&v.title));   // file còn trên đĩa = đã tải
-            if !videos.is_empty() {
-                let cand = pick_auto_candidates(
-                    &videos, &done_plus, (limit - after_picked) as usize, &tab,
-                );
-                if let Some(top) = cand.first() {
-                    pick_note = Some(fmt_pick_note(top));
-                }
+    // ② VIDEO MỚI — còn suất; cũ nhất trước (đã sort); phần dư để "chưa thấy".
+    if auto && new_count > 0 && drip_count < limit {
+        let take_n = new_take_count(new_fetched.len(), channel.daily_limit, drip_count);
+        for f in new_fetched.iter().skip(take_n) {
+            overflow_new_ids.insert(f.id.clone());
+        }
+        let vids: Vec<ChannelVideo> =
+            new_fetched.iter().take(take_n).map(|f| f.video.clone()).collect();
+        if !vids.is_empty() {
+            let got = enqueue_new(app, queue, settings_store, history, &channel.title,
+                                  folder.clone(), channel.max_height, &vids, &settings).await;
+            drip_count += got;
+        }
+    } else if auto && new_count > 0 {
+        // Hết suất (hàng chờ đã chiếm) -> TẤT CẢ video mới để "chưa thấy",
+        // lần quét sau tải tiếp; KHÔNG mất, KHÔNG tải lố.
+        for f in &new_fetched {
+            overflow_new_ids.insert(f.id.clone());
+        }
+    }
+
+    // ③ VIEW CAO NHẤT (tự vét kho) — còn suất; quét tối đa 1 lần/ngày.
+    if !is_baseline && channel.source_mode != "new"
+        && drip_count < limit
+        && channel.auto_fetch_date.as_deref() != Some(today.as_str())
+    {
+        auto_scanned = true;
+        let tab = if channel.tab == "shorts" { "shorts".to_string() } else { "videos".to_string() };
+        // Né: đã làm + bỏ qua + đang tải + đã tải (archive/lịch sử) + hàng chờ
+        // vừa lấy + MỌI video mới lượt này (đã xử lý ở tier ②).
+        let mut done_plus: Vec<String> = channel.done_ids.clone();
+        done_plus.extend(channel.skipped_ids.clone());
+        done_plus.extend(channel.dl_pending.clone());
+        done_plus.extend(dripped.iter().map(|p| p.id.clone()));
+        done_plus.extend(downloaded.iter().cloned());
+        done_plus.extend(new_fetched.iter().map(|f| f.id.clone()));
+        let mut videos = vet_pool(app, &channel.url, &tab, &done_plus, &settings).await;
+        videos.retain(|v| !on_disk(&v.title));   // file còn trên đĩa = đã tải
+        if !videos.is_empty() {
+            let mut cand = pick_auto_candidates(
+                &videos, &done_plus, (limit - drip_count) as usize, &tab,
+            );
+            if let Some(top) = cand.first() {
+                pick_note = Some(fmt_pick_note(top));
+            }
+            if !cand.is_empty() {
+                let vids: Vec<ChannelVideo> = cand.iter().map(picked_to_channel_video).collect();
+                let got = enqueue_new(app, queue, settings_store, history, &channel.title,
+                                      folder.clone(), channel.max_height, &vids, &settings).await;
+                cand.truncate(got as usize);
+                drip_count += got;
                 dripped.extend(cand);
             }
         }
-    }
-    if !dripped.is_empty() {
-        let vids: Vec<ChannelVideo> = dripped.iter().map(picked_to_channel_video).collect();
-        let folder = resolve_watch_folder(
-            &channel.dest_dir, &channel.target_name,
-            &settings.watch_root, &settings.default_folder,
-        );
-        let got = enqueue_new(app, queue, settings_store, history, &channel.title,
-                              folder, channel.max_height, &vids, &settings).await;
-        dripped.truncate(got as usize);
-        drip_count += got;
     }
     // KHO CẠN: quét kho hôm nay mà không moi ra được video nào chưa làm
     // (và cũng chẳng có video mới) -> báo user đổi key. Có bài trở lại
