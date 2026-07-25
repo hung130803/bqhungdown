@@ -4,7 +4,7 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useQueueStore } from "@/stores/useQueueStore";
 import type { ChannelVideo, HistoryEntry, PickedVideo, WatchedChannel } from "@/types/models";
 import { EmptyState } from "@/components/EmptyState";
-import { planAddMore, pickKeyForMore } from "@/lib/bulk-more";
+import { planAddMore, pickKeyForMore, planCheckNow } from "@/lib/bulk-more";
 
 /** 1 KÊNH đích của user (kênh TikTok) = nhiều key nguồn chung tên kênh.
  *  `rep` = key đầu tiên, đại diện cấu hình mức kênh (nhóm/chế độ/thư mục). */
@@ -543,33 +543,45 @@ export function WatchPage() {
 
   const checkNow = async () => {
     if (checking) return;
-    // CHỈ CHẠY NHÓM ĐANG XEM: nếu đang lọc 1 nhóm (groupFilter != null) thì chỉ
-    // kênh nhóm đó; groupFilter = null (xem hết) mới chạy mọi nhóm. Tránh lỗi
-    // "ấn 1 nhóm mà kích cả các nhóm khác".
-    const inActiveGroup = (c: { group?: string | null }) =>
-      groupFilter === null || (c.group?.trim() ?? "") === groupFilter;
+    // CHỈ CHẠY NHÓM ĐANG XEM: `planCheckNow` lọc theo `groupFilter` (null =
+    // mọi nhóm) để đếm, và `cmd.checkWatchedNow(groupFilter)` cũng nhận đúng
+    // nhóm đó ở backend — không còn "ấn 1 nhóm mà kích cả các nhóm khác".
     // XÁC NHẬN trước khi chạy hàng loạt — tránh bấm nhầm kích cả loạt kênh.
-    // Đếm theo KÊNH đích đang tích (gom key cùng tên), không đếm theo key.
-    const enabledKenh = new Set(
-      channels
-        .filter((c) => c.enabled && inActiveGroup(c))
-        .map((c) => c.targetName?.trim() || (c.destDir ? baseName(c.destDir) : c.id)),
-    ).size;
+    // Tách rõ AI CÒN SUẤT / AI ĐÃ ĐỦ (hàm thuần đã unit-test): bản cũ chỉ ghi
+    // "Chạy 11 kênh đang tích ✓" trong khi thực tế 8 kênh đã đủ 1/ngày nên chỉ
+    // 3 kênh tải → anh Hùng tưởng nó tải lại hết. Nay nói đúng con số.
+    const q = planCheckNow(kenhAll, groupFilter, todayStr,
+                           (k) => k.rep.dailyLimit);
     const scopeTxt =
       groupFilter === null
         ? "mọi nhóm"
         : `nhóm "${groupFilter || "Chưa phân nhóm"}"`;
-    if (enabledKenh === 0) {
+    if (q.run.length + q.full.length === 0) {
       setError(
         `Chưa có kênh nào đang tích ✓ trong ${scopeTxt} để chạy — ` +
           "tích kênh muốn chạy (hoặc bỏ lọc nhóm) rồi thử lại.",
       );
       return;
     }
+    if (q.run.length === 0) {
+      // KHÔNG hỏi rồi mới báo "không có gì chạy" — nói luôn, kèm cách xử lý.
+      setError(
+        `Cả ${q.full.length} kênh đang tích ✓ của ${scopeTxt} ĐÃ ĐỦ suất hôm ` +
+          "nay — bấm Chạy cũng không tải gì (mai bộ đếm tự về 0).\n" +
+          "Muốn tải thêm ngay: bấm ➕ Thêm 1 lượt (mỗi kênh +1 video), hoặc " +
+          "nâng hạn mức ngày của kênh rồi bấm lại.",
+      );
+      return;
+    }
     const ok = await cmd.confirmDialog(
-      `Chạy ${enabledKenh} kênh đang tích ✓ của ${scopeTxt} ngay bây giờ?\n\n` +
-        "Mỗi kênh sẽ tự tải cho đủ hạn mức hôm nay (1-3 video/ngày).\n" +
-        "Kênh đã đủ suất sẽ đứng yên, không tải trùng.",
+      `Chạy ${q.run.length} kênh của ${scopeTxt} ngay bây giờ?\n\n` +
+        `➜ Sẽ tải TỐI ĐA ${q.slots} video (${q.run.length} kênh còn suất hôm nay).\n` +
+        (q.full.length
+          ? `➜ ${q.full.length} kênh ĐÃ ĐỦ suất hôm nay sẽ ĐỨNG YÊN, không ` +
+            "tải trùng.\n   (muốn thêm nữa thì dùng ➕ Thêm 1 lượt)\n"
+          : "") +
+        (q.off.length ? `➜ ${q.off.length} kênh chưa tích ✓ — bỏ qua.\n` : "") +
+        "\nMỗi kênh chỉ tải cho ĐỦ hạn mức ngày của nó (1-3 video/ngày).",
       "Chạy tất cả?",
     );
     if (!ok) return;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planAddMore, pickKeyForMore, type MoreKey } from "./bulk-more";
+import { planAddMore, pickKeyForMore, planCheckNow, takenToday, type MoreKey } from "./bulk-more";
 
 const TODAY = "2026-07-25";
 
@@ -107,6 +107,91 @@ describe("planAddMore — kênh nào được +1", () => {
     const weird = { name: "N", group: undefined as unknown as string,
                     keys: [key()] };
     expect(names(planAddMore([weird], "", nobodyBusy).run)).toEqual(["N"]);
+  });
+});
+
+describe("planCheckNow — nút ▶ Chạy nhóm: ai còn suất hôm nay", () => {
+  const chL = (name: string, limit: number, keys: MoreKey[]) =>
+    ({ name, group: "Mỹ", dailyLimit: limit, keys });
+  /** Gọi planCheckNow với accessor hạn mức — giống UI truyền k.rep.dailyLimit. */
+  const planCheckNow2 = (
+    list: Array<{ name: string; group: string; dailyLimit: number; keys: MoreKey[] }>,
+    g: string | null, today: string,
+  ) => planCheckNow(list, g, today, (k) => k.dailyLimit);
+
+  it("kênh ĐÃ ĐỦ suất thì ĐỨNG YÊN — đúng thắc mắc của anh Hùng", () => {
+    // Giống ảnh nhóm "Mỹ mới": 8 kênh đã tải 1/1, 3 kênh chưa tải.
+    const daTai = Array.from({ length: 8 }, (_, i) =>
+      chL(`da${i}`, 1, [key({ dripDate: TODAY, dripCount: 1 })]));
+    const choLuot = Array.from({ length: 3 }, (_, i) =>
+      chL(`cho${i}`, 1, [key()]));
+    const p = planCheckNow2([...daTai, ...choLuot], "Mỹ", TODAY);
+    expect(p.run.map((x) => x.name)).toEqual(["cho0", "cho1", "cho2"]);
+    expect(p.full.length).toBe(8);
+    expect(p.slots).toBe(3);        // tối đa 3 video, KHÔNG phải 11
+  });
+
+  it("hạn mức 3/ngày, đã tải 1 → còn 2 suất", () => {
+    const p = planCheckNow2(
+      [chL("a", 3, [key({ dripDate: TODAY, dripCount: 1 })])], "Mỹ", TODAY);
+    expect(p.run.length).toBe(1);
+    expect(p.slots).toBe(2);
+  });
+
+  it("đếm CỘNG mọi key của kênh (2 key mỗi cái 1 video = đủ 2/ngày)", () => {
+    const p = planCheckNow2([chL("a", 2, [
+      key({ id: "x", dripDate: TODAY, dripCount: 1 }),
+      key({ id: "y", dripDate: TODAY, dripCount: 1 }),
+    ])], "Mỹ", TODAY);
+    expect(p.full.length).toBe(1);
+    expect(p.slots).toBe(0);
+  });
+
+  it("tải HÔM QUA không tính → hôm nay lại còn đủ suất", () => {
+    const p = planCheckNow2(
+      [chL("a", 1, [key({ dripDate: "2026-07-24", dripCount: 1 })])],
+      "Mỹ", TODAY);
+    expect(p.run.length).toBe(1);
+    expect(p.slots).toBe(1);
+  });
+
+  it("hạn mức kẹp 1..3 giống backend (0 → 1, 99 → 3)", () => {
+    expect(planCheckNow2([chL("a", 0, [key()])], "Mỹ", TODAY).slots).toBe(1);
+    expect(planCheckNow2([chL("a", 99, [key()])], "Mỹ", TODAY).slots).toBe(3);
+  });
+
+  it("đã tải QUÁ hạn mức (dùng ➕ Thêm) → đứng yên, slots không âm", () => {
+    const p = planCheckNow2(
+      [chL("a", 1, [key({ dripDate: TODAY, dripCount: 5 })])], "Mỹ", TODAY);
+    expect(p.full.length).toBe(1);
+    expect(p.slots).toBe(0);
+  });
+
+  it("kênh chưa tích ✓ không tính vào đâu ngoài 'off'", () => {
+    const p = planCheckNow2(
+      [chL("off", 1, [key({ enabled: false, dripDate: TODAY, dripCount: 1 })])],
+      "Mỹ", TODAY);
+    expect(p.off.length).toBe(1);
+    expect(p.run.length + p.full.length).toBe(0);
+    expect(p.slots).toBe(0);
+  });
+
+  it("chỉ tính NHÓM đang lọc", () => {
+    const p = planCheckNow2(
+      [chL("my", 1, [key()]), { ...chL("han", 1, [key()]), group: "Hàn" }],
+      "Mỹ", TODAY);
+    expect(p.run.map((x) => x.name)).toEqual(["my"]);
+  });
+});
+
+describe("takenToday", () => {
+  it("cộng dồn mọi key, chỉ tính ngày hôm nay", () => {
+    expect(takenToday([
+      key({ dripDate: TODAY, dripCount: 2 }),
+      key({ dripDate: TODAY, dripCount: 1 }),
+      key({ dripDate: "2026-01-01", dripCount: 9 }),
+      key({ dripDate: null, dripCount: 3 }),
+    ], TODAY)).toBe(3);
   });
 });
 

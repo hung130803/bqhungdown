@@ -276,3 +276,92 @@ describe("Nút ➕ Thêm 1 lượt (trang Theo dõi)", () => {
     expect(moreCalls).toEqual(["key_da_tai"]);
   });
 });
+
+describe("Nút ▶ Chạy nhóm — hộp thoại phải nói ĐÚNG số kênh sẽ tải", () => {
+  const btnRun = () => screen.getByText(/^▶ Chạy (tất cả|nhóm)/);
+
+  it("8 kênh đã đủ 1/ngày + 3 kênh chờ lượt → báo 3 kênh / tối đa 3 video", async () => {
+    // Dựng đúng ảnh anh Hùng gửi (nhóm "Mỹ mới": 11 kênh, 8 đã tải 1 hôm nay).
+    mockChannels = [
+      ...Array.from({ length: 8 }, (_, i) =>
+        mkKey({ id: `da${i}`, dripDate: TODAY, dripCount: 1 })),
+      ...Array.from({ length: 3 }, (_, i) => mkKey({ id: `cho${i}` })),
+    ];
+    await mountPage();
+    btnRun().click();
+    const cmdMod = await import("@/ipc/commands");
+    await waitFor(() =>
+      expect(vi.mocked(cmdMod.confirmDialog)).toHaveBeenCalled(),
+      { timeout: 3000 });
+    const msg = vi.mocked(cmdMod.confirmDialog).mock.calls[0][0];
+    expect(msg).toContain("Chạy 3 kênh");          // KHÔNG phải 11
+    expect(msg).toContain("TỐI ĐA 3 video");
+    expect(msg).toContain("8 kênh ĐÃ ĐỦ suất");
+    expect(msg).toContain("ĐỨNG YÊN");
+  });
+
+  it("MỌI kênh đã đủ suất → KHÔNG hỏi, báo luôn + chỉ cách xử lý", async () => {
+    mockChannels = Array.from({ length: 5 }, (_, i) =>
+      mkKey({ id: `da${i}`, dripDate: TODAY, dripCount: 1 }));
+    await mountPage();
+    btnRun().click();
+    const cmdMod = await import("@/ipc/commands");
+    await waitFor(() =>
+      expect(screen.getByText(/ĐÃ ĐỦ suất hôm nay/)).toBeTruthy(),
+      { timeout: 3000 });
+    expect(vi.mocked(cmdMod.confirmDialog)).not.toHaveBeenCalled();
+    expect(vi.mocked(cmdMod.checkWatchedNow)).not.toHaveBeenCalled();
+    // Câu báo phải CHỈ CÁCH khác (➕ Thêm 1 lượt) chứ không bỏ user lơ lửng.
+    expect(screen.getByText(/ĐÃ ĐỦ suất hôm nay/).textContent)
+      .toMatch(/Thêm 1 lượt/);
+  });
+
+  it("hạn mức 3/ngày đã tải 1 → còn 2 suất, vẫn nằm trong danh sách chạy", async () => {
+    mockChannels = [
+      mkKey({ id: "a", dailyLimit: 3, dripDate: TODAY, dripCount: 1 }),
+    ];
+    await mountPage();
+    btnRun().click();
+    const cmdMod = await import("@/ipc/commands");
+    await waitFor(() =>
+      expect(vi.mocked(cmdMod.confirmDialog)).toHaveBeenCalled(),
+      { timeout: 3000 });
+    const msg = vi.mocked(cmdMod.confirmDialog).mock.calls[0][0];
+    expect(msg).toContain("Chạy 1 kênh");
+    expect(msg).toContain("TỐI ĐA 2 video");
+  });
+
+  it("bấm Huỷ ở hộp xác nhận → KHÔNG gọi lệnh chạy", async () => {
+    confirmAnswer = false;
+    mockChannels = [mkKey({ id: "a" }), mkKey({ id: "b" })];
+    await mountPage();
+    btnRun().click();
+    const cmdMod = await import("@/ipc/commands");
+    await waitFor(() =>
+      expect(vi.mocked(cmdMod.confirmDialog)).toHaveBeenCalled(),
+      { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, 120));
+    expect(vi.mocked(cmdMod.checkWatchedNow)).not.toHaveBeenCalled();
+  });
+
+  it("đồng ý → gọi lệnh chạy với ĐÚNG nhóm đang lọc", async () => {
+    mockChannels = [mkKey({ id: "a" }), mkKey({ id: "b" })];
+    await mountPage();
+    btnRun().click();
+    const cmdMod = await import("@/ipc/commands");
+    await waitFor(() =>
+      expect(vi.mocked(cmdMod.checkWatchedNow)).toHaveBeenCalledWith(null),
+      { timeout: 3000 });
+  });
+
+  it("bỏ hết tích ✓ → báo 'chưa có kênh nào đang tích', không hỏi", async () => {
+    mockChannels = [mkKey({ id: "a", enabled: false })];
+    await mountPage();
+    btnRun().click();
+    const cmdMod = await import("@/ipc/commands");
+    await waitFor(() =>
+      expect(screen.getByText(/Chưa có kênh nào đang tích/)).toBeTruthy(),
+      { timeout: 3000 });
+    expect(vi.mocked(cmdMod.confirmDialog)).not.toHaveBeenCalled();
+  });
+});

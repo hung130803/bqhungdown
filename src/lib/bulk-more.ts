@@ -68,6 +68,60 @@ export function planAddMore<T extends MoreKenh>(
   return out;
 }
 
+/** Tổng số video kênh này ĐÃ TỰ TẢI hôm nay (cộng mọi key). */
+export function takenToday(
+  keys: readonly MoreKey[],
+  todayStr: string,
+): number {
+  return keys.reduce(
+    (s, c) => s + (c.dripDate === todayStr ? (c.dripCount ?? 0) : 0), 0);
+}
+
+/**
+ * Chia kênh theo HẠN MỨC NGÀY cho nút "▶ Chạy nhóm" — KHÁC hẳn "➕ Thêm 1
+ * lượt": nút Chạy nhóm chỉ tải cho ĐỦ hạn mức, kênh đã đủ suất thì ĐỨNG YÊN.
+ *
+ * VÌ SAO CẦN (anh Hùng thắc mắc): hộp xác nhận cũ ghi "Chạy 11 kênh đang
+ * tích ✓" nhưng thực tế chỉ 3 kênh tải (8 kênh kia đã đủ 1/ngày) → tưởng nó
+ * tải lại hết. Nay đếm tách ra để hộp thoại nói đúng sự thật.
+ *
+ * Khớp ĐÚNG chốt của backend (`watcher::apply`): mọi đường lấy video đều gác
+ * bởi `drip_count < limit`, với `limit = daily_limit` kẹp trong 1..=3, và
+ * `drip_count` chỉ tính khi `drip_date` là HÔM NAY (sang ngày là về 0).
+ *
+ * `slots` = tổng số suất còn lại — tức số video TỐI ĐA có thể tải (còn thật
+ * sự tải được hay không thì phụ thuộc kho video, nên UI phải nói "tối đa").
+ */
+/// `limitOf` là THAM SỐ BẮT BUỘC (không phải trường tuỳ chọn trên object):
+/// hạn mức nằm ở `k.rep.dailyLimit` chứ không phải trên chính kênh, mà nếu để
+/// dạng trường tuỳ chọn thì thiếu nó TypeScript KHÔNG báo — mọi kênh sẽ bị
+/// coi là 1/ngày và kênh 3/ngày đã tải 1 bị báo sai "đã đủ suất" (bug thật đã
+/// bị test bắt). Bắt buộc truyền vào thì không thể quên.
+export function planCheckNow<T extends MoreKenh>(
+  kenh: readonly T[],
+  groupFilter: string | null,
+  todayStr: string,
+  limitOf: (k: T) => number | null | undefined,
+): { run: T[]; full: T[]; off: T[]; slots: number } {
+  const out = { run: [] as T[], full: [] as T[], off: [] as T[], slots: 0 };
+  for (const k of kenh) {
+    if (groupFilter !== null && (k.group || "") !== groupFilter) continue;
+    if (!k.keys.some((c) => c.enabled)) {
+      out.off.push(k);
+      continue;
+    }
+    const limit = Math.min(3, Math.max(1, limitOf(k) ?? 1));
+    const left = limit - takenToday(k.keys, todayStr);
+    if (left > 0) {
+      out.run.push(k);
+      out.slots += left;
+    } else {
+      out.full.push(k);
+    }
+  }
+  return out;
+}
+
 /**
  * Key sẽ nhận lệnh "+1" của một kênh — GIỐNG HỆT nút ➕ Thêm từng kênh:
  * ưu tiên key ĐÃ TỰ TẢI HÔM NAY (để bộ đếm cộng dồn trên đúng key đó),
