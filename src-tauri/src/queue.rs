@@ -287,29 +287,10 @@ impl QueueManager {
                 saver.persist();
             }
         });
-        // Auto-clean leftover junk files (blank/broken) in the download folder
-        // every 2 minutes — protecting in-progress downloads. The user never has
-        // to delete them by hand.
-        let cleaner = me.clone();
-        tauri::async_runtime::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(120)).await;
-                let folder = cleaner.settings.get().default_folder;
-                if folder.as_os_str().is_empty() {
-                    continue;
-                }
-                let protected = cleaner.protected_prefixes();
-                // `live_temp_tags` là lớp chặn CHÍNH XÁC (so `short_id` bằng
-                // nhau), khác với `protected` chỉ đoán theo 25 ký tự đầu tiêu
-                // đề. Chính vòng lặp 2 phút này từng xoá mảnh của video ĐANG
-                // tải khi cách đoán kia trượt → "[Errno 2] ... .part-Frag4".
-                let live_tags = cleaner.live_temp_tags();
-                // Blocking FS walk on a worker thread so the runtime isn't blocked.
-                std::thread::spawn(move || {
-                    let _ = crate::commands::clean_junk_in(&folder, &protected, &live_tags);
-                });
-            }
-        });
+        // (Đã BỎ vòng dọn rác 2 phút ở đây.) Nó chỉ quét `default_folder` nên
+        // bỏ sót toàn bộ thư mục riêng của từng kênh — nơi rác thật sự dồn lại.
+        // Thay bằng vòng `sweep_junk_all` trong `lib.rs`: quét MỌI thư mục kênh
+        // + thư mục mặc định + `watch_root`, cũng 2 phút một lần.
         me
     }
 
@@ -1024,8 +1005,9 @@ impl QueueManager {
                 // ngoài nhưng để lại thư mục con rỗng; không dọn thì `.bqd-temp`
                 // phình ra hàng nghìn thư mục rỗng sau vài tháng.
                 //
-                // CỐ Ý KHÔNG dọn ở nhánh LỖI: mảnh `.part` phải còn để nút
-                // "Thử lại" tải tiếp từ chỗ dở, chứ không phải làm lại từ 0%.
+                // Nhánh LỖI không dọn ở đây vì đã có `cleanup_partials` trong
+                // `handle_failure` (khi bỏ cuộc hẳn); còn lượt tự thử lại giữa
+                // chừng thì CỐ Ý giữ mảnh để tải tiếp từ chỗ dở.
                 let _ = std::fs::remove_dir_all(crate::args_builder::temp_dir_for(
                     &item.request.save_folder,
                     &id,
@@ -1138,6 +1120,14 @@ impl QueueManager {
                     map.get(&id).cloned()
                 };
                 if let Some(it) = snap {
+                    // DỌN SẠCH file tải dở. Trước đây nhánh này KHÔNG dọn gì —
+                    // "Hoàn tất"/"Huỷ"/"Lỗi" đều có dọn, riêng "Bỏ qua" bị bỏ
+                    // sót → mảnh của những lần thử trước nằm lại vĩnh viễn.
+                    // Đúng lỗi anh Hùng thấy ở "kênh 41": 1 video xong + 6 file
+                    // dở cùng tên, mục thì báo "Bỏ qua".
+                    // An toàn: chỉ xoá file khớp mẫu tạm (.part/.part-N/.fNNN.),
+                    // KHÔNG bao giờ chạm file .mp4 đã tải xong.
+                    self.cleanup_partials_retry(it.clone());
                     self.emit_state(&it);
                     self.emit_queue_updated();
                 }
@@ -1462,5 +1452,51 @@ mod tests {
         assert_eq!(next_retry_delay(1), Some(Duration::from_millis(5000)));
         assert_eq!(next_retry_delay(2), Some(Duration::from_millis(10000)));
         assert!(next_retry_delay(3).is_none());
+    }
+}
+
+#[cfg(test)]
+mod tests_don_bo_qua {
+    use std::fs;
+
+    /// Lỗi thật ở "kênh 41": mục báo "Bỏ qua" nhưng 6 file tải dở của những lần
+    /// thử trước vẫn nằm lại. Kiểm bộ lọc file tạm: đúng mấy file dở đó bị nhận
+    /// là rác, còn video .mp4 ĐÃ TẢI XONG thì TUYỆT ĐỐI không được chạm.
+    #[test]
+    fn nhan_dung_file_do_khong_cham_video_xong() {
+        let ten = "Disrespectful Son Finally Gets What He Deserves";
+        // Đúng các đuôi yt-dlp sinh ra trong lúc tải.
+        for hau in [
+            ".mp4.part", ".mp4.part-Frag1", ".mp4.part-Frag4", ".mp4.ytdl",
+            ".f399.mp4", ".f251.webm", ".temp.mp4", ".mp4.part.aria2",
+        ] {
+            let f = format!("{ten}{hau}");
+            assert!(super::is_ytdlp_temp_file(&f), "phải nhận là file dở: {f}");
+        }
+        // Video hoàn chỉnh + các tên dễ nhận nhầm.
+        for ok in [
+            "Disrespectful Son Finally Gets What He Deserves.mp4",
+            "Evil Stepmother Realizes Kids Saw Everything.mp4",
+            "Pred gets UNDRESSED... Ft. @therealskeeterjean.mp4",
+            "video.final.mp4",
+            "f150.mp4",
+            "Part 1 - canh hay.mp4",
+        ] {
+            assert!(!super::is_ytdlp_temp_file(ok), "KHÔNG được coi là rác: {ok}");
+        }
+    }
+
+    /// Thư mục tạm riêng của lượt tải bị xoá CẢ CÂY khi dọn.
+    #[test]
+    fn don_xoa_ca_cay_thu_muc_tam() {
+        let kenh = std::env::temp_dir().join("bqd_test_skip_tmp").join("kenh 41");
+        let _ = fs::remove_dir_all(kenh.parent().unwrap());
+        let tam = crate::args_builder::temp_dir_for(&kenh, "x4qvdd");
+        fs::create_dir_all(&tam).unwrap();
+        fs::write(tam.join("a.mp4.part-Frag2"), b"x").unwrap();
+        assert!(tam.exists());
+        let _ = fs::remove_dir_all(crate::args_builder::temp_dir_for(&kenh, "x4qvdd"));
+        assert!(!tam.exists(), "thư mục tạm phải bị xoá cả cây");
+        let _ = fs::remove_dir_all(kenh.parent().unwrap());
     }
 }
