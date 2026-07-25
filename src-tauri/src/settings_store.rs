@@ -19,7 +19,15 @@ use crate::error::{AppError, AppResult};
 use crate::models::{Settings, SettingsPatch};
 
 const MAX_CONCURRENCY_MIN: u8 = 1;
-const MAX_CONCURRENCY_MAX: u8 = 100;
+/// TRẦN số video tải song song = 8 (trước đây 100).
+///
+/// ĐO THỰC TẾ trên máy user (2026-07): đặt 50 luồng làm tải CHẬM HẲN, không
+/// nhanh hơn — băng thông bị chia 50 phần + YouTube bóp băng thông theo IP khi
+/// thấy quá nhiều kết nối song song. Vùng tốt là 3–6; 8 là trần an toàn (còn
+/// 6 kết nối/video theo ngân sách CONN_BUDGET). Giá trị cũ >8 trong file cấu
+/// hình sẽ TỰ ĐƯỢC HẠ về 8 lúc nạp (clamp_max_concurrency) — user không phải
+/// tự sửa trên từng máy.
+const MAX_CONCURRENCY_MAX: u8 = 8;
 
 /// Lưu trữ `Settings` trong bộ nhớ kèm path để persist.
 pub struct SettingsStore {
@@ -122,12 +130,9 @@ impl SettingsStore {
                 s.default_folder = folder;
             }
             if let Some(mc) = patch.max_concurrency {
-                if !(MAX_CONCURRENCY_MIN..=MAX_CONCURRENCY_MAX).contains(&mc) {
-                    return Err(AppError::InvalidSetting {
-                        field: "maxConcurrency".to_string(),
-                    });
-                }
-                s.max_concurrency = mc;
+                // KẸP thay vì báo lỗi: user gõ 50 thì tự về 8 (trần an toàn),
+                // không "lưu thất bại" khiến họ tưởng app hỏng.
+                s.max_concurrency = mc.clamp(MAX_CONCURRENCY_MIN, MAX_CONCURRENCY_MAX);
             }
             if let Some(theme) = patch.theme {
                 s.theme = theme;
@@ -540,31 +545,40 @@ mod tests {
     }
 
     #[test]
-    fn apply_patch_rejects_out_of_range_concurrency() {
+    fn apply_patch_kep_so_luong_ngoai_khoang() {
+        // ĐỔI HÀNH VI (đo 2026-07): trước đây ngoài khoảng thì BÁO LỖI -> user
+        // gõ 50 tưởng lưu được mà không đổi gì. Nay KẸP về [1, MAX] để họ luôn
+        // nhận giá trị an toàn (50 -> 8), khỏi phải tự sửa trên từng máy.
         let path = unique_tmp_path();
         let (store, _) = SettingsStore::load(path.clone());
 
-        let before = store.get();
-        let err = store
+        // 0 (quá nhỏ) -> kẹp về 1
+        let s = store
             .apply_patch(SettingsPatch {
                 max_concurrency: Some(0),
                 ..Default::default()
             })
-            .unwrap_err();
-        match err {
-            AppError::InvalidSetting { field } => assert_eq!(field, "maxConcurrency"),
-            other => panic!("unexpected error: {other:?}"),
-        }
-        assert_eq!(store.get(), before, "rollback expected on validation failure");
+            .expect("kẹp, không báo lỗi");
+        assert_eq!(s.max_concurrency, MAX_CONCURRENCY_MIN);
 
-        let err = store
+        // 50 (ca thật của user) -> kẹp về trần an toàn 8
+        let s = store
             .apply_patch(SettingsPatch {
-                max_concurrency: Some(101),
+                max_concurrency: Some(50),
                 ..Default::default()
             })
-            .unwrap_err();
-        assert!(matches!(err, AppError::InvalidSetting { .. }));
-        assert_eq!(store.get(), before);
+            .expect("kẹp, không báo lỗi");
+        assert_eq!(s.max_concurrency, MAX_CONCURRENCY_MAX);
+        assert_eq!(store.get().max_concurrency, MAX_CONCURRENCY_MAX, "phải lưu lại");
+
+        // giá trị hợp lệ giữ nguyên
+        let s = store
+            .apply_patch(SettingsPatch {
+                max_concurrency: Some(4),
+                ..Default::default()
+            })
+            .expect("hợp lệ");
+        assert_eq!(s.max_concurrency, 4);
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }

@@ -169,6 +169,7 @@ export function SettingsPage() {
           <input
             type="number"
             min={1}
+            max={8}
             value={settings.maxConcurrency}
             onChange={e => {
               // Cho phép xoá rỗng trong khi đang gõ. Chỉ commit khi giá trị
@@ -184,15 +185,10 @@ export function SettingsPage() {
           {/* Đặt quá cao KHÔNG nhanh hơn: băng thông bị chia nhỏ + YouTube bóp
               IP khi thấy quá nhiều kết nối. Khuyên 3-6. */}
           <p className="text-xs text-muted">
-            Khuyên dùng <b>3–6</b>. Đặt cao hơn <b>không</b> nhanh hơn — băng thông
-            bị chia nhỏ và YouTube dễ bóp tốc độ IP của anh.
+            Khuyên dùng <b>3–6</b> (tối đa 8). Đặt cao hơn <b>không</b> nhanh hơn —
+            băng thông bị chia nhỏ và YouTube bóp tốc độ IP của anh. Video vượt
+            số này <b>xếp hàng chờ</b>, kể cả video bấm Thử lại.
           </p>
-          {settings.maxConcurrency > 8 && (
-            <p className="text-xs text-warning">
-              ⚠ Đang đặt {settings.maxConcurrency} — quá nhiều, dễ làm CHẬM tất cả.
-              Hạ về 3–6 để tải nhanh nhất.
-            </p>
-          )}
         </div>
       </Field>
 
