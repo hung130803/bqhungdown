@@ -1,4 +1,26 @@
 use crate::models::{DownloadMode, DownloadRequest, Settings};
+use std::path::{Path, PathBuf};
+
+/// Tên thư mục tạm ẩn nằm NGAY TRONG thư mục kênh. Mỗi lượt tải có 1 thư mục
+/// con riêng theo `short_id`, nên hai lượt tải không bao giờ dùng chung file.
+pub(crate) const TEMP_DIRNAME: &str = ".bqd-temp";
+
+/// Thư mục tạm RIÊNG của một lượt tải: `<thư mục kênh>/.bqd-temp/<tag>`.
+///
+/// VÌ SAO PHẢI CÓ (lỗi thật anh Hùng gặp nhiều lần):
+/// yt-dlp vốn ghi mảnh (`.part`, `.part-FragN`, `.f399.mp4`) NGAY trong thư mục
+/// kênh. Ở đó chúng bị 3 thứ khác nhau tranh nhau xoá — bộ dọn rác tự động, lượt
+/// tải khác của cùng video, và luồng dọn sau khi huỷ — dẫn tới
+/// `ERROR: Unable to download video: [Errno 2] No such file or directory:
+/// '...mp4.part-Frag4'` rồi để lại hàng chục file rời rạc.
+///
+/// Cách chữa TRIỆT ĐỂ không phải là đắp thêm lớp bảo vệ đoán mò, mà là DỜI mảnh
+/// ra khỏi vùng tranh chấp: thư mục kênh chỉ nhận đúng 1 file cuối cùng.
+/// Thư mục tạm đặt TRONG thư mục kênh (không phải %TEMP%) để CÙNG Ổ ĐĨA — bước
+/// chuyển file cuối chỉ là rename tức thì, không copy lại vài GB.
+pub(crate) fn temp_dir_for(save_folder: &Path, tag: &str) -> PathBuf {
+    save_folder.join(TEMP_DIRNAME).join(tag)
+}
 
 /// Một số site (viralhog, gfycat, redgifs, imgur, 9gag, các trang
 /// embed video tự host…) không có extractor riêng trong yt-dlp nhưng có thẻ
@@ -178,6 +200,10 @@ pub enum BuildMode {
         /// connection, không aria2c) — googlevideo 403 hàng loạt khi thấy
         /// pattern tải song song hung hãn mà không có PO token hợp lệ.
         safe_retry: bool,
+        /// Nhãn DUY NHẤT của lượt tải (dùng `short_id`) để mở thư mục tạm
+        /// riêng `<đích>/.bqd-temp/<tag>`. `None` = kiểu cũ, ghi mảnh thẳng
+        /// vào thư mục kênh (chỉ còn dùng trong unit test đối chứng).
+        temp_tag: Option<String>,
     },
 }
 
@@ -296,7 +322,7 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             args.push(req.url.clone());
             return args;
         }
-        BuildMode::Download { resume, force_generic: _, output_stem, safe_retry } => {
+        BuildMode::Download { resume, force_generic: _, output_stem, safe_retry, temp_tag } => {
             // Retry sau 403/format-error trên YouTube: default client bị SABR
             // giấu URL hoặc googlevideo từ chối URL đã extract → kéo format từ
             // các client còn phục vụ URL tải trực tiếp.
@@ -308,12 +334,26 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             // (collision-safe `<title> (N)`), we use that literal stem so
             // yt-dlp writes to the unique filename. Otherwise fall back to
             // the standard `%(title)s` template that yt-dlp expands itself.
-            args.push("-o".into());
             let folder = req.save_folder.to_string_lossy();
-            if let Some(stem) = output_stem {
-                args.push(format!("{folder}/{stem}.%(ext)s"));
-            } else {
-                args.push(format!("{folder}/%(title)s.%(ext)s"));
+            let stem = output_stem.unwrap_or_else(|| "%(title)s".to_string());
+            match temp_tag.as_deref().filter(|t| !t.is_empty()) {
+                // Có nhãn → tách ĐÔI đường đi: mảnh vào `temp`, file xong vào
+                // `home`. BẮT BUỘC `-o` chỉ là TÊN FILE TRẦN: đã đo thật —
+                // nếu `-o` là đường dẫn tuyệt đối thì yt-dlp BỎ QUA `-P temp`
+                // và vẫn ghi mảnh vào thư mục kênh (đúng lỗi cũ).
+                Some(tag) => {
+                    let tmp = temp_dir_for(&req.save_folder, tag);
+                    args.push("-P".into());
+                    args.push(format!("home:{folder}"));
+                    args.push("-P".into());
+                    args.push(format!("temp:{}", tmp.to_string_lossy()));
+                    args.push("-o".into());
+                    args.push(format!("{stem}.%(ext)s"));
+                }
+                None => {
+                    args.push("-o".into());
+                    args.push(format!("{folder}/{stem}.%(ext)s"));
+                }
             }
 
             // Progress: rely on yt-dlp's default `[download] x.x% of ...` lines
@@ -584,11 +624,64 @@ mod tests {
         );
     }
 
+    /// Có `temp_tag` → mảnh phải đi vào `.bqd-temp/<tag>` và `-o` PHẢI là tên
+    /// file trần. ĐÃ ĐO THẬT bằng yt-dlp: nếu `-o` là đường dẫn tuyệt đối thì
+    /// `-P temp` bị BỎ QUA im lặng và mảnh vẫn rơi vào thư mục kênh — đúng lỗi
+    /// "[Errno 2] ... .part-Frag4". Test này khoá lại hành vi đó.
+    #[test]
+    fn thu_muc_tam_rieng_khi_co_tag() {
+        let args = build(
+            &req(),
+            &Settings::default(),
+            BuildMode::Download {
+                resume: false,
+                force_generic: false,
+                output_stem: None,
+                safe_retry: false,
+                temp_tag: Some("sqnivr".into()),
+            },
+        );
+        let o = args.iter().position(|a| a == "-o").expect("phải có -o");
+        assert_eq!(args[o + 1], "%(title)s.%(ext)s", "-o phải là TÊN TRẦN");
+        let joined = args.join(" ");
+        assert!(joined.contains("home:C:/Users/me/Downloads"), "{joined}");
+        assert!(
+            joined.contains(".bqd-temp") && joined.contains("sqnivr"),
+            "thiếu thư mục tạm riêng: {joined}"
+        );
+    }
+
+    /// Không có tag = kiểu cũ: `-o` mang đường dẫn tuyệt đối, không có `-P`.
+    #[test]
+    fn khong_co_tag_thi_giu_kieu_cu() {
+        let args = build(
+            &req(),
+            &Settings::default(),
+            BuildMode::Download {
+                resume: false,
+                force_generic: false,
+                output_stem: None,
+                safe_retry: false,
+                temp_tag: None,
+            },
+        );
+        assert!(!args.iter().any(|a| a == "-P"));
+        let o = args.iter().position(|a| a == "-o").unwrap();
+        assert!(args[o + 1].contains("Downloads"), "{}", args[o + 1]);
+    }
+
+    #[test]
+    fn thu_muc_tam_theo_tag_khac_nhau() {
+        let f = std::path::Path::new("D:/video/kenh 53");
+        assert_ne!(temp_dir_for(f, "aaa"), temp_dir_for(f, "bbb"));
+        assert!(temp_dir_for(f, "aaa").starts_with(f), "phải CÙNG Ổ ĐĨA với đích");
+    }
+
     #[test]
     fn video_best_default() {
         // Mặc định max_height = 1080 → format bị giới hạn <=1080, có fallback.
         let s = Settings::default();
-        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
+        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None });
         let joined = args.join(" ");
         assert!(joined.contains("bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b"));
         // -N CO GIÃN theo số luồng: mặc định max_concurrency=3 -> 48/3 = 16.
@@ -604,7 +697,7 @@ mod tests {
         // 0 = không giới hạn → dùng bv*+ba/b như cũ (vớ 4K nếu có).
         let mut s = Settings::default();
         s.max_height = 0;
-        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
+        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None });
         let joined = args.join(" ");
         assert!(joined.contains("-f bv*+ba/b"));
         assert!(!joined.contains("height<="));
@@ -614,7 +707,7 @@ mod tests {
     fn max_height_1440_caps_format() {
         let mut s = Settings::default();
         s.max_height = 1440;
-        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
+        let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None });
         let joined = args.join(" ");
         assert!(joined.contains("bv*[height<=1440]+ba/b[height<=1440]/bv*+ba/b"));
     }
@@ -623,7 +716,7 @@ mod tests {
     fn audio_mode_emits_extract_audio() {
         let mut r = req();
         r.mode = DownloadMode::Audio;
-        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None });
         let joined = args.join(" ");
         assert!(joined.contains("-x --audio-format mp3 --audio-quality 0"));
     }
@@ -632,7 +725,7 @@ mod tests {
     fn aria2c_when_enabled() {
         let mut r = req();
         r.use_aria2c = true;
-        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None });
         let joined = args.join(" ");
         assert!(joined.contains("--downloader aria2c"));
         // aria2c chỉ nhận -x tối đa 16 — truyền 32 là chết ngay exit 28.
@@ -647,7 +740,7 @@ mod tests {
         let args = build(
             &req(),
             &Settings::default(),
-            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false },
+            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None },
         );
         let j = args.join(" ");
         assert!(j.contains(&format!("-S {SORT}")), "nhánh mặc định thiếu sort: {j}");
@@ -658,7 +751,7 @@ mod tests {
         let args = build(
             &r,
             &Settings::default(),
-            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false },
+            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None },
         );
         let j = args.join(" ");
         assert!(j.contains("137+bestaudio/best"));
@@ -672,7 +765,7 @@ mod tests {
         let args = build(
             &r,
             &Settings::default(),
-            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: true },
+            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: true, temp_tag: None },
         );
         let joined = args.join(" ");
         assert!(joined.contains("youtube:player_client=default,tv,mweb,web_safari"));
@@ -686,7 +779,7 @@ mod tests {
         let args = build(
             &req(),
             &Settings::default(),
-            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false },
+            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None },
         );
         assert!(!args.contains(&"--user-agent".to_string()));
         assert!(args.contains(&"-4".to_string()));
@@ -699,7 +792,7 @@ mod tests {
         let args = build(
             &r,
             &Settings::default(),
-            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false },
+            BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None },
         );
         assert!(args.contains(&"--user-agent".to_string()));
     }
@@ -727,7 +820,7 @@ mod tests {
     fn bilibili_download_args_include_headers() {
         let mut r = req();
         r.url = "https://www.bilibili.com/video/BV1C8411i7we".into();
-        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None });
         let j = args.join(" ");
         assert!(j.contains("Origin:https://www.bilibili.com"));
         assert!(j.contains("Referer:https://www.bilibili.com/"));
@@ -762,7 +855,7 @@ mod tests {
     #[test]
     fn resume_appends_continue() {
         let r = req();
-        let args = build(&r, &Settings::default(), BuildMode::Download { resume: true, force_generic: false, output_stem: None, safe_retry: false });
+        let args = build(&r, &Settings::default(), BuildMode::Download { resume: true, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None });
         assert!(args.contains(&"--continue".to_string()));
     }
 }
