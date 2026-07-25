@@ -181,6 +181,26 @@ pub enum BuildMode {
     },
 }
 
+/// NGÂN SÁCH KẾT NỐI tổng cho cả máy (mọi video đang tải cộng lại). YouTube
+/// bóp băng thông theo IP khi thấy quá nhiều kết nối song song, nên tổng phải
+/// giữ ở mức khoẻ thay vì nhân lên theo số luồng.
+const CONN_BUDGET: u32 = 48;
+
+/// Số KẾT NỐI cho MỖI video, tự co giãn theo số video tải song song:
+/// `budget / số_luồng`, kẹp trong [MIN, max_per_item].
+///
+/// LÝ DO (lỗi thật đã gặp): trước đây cố định `-N 32`; user đặt 50 luồng →
+/// 50 × 32 = 1.600 kết nối cùng lúc → YouTube bóp IP → MỌI video rùa bò.
+/// Nay: 1 luồng = 32 kết nối (nhanh tối đa cho 1 video), 3 luồng = 16,
+/// 10 luồng = 4, 50 luồng = 2 → tổng luôn ~48, không tự bắn vào chân.
+///
+/// Hàm THUẦN để unit-test.
+pub(crate) fn conns_per_item(concurrency: u8, max_per_item: u32) -> u32 {
+    const MIN_PER_ITEM: u32 = 2;
+    let conc = (concurrency as u32).max(1);
+    (CONN_BUDGET / conc).clamp(MIN_PER_ITEM, max_per_item)
+}
+
 /// Build argument vector cho `yt-dlp` từ một `DownloadRequest`.
 /// Pure function: không IO, không hidden state.
 pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec<String> {
@@ -331,8 +351,12 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
                 args.push("-N".into());
                 args.push("4".into());
             } else {
+                // CO GIÃN theo số luồng (xem conns_per_item): 1 luồng = 32,
+                // nhiều luồng = ít kết nối/video để TỔNG không vượt ngân sách
+                // → không bị YouTube bóp IP khi chạy hàng loạt kênh.
+                let n = conns_per_item(settings.max_concurrency, 32);
                 args.push("-N".into());
-                args.push("32".into());
+                args.push(n.to_string());
                 // Bigger HTTP chunk → giảm số request, mỗi request lấy được nhiều
                 // hơn → tốc độ ổn định hơn (thay vì lúc nhanh lúc chậm do TCP slow-start).
                 args.push("--http-chunk-size".into());
@@ -373,11 +397,15 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
                     .unwrap_or_else(|| "aria2c".to_string());
                 args.push(aria_bin);
                 args.push("--downloader-args".into());
-                args.push(
-                    "aria2c:-x 16 -s 16 -k 1M --min-split-size=1M --lowest-speed-limit=1K \
---console-log-level=notice --summary-interval=1 --enable-color=false"
-                        .into(),
-                );
+                // -x/-s CO GIÃN theo số luồng (aria2c cho tối đa 16/server):
+                // 1 luồng = 16 kết nối (nhanh nhất cho 1 video), nhiều luồng =
+                // ít hơn để tổng không vượt ngân sách → tránh bị bóp IP.
+                let ax = conns_per_item(settings.max_concurrency, 16);
+                args.push(format!(
+                    "aria2c:-x {ax} -s {ax} -k 1M --min-split-size=1M \
+--lowest-speed-limit=1K --console-log-level=notice --summary-interval=1 \
+--enable-color=false"
+                ));
             }
 
             // Format selection — luôn ưu tiên format CÓ audio. Cấu trúc fallback:
@@ -498,6 +526,28 @@ mod tests {
     use crate::models::{ConflictPolicy, DownloadMode, DownloadRequest, Settings};
     use std::path::PathBuf;
 
+    #[test]
+    fn ket_noi_co_gian_theo_so_luong_giu_tong_khoe() {
+        // 1 luồng -> tối đa (nhanh nhất cho 1 video)
+        assert_eq!(conns_per_item(1, 32), 32);
+        assert_eq!(conns_per_item(1, 16), 16);   // aria2c cap 16
+        // 3 luồng -> 48/3 = 16
+        assert_eq!(conns_per_item(3, 32), 16);
+        // 6 luồng -> 8
+        assert_eq!(conns_per_item(6, 32), 8);
+        // 10 luồng -> 4
+        assert_eq!(conns_per_item(10, 32), 4);
+        // 50 luồng (ca của user) -> sàn 2, KHÔNG còn 32 => tổng 100 thay vì 1600
+        assert_eq!(conns_per_item(50, 32), 2);
+        // 0 (dữ liệu lỗi) coi như 1 luồng, không chia cho 0
+        assert_eq!(conns_per_item(0, 32), 32);
+        // TỔNG kết nối luôn trong ngân sách hợp lý ở mọi mức luồng thường dùng
+        for c in 1u8..=10 {
+            let total = conns_per_item(c, 32) * c as u32;
+            assert!(total <= CONN_BUDGET, "luồng {c} -> tổng {total} vượt ngân sách");
+        }
+    }
+
     fn req() -> DownloadRequest {
         DownloadRequest {
             url: "https://www.youtube.com/watch?v=abc".into(),
@@ -534,7 +584,10 @@ mod tests {
         let args = build(&req(), &s, BuildMode::Download { resume: false, force_generic: false, output_stem: None, safe_retry: false });
         let joined = args.join(" ");
         assert!(joined.contains("bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b"));
-        assert!(joined.contains("-N 32"));
+        // -N CO GIÃN theo số luồng: mặc định max_concurrency=3 -> 48/3 = 16.
+        // (Trước đây cố định 32 -> nhiều luồng là bão kết nối, bị bóp IP.)
+        assert_eq!(s.max_concurrency, 3, "mặc định luồng đổi thì sửa kỳ vọng -N");
+        assert!(joined.contains("-N 16"), "args: {joined}");
         assert!(joined.contains("%(title)s.%(ext)s"));
         assert!(!joined.contains("--continue"));
     }
