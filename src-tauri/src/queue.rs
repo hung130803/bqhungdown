@@ -877,6 +877,16 @@ impl QueueManager {
             return;
         }
         item.state = DownloadState::Downloading;
+        // XOÁ CHỮ ĐỎ ngay khi BẮT ĐẦU thử lại — đang tải mà vẫn kèm lỗi của
+        // lần trước thì không đọc được là đang ổn hay đang hỏng. Lỗi mới (nếu
+        // có) sẽ được ghi lại ở nhánh thất bại.
+        {
+            let mut map = self.items.write().unwrap();
+            if let Some(it) = map.get_mut(&id) {
+                it.error_message = None;
+            }
+        }
+        item.error_message = None;
 
         let cancel = CancellationToken::new();
         self.cancel_tokens.lock().unwrap().insert(id.clone(), cancel.clone());
@@ -1014,6 +1024,15 @@ impl QueueManager {
                     it.state = DownloadState::Completed;
                     it.output_path = output_path.clone();
                     it.finished_at = Some(Utc::now());
+                    // XOÁ CHỮ ĐỎ của những lần thử TRƯỚC — tải xong rồi thì
+                    // không còn lỗi nào nữa.
+                    //
+                    // LỖI THẬT (anh Hùng 2026-07-25): video "Bluff" bị watchdog
+                    // giết ở lần 1 (treo 30 phút), lần 2 tải THÀNH CÔNG, thẻ
+                    // hiện "● Hoàn tất" nhưng VẪN kèm nguyên đoạn đỏ "Tải bị
+                    // treo quá lâu nên app đã dừng để thử lại…" → "tải thành
+                    // công mà vẫn hiện lỗi k hiểu tí nào".
+                    it.error_message = None;
                     // Same url_is_cdn guard as the meta channel: when the URL
                     // was rewritten by url_resolver to a CDN one, yt-dlp's
                     // resolved title is the CDN file ID, not the real video
