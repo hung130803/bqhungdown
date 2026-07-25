@@ -19,15 +19,25 @@ use crate::error::{AppError, AppResult};
 use crate::models::{Settings, SettingsPatch};
 
 const MAX_CONCURRENCY_MIN: u8 = 1;
-/// TRẦN số video tải song song = 8 (trước đây 100).
+/// TRẦN số video tải song song = 32 (trước 8, trước nữa 100).
 ///
-/// ĐO THỰC TẾ trên máy user (2026-07): đặt 50 luồng làm tải CHẬM HẲN, không
-/// nhanh hơn — băng thông bị chia 50 phần + YouTube bóp băng thông theo IP khi
-/// thấy quá nhiều kết nối song song. Vùng tốt là 3–6; 8 là trần an toàn (còn
-/// 6 kết nối/video theo ngân sách CONN_BUDGET). Giá trị cũ >8 trong file cấu
-/// hình sẽ TỰ ĐƯỢC HẠ về 8 lúc nạp (clamp_max_concurrency) — user không phải
-/// tự sửa trên từng máy.
-const MAX_CONCURRENCY_MAX: u8 = 8;
+/// VÌ SAO NỚI LẠI (anh Hùng: "sao k thêm đc à phải do tôi tuỳ chỉnh chứ"):
+///
+/// Trần 8 đặt ở v0.1.122 dựa trên đo thật — 50 luồng làm tải CHẬM HẲN. Nhưng
+/// LÚC ĐÓ mỗi video xin cố định `-N 32` kết nối → 50 × 32 = 1.600 kết nối cùng
+/// lúc → YouTube bóp IP → mọi video rùa bò. Thủ phạm là BÃO KẾT NỐI, không
+/// phải bản thân số luồng. Hai thay đổi làm lý do đó hết đúng:
+///
+///   1. `args_builder::conns_per_item` chia NGÂN SÁCH 48 kết nối cho số luồng,
+///      kẹp tối thiểu 2 → 32 luồng chỉ còn ~64 kết nối, không thể thành bão.
+///   2. ĐO 2026-07-25: video YouTube thường là MỘT file `proto=https`
+///      (`frag=NA`) nên `-N` VÔ DỤNG — mỗi video thực tế chỉ 1 kết nối, và
+///      chính kết nối đó bị YouTube bóp. Chạy nhiều video song song vì thế có
+///      thể TĂNG tổng tốc độ, chứ không "chia nhỏ băng thông" như tưởng.
+///
+/// Nên: trần 32, khuyến nghị vẫn ghi rõ 3–6 ở UI, còn quyết định để user. App
+/// KHÔNG tự hạ giá trị user đặt trong khoảng 1..=32 nữa.
+const MAX_CONCURRENCY_MAX: u8 = 32;
 
 /// Lưu trữ `Settings` trong bộ nhớ kèm path để persist.
 pub struct SettingsStore {
@@ -130,8 +140,10 @@ impl SettingsStore {
                 s.default_folder = folder;
             }
             if let Some(mc) = patch.max_concurrency {
-                // KẸP thay vì báo lỗi: user gõ 50 thì tự về 8 (trần an toàn),
-                // không "lưu thất bại" khiến họ tưởng app hỏng.
+                // KẸP thay vì báo lỗi: gõ số ngoài khoảng thì về biên gần
+                // nhất (vd 99 -> 32), không "lưu thất bại" khiến user tưởng
+                // app hỏng. Trong khoảng 1..=32 thì TÔN TRỌNG đúng con số user
+                // đặt, app không tự hạ.
                 s.max_concurrency = mc.clamp(MAX_CONCURRENCY_MIN, MAX_CONCURRENCY_MAX);
             }
             if let Some(theme) = patch.theme {
@@ -546,9 +558,9 @@ mod tests {
 
     #[test]
     fn apply_patch_kep_so_luong_ngoai_khoang() {
-        // ĐỔI HÀNH VI (đo 2026-07): trước đây ngoài khoảng thì BÁO LỖI -> user
-        // gõ 50 tưởng lưu được mà không đổi gì. Nay KẸP về [1, MAX] để họ luôn
-        // nhận giá trị an toàn (50 -> 8), khỏi phải tự sửa trên từng máy.
+        // Ngoài khoảng thì KẸP về biên (không báo lỗi, khỏi tưởng app hỏng).
+        // Trần nay là 32 (xem chú thích MAX_CONCURRENCY_MAX): trong khoảng
+        // 1..=32 phải giữ ĐÚNG số user đặt — trước đây 8 là quá chặt.
         let path = unique_tmp_path();
         let (store, _) = SettingsStore::load(path.clone());
 
@@ -561,7 +573,7 @@ mod tests {
             .expect("kẹp, không báo lỗi");
         assert_eq!(s.max_concurrency, MAX_CONCURRENCY_MIN);
 
-        // 50 (ca thật của user) -> kẹp về trần an toàn 8
+        // 50 (ca thật của user) -> kẹp về trần 32
         let s = store
             .apply_patch(SettingsPatch {
                 max_concurrency: Some(50),
@@ -579,6 +591,19 @@ mod tests {
             })
             .expect("hợp lệ");
         assert_eq!(s.max_concurrency, 4);
+
+        // ★ TÔN TRỌNG QUYỀN USER: 12 và 20 nằm trong khoảng mới -> giữ ĐÚNG số
+        // đã đặt, KHÔNG bị app tự hạ về 8 như bản trước.
+        for want in [9u8, 12, 20, 32] {
+            let s = store
+                .apply_patch(SettingsPatch {
+                    max_concurrency: Some(want),
+                    ..Default::default()
+                })
+                .expect("hợp lệ");
+            assert_eq!(s.max_concurrency, want, "app không được tự hạ {want}");
+            assert_eq!(store.get().max_concurrency, want, "phải lưu lại {want}");
+        }
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
