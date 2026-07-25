@@ -79,12 +79,14 @@ pub fn reconcile_all(
             continue;
         }
         let _ = store.update(&ch.id, |c| {
+            let mut vua_xong = 0u32;   // số video của kênh này VỪA tải xong
             let pending = std::mem::take(&mut c.dl_pending);
             for vid in pending {
                 if done_hist.contains(&vid) {
                     if !c.done_ids.contains(&vid) {
                         c.done_ids.push(vid); // chốt đã làm
                     }
+                    vua_xong += 1;
                 } else if live.contains(&vid) {
                     c.dl_pending.push(vid); // vẫn đang tải/chờ/retry
                 } else {
@@ -94,6 +96,27 @@ pub fn reconcile_all(
                         c.drip_count -= 1;
                     }
                     c.auto_fetch_date = None;
+                }
+            }
+            // TỰ CHỮA bộ đếm "đã tải hôm nay".
+            //
+            // LỖI THẬT (anh Hùng 2026-07-25): video kênh "Bluff" bị watchdog
+            // giết ở lần 1 rồi lần 2 TẢI XONG, nhưng thẻ kênh vẫn "Chờ lượt"
+            // chứ không phải "Đã tải 1 hôm nay" → anh không biết là đã tải được
+            // ("k thấy báo đã tải 1 video hay gì luôn").
+            //
+            // Nguyên nhân: `drip_count` là bộ đếm CỘNG/TRỪ TAY. Chỉ cần MỘT
+            // nhịp trừ oan (một lượt đối soát chạy đúng lúc mục chưa kịp vào
+            // lịch sử mà cũng không còn "sống" — hay gặp khi app khởi động lại
+            // giữa 2 lần thử) là lệch VĨNH VIỄN: không có đường nào cộng lại.
+            //
+            // Nay chốt theo SỰ THẬT: đã có video vào lịch sử thì PHẢI đếm.
+            if vua_xong > 0 {
+                if c.drip_date.as_deref() == Some(today.as_str()) {
+                    c.drip_count = c.drip_count.max(vua_xong);
+                } else {
+                    c.drip_date = Some(today.clone());
+                    c.drip_count = vua_xong;
                 }
             }
         });
@@ -1165,7 +1188,7 @@ mod tests {
                    vec!["short_hot"]);
     }
 
-    fn chan(picked: Vec<PickedVideo>, daily: u32, done: Vec<String>) -> WatchedChannel {
+    pub(super) fn chan(picked: Vec<PickedVideo>, daily: u32, done: Vec<String>) -> WatchedChannel {
         WatchedChannel {
             id: "t".into(),
             url: "https://youtube.com/@t".into(),
@@ -1659,4 +1682,114 @@ pub fn spawn_monitor(
             tokio::time::sleep(Duration::from_secs(interval_min as u64 * 60)).await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests_tu_chua_bo_dem {
+    use super::*;
+
+    /// Dựng kênh với trạng thái bộ đếm cho trước.
+    fn ch_dem(drip_date: Option<&str>, drip_count: u32,
+              pending: Vec<&str>) -> WatchedChannel {
+        let mut c = super::tests::chan(vec![], 1, vec![]);
+        c.drip_date = drip_date.map(|s| s.to_string());
+        c.drip_count = drip_count;
+        c.dl_pending = pending.into_iter().map(|s| s.to_string()).collect();
+        c
+    }
+
+    /// Phần logic tự-chữa, tách ra để test không cần AppHandle/history thật.
+    fn ap_dung(c: &mut WatchedChannel, today: &str,
+               done_hist: &[&str], live: &[&str]) {
+        let mut vua_xong = 0u32;
+        let pending = std::mem::take(&mut c.dl_pending);
+        for vid in pending {
+            if done_hist.contains(&vid.as_str()) {
+                if !c.done_ids.contains(&vid) { c.done_ids.push(vid); }
+                vua_xong += 1;
+            } else if live.contains(&vid.as_str()) {
+                c.dl_pending.push(vid);
+            } else {
+                c.seen_ids.retain(|s| s != &vid);
+                if c.drip_date.as_deref() == Some(today) && c.drip_count > 0 {
+                    c.drip_count -= 1;
+                }
+                c.auto_fetch_date = None;
+            }
+        }
+        if vua_xong > 0 {
+            if c.drip_date.as_deref() == Some(today) {
+                c.drip_count = c.drip_count.max(vua_xong);
+            } else {
+                c.drip_date = Some(today.to_string());
+                c.drip_count = vua_xong;
+            }
+        }
+    }
+
+    const NAY: &str = "2026-07-25";
+
+    /// ★ ĐÚNG LỖI ANH HÙNG GẶP: bộ đếm đã bị trừ oan về 0 (watchdog giết lần 1,
+    /// app khởi động lại giữa 2 lần thử), lần 2 tải XONG → phải hiện "đã tải 1",
+    /// KHÔNG được để "Chờ lượt".
+    #[test]
+    fn tai_xong_sau_khi_bo_dem_bi_tru_oan() {
+        let mut c = ch_dem(Some(NAY), 0, vec!["vidA"]);
+        ap_dung(&mut c, NAY, &["vidA"], &[]);
+        assert_eq!(c.drip_count, 1, "tải xong thì PHẢI đếm là 1");
+        assert_eq!(c.drip_date.as_deref(), Some(NAY));
+        assert!(c.done_ids.contains(&"vidA".to_string()));
+    }
+
+    #[test]
+    fn tai_xong_2_video_dem_du_2() {
+        let mut c = ch_dem(Some(NAY), 0, vec!["a", "b"]);
+        ap_dung(&mut c, NAY, &["a", "b"], &[]);
+        assert_eq!(c.drip_count, 2);
+    }
+
+    /// KHÔNG được HẠ bộ đếm đang cao hơn (đã dùng ➕ Thêm lượt nhiều lần).
+    #[test]
+    fn khong_ha_bo_dem_dang_cao_hon() {
+        let mut c = ch_dem(Some(NAY), 3, vec!["a"]);
+        ap_dung(&mut c, NAY, &["a"], &[]);
+        assert_eq!(c.drip_count, 3, "3 lượt đã tải hôm nay không được tụt về 1");
+    }
+
+    /// Sang NGÀY MỚI: đặt lại đúng số vừa xong, không cộng dồn ngày cũ.
+    #[test]
+    fn sang_ngay_moi_dat_lai_dung() {
+        let mut c = ch_dem(Some("2026-07-24"), 3, vec!["a"]);
+        ap_dung(&mut c, NAY, &["a"], &[]);
+        assert_eq!(c.drip_date.as_deref(), Some(NAY));
+        assert_eq!(c.drip_count, 1, "ngày mới chỉ tính video của ngày mới");
+    }
+
+    /// Lỗi cứng/huỷ vẫn TRẢ SUẤT như cũ (không được vì thêm tự-chữa mà mất).
+    #[test]
+    fn loi_cung_van_tra_suat() {
+        let mut c = ch_dem(Some(NAY), 1, vec!["hong"]);
+        c.seen_ids.push("hong".into());
+        ap_dung(&mut c, NAY, &[], &[]);
+        assert_eq!(c.drip_count, 0, "lỗi cứng phải trả lại suất");
+        assert!(!c.seen_ids.contains(&"hong".to_string()), "gỡ seen để quét lại");
+        assert!(c.dl_pending.is_empty());
+    }
+
+    /// Đang tải thì GIỮ NGUYÊN, không đếm sớm cũng không trả suất.
+    #[test]
+    fn dang_tai_thi_giu_nguyen() {
+        let mut c = ch_dem(Some(NAY), 1, vec!["dangtai"]);
+        ap_dung(&mut c, NAY, &[], &["dangtai"]);
+        assert_eq!(c.drip_count, 1);
+        assert_eq!(c.dl_pending, vec!["dangtai".to_string()]);
+    }
+
+    /// 1 xong + 1 lỗi cùng lượt: trừ cái lỗi rồi vẫn đếm cái xong.
+    #[test]
+    fn mot_xong_mot_loi_cung_luot() {
+        let mut c = ch_dem(Some(NAY), 2, vec!["ok", "hong"]);
+        ap_dung(&mut c, NAY, &["ok"], &[]);
+        assert_eq!(c.drip_count, 1, "2 - 1 lỗi = 1, và cái xong vẫn được đếm");
+    }
 }
