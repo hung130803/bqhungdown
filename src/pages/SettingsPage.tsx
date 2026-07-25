@@ -165,21 +165,35 @@ export function SettingsPage() {
       <UpdateSection />
 
       <Field label={t("settings.maxConcurrency")}>
-        <input
-          type="number"
-          min={1}
-          value={settings.maxConcurrency}
-          onChange={e => {
-            // Cho phép xoá rỗng trong khi đang gõ. Chỉ commit khi giá trị
-            // thực sự là số ≥ 1; rỗng → giữ nguyên giá trị cũ tới khi user
-            // gõ tiếp.
-            const raw = e.target.value;
-            if (raw === "") return;
-            const n = parseInt(raw, 10);
-            if (Number.isFinite(n) && n >= 1) set("maxConcurrency", n);
-          }}
-          className="w-24 px-3 py-2 rounded-md bg-surface border border-border text-fg"
-        />
+        <div className="space-y-1">
+          <input
+            type="number"
+            min={1}
+            value={settings.maxConcurrency}
+            onChange={e => {
+              // Cho phép xoá rỗng trong khi đang gõ. Chỉ commit khi giá trị
+              // thực sự là số ≥ 1; rỗng → giữ nguyên giá trị cũ tới khi user
+              // gõ tiếp.
+              const raw = e.target.value;
+              if (raw === "") return;
+              const n = parseInt(raw, 10);
+              if (Number.isFinite(n) && n >= 1) set("maxConcurrency", n);
+            }}
+            className="w-24 px-3 py-2 rounded-md bg-surface border border-border text-fg"
+          />
+          {/* Đặt quá cao KHÔNG nhanh hơn: băng thông bị chia nhỏ + YouTube bóp
+              IP khi thấy quá nhiều kết nối. Khuyên 3-6. */}
+          <p className="text-xs text-muted">
+            Khuyên dùng <b>3–6</b>. Đặt cao hơn <b>không</b> nhanh hơn — băng thông
+            bị chia nhỏ và YouTube dễ bóp tốc độ IP của anh.
+          </p>
+          {settings.maxConcurrency > 8 && (
+            <p className="text-xs text-warning">
+              ⚠ Đang đặt {settings.maxConcurrency} — quá nhiều, dễ làm CHẬM tất cả.
+              Hạ về 3–6 để tải nhanh nhất.
+            </p>
+          )}
+        </div>
       </Field>
 
       <Field label={t("settings.maxHeight")}>
