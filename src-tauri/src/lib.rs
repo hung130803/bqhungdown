@@ -190,6 +190,12 @@ pub fn run() {
                     // Lượt đầu chờ hàng đợi khôi phục xong (khỏi dọn oan file
                     // của mục sắp tiếp tục tải).
                     std::thread::sleep(std::time::Duration::from_secs(20));
+                    // DỌN BỘ CÀI CẬP NHẬT CŨ trong %TEMP% — chỉ cần 1 lần mỗi
+                    // lần mở app (mỗi bản cập nhật để lại đúng 1 thư mục).
+                    let nu = crate::commands::sweep_updater_leftovers();
+                    if nu > 0 {
+                        eprintln!("[junk] đã dọn {nu} thư mục bộ cài cập nhật cũ trong %TEMP%");
+                    }
                     loop {
                         let n = crate::commands::sweep_junk_all(&q, &w, &s);
                         if n > 0 {

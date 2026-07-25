@@ -1812,6 +1812,47 @@ pub(crate) fn sweep_junk_all(
     total
 }
 
+/// Tên thư mục do `tauri-plugin-updater` tạo trong `%TEMP%` để chứa bộ cài:
+/// `BQHungDown-0.1.101-updater-xc5LAR`. Hàm THUẦN để unit-test.
+pub(crate) fn is_updater_leftover(name: &str) -> bool {
+    name.starts_with("BQHungDown-") && name.contains("-updater-")
+}
+
+/// DỌN thư mục cài-đặt-cập-nhật còn tồn trong `%TEMP%`.
+///
+/// VÌ SAO CẦN (đo thật trên máy anh Hùng 2026-07-25): plugin updater tải file
+/// `.exe` cài đặt (~48 MB) vào `%TEMP%/BQHungDown-<ver>-updater-<random>/`, rồi
+/// CHẠY nó và app TỰ THOÁT — nên không còn ai ở lại để xoá. Sau vài chục lần
+/// cập nhật đã đọng **56 thư mục = 2.7 GB**. App tự cập nhật thường xuyên nên
+/// đây là rác tăng vô hạn, phải tự dọn.
+///
+/// AN TOÀN: bỏ qua thư mục vừa đổi trong 10 phút — nếu đang cập nhật ngay lúc
+/// này (hoặc mở 2 cửa sổ app) thì bộ cài đang dùng không bị cuỗm.
+pub(crate) fn sweep_updater_leftovers() -> u64 {
+    let entries = match std::fs::read_dir(std::env::temp_dir()) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    let mut n = 0u64;
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        if !is_updater_leftover(&entry.file_name().to_string_lossy()) {
+            continue;
+        }
+        if let Ok(m) = entry.metadata().and_then(|m| m.modified()) {
+            if m.elapsed().map(|e| e.as_secs() < 600).unwrap_or(false) {
+                continue;   // có thể đang cập nhật — để yên
+            }
+        }
+        if std::fs::remove_dir_all(entry.path()).is_ok() {
+            n += 1;
+        }
+    }
+    n
+}
+
 // ---------- Saved bookmarks ----------
 
 #[tauri::command]
@@ -2049,5 +2090,53 @@ mod tests_don_rac {
         super::clean_junk_in(&root, &HashSet::new(), &HashSet::new());
         assert!(moi.exists(), "file vừa ghi (<2 phút) không được xoá");
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod tests_don_updater {
+    use std::fs;
+
+    /// Nhận đúng tên thư mục updater, KHÔNG nhận nhầm thứ khác trong %TEMP%.
+    #[test]
+    fn nhan_dung_ten_thu_muc_bo_cai() {
+        for ok in [
+            "BQHungDown-0.1.101-updater-xc5LAR",
+            "BQHungDown-0.1.89-updater-4Gb8Re",
+            "BQHungDown-1.0.0-updater-aaaaaa",
+        ] {
+            assert!(super::is_updater_leftover(ok), "phải nhận: {ok}");
+        }
+        for no in [
+            "BQHungDown",                      // tên app trơ
+            "BQHungDown-0.1.101",              // thiếu -updater-
+            "updater-xc5LAR",                  // thiếu tiền tố app
+            "BQHungVideo-2.3.0-updater-xx",    // app KHÁC (tool cắt)
+            "com.prodown.app",                 // thư mục DỮ LIỆU THẬT
+            "claude",                          // thư mục của công cụ khác
+            "chrome_BITS_1234",
+        ] {
+            assert!(!super::is_updater_leftover(no), "KHÔNG được nhận: {no}");
+        }
+    }
+
+    /// CHỐT AN TOÀN: thư mục vừa tạo (đang cập nhật) phải được GIỮ.
+    #[test]
+    fn giu_bo_cai_vua_tao_con_xoa_bo_cai_cu() {
+        let tmp = std::env::temp_dir();
+        let moi = tmp.join("BQHungDown-9.9.9-updater-TESTnew");
+        let khac = tmp.join("BQHungVideo-9.9.9-updater-TESTother");
+        let _ = fs::remove_dir_all(&moi);
+        let _ = fs::remove_dir_all(&khac);
+        fs::create_dir_all(&moi).unwrap();
+        fs::create_dir_all(&khac).unwrap();
+        fs::write(moi.join("setup.exe"), b"x").unwrap();
+
+        super::sweep_updater_leftovers();
+
+        assert!(moi.exists(), "bộ cài VỪA tạo (<10 phút) không được xoá");
+        assert!(khac.exists(), "app KHÁC không được chạm");
+        let _ = fs::remove_dir_all(&moi);
+        let _ = fs::remove_dir_all(&khac);
     }
 }
