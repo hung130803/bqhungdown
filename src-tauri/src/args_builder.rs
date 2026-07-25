@@ -22,6 +22,20 @@ pub(crate) fn temp_dir_for(save_folder: &Path, tag: &str) -> PathBuf {
     save_folder.join(TEMP_DIRNAME).join(tag)
 }
 
+/// Xoá thư mục tạm của MỘT lượt tải, rồi xoá luôn cái vỏ `.bqd-temp` NẾU đã
+/// rỗng.
+///
+/// VÌ SAO (anh Hùng báo): bản trước chỉ xoá thư mục con `<tag>`, để lại thư mục
+/// `.bqd-temp` trống trong MỌI thư mục kênh sau khi tải xong — nhìn rất rác.
+///
+/// AN TOÀN: dùng `remove_dir` (KHÔNG phải `remove_dir_all`) cho cái vỏ — nó
+/// chỉ thành công khi thư mục RỖNG, nên nếu kênh này còn lượt tải khác đang
+/// chạy thì lệnh tự thất bại và mảnh của lượt đó vẫn nguyên.
+pub(crate) fn purge_temp_dir(save_folder: &Path, tag: &str) {
+    let _ = std::fs::remove_dir_all(temp_dir_for(save_folder, tag));
+    let _ = std::fs::remove_dir(save_folder.join(TEMP_DIRNAME));
+}
+
 /// Một số site (viralhog, gfycat, redgifs, imgur, 9gag, các trang
 /// embed video tự host…) không có extractor riêng trong yt-dlp nhưng có thẻ
 /// `<video>` hoặc og:video trong HTML. Cờ `--force-generic-extractor` bảo
@@ -857,5 +871,63 @@ mod tests {
         let r = req();
         let args = build(&r, &Settings::default(), BuildMode::Download { resume: true, force_generic: false, output_stem: None, safe_retry: false, temp_tag: None });
         assert!(args.contains(&"--continue".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tests_don_vo_temp {
+    use std::fs;
+
+    /// Anh Hùng báo: tải xong kênh nào cũng còn lại thư mục `.bqd-temp` trống.
+    /// Dọn xong lượt cuối thì cái vỏ phải biến mất theo.
+    #[test]
+    fn xoa_luon_vo_bqd_temp_khi_da_rong() {
+        let kenh = std::env::temp_dir().join("bqd_t_vo1").join("kênh 90");
+        let _ = fs::remove_dir_all(kenh.parent().unwrap());
+        let t = super::temp_dir_for(&kenh, "abc123");
+        fs::create_dir_all(&t).unwrap();
+        fs::write(t.join("x.mp4.part"), b"z").unwrap();
+
+        super::purge_temp_dir(&kenh, "abc123");
+
+        assert!(!t.exists(), "thư mục lượt tải phải bị xoá");
+        assert!(!kenh.join(super::TEMP_DIRNAME).exists(),
+                "CÁI VỎ .bqd-temp rỗng cũng phải bị xoá");
+        assert!(kenh.exists(), "thư mục KÊNH thì không được xoá");
+        let _ = fs::remove_dir_all(kenh.parent().unwrap());
+    }
+
+    /// CHỐT AN TOÀN: kênh còn lượt tải KHÁC đang chạy thì cái vỏ phải Ở LẠI —
+    /// nếu xoá bằng remove_dir_all sẽ cuỗm mảnh của lượt đang tải (đúng lỗi
+    /// "[Errno 2] .part-FragN" mà cả buổi mới chữa xong).
+    #[test]
+    fn giu_vo_khi_con_luot_tai_khac() {
+        let kenh = std::env::temp_dir().join("bqd_t_vo2").join("kênh 91");
+        let _ = fs::remove_dir_all(kenh.parent().unwrap());
+        let xong = super::temp_dir_for(&kenh, "xong01");
+        let dang = super::temp_dir_for(&kenh, "dang02");
+        fs::create_dir_all(&xong).unwrap();
+        fs::create_dir_all(&dang).unwrap();
+        let manh = dang.join("Video dai.mp4.part-Frag7");
+        fs::write(&manh, b"z").unwrap();
+
+        super::purge_temp_dir(&kenh, "xong01");
+
+        assert!(!xong.exists(), "lượt đã xong phải bị xoá");
+        assert!(manh.exists(), "MẢNH của lượt ĐANG TẢI không được mất");
+        assert!(kenh.join(super::TEMP_DIRNAME).exists(),
+                "vỏ phải ở lại vì còn lượt đang tải");
+        let _ = fs::remove_dir_all(kenh.parent().unwrap());
+    }
+
+    /// Gọi khi chẳng có gì (đã dọn rồi / chưa từng tạo) cũng không được nổ.
+    #[test]
+    fn goi_khi_khong_co_gi_van_yen() {
+        let kenh = std::env::temp_dir().join("bqd_t_vo3").join("kênh 92");
+        let _ = fs::remove_dir_all(kenh.parent().unwrap());
+        fs::create_dir_all(&kenh).unwrap();
+        super::purge_temp_dir(&kenh, "khong-co");
+        assert!(kenh.exists());
+        let _ = fs::remove_dir_all(kenh.parent().unwrap());
     }
 }
