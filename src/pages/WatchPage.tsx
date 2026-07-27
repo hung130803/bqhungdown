@@ -5,7 +5,9 @@ import { useQueueStore } from "@/stores/useQueueStore";
 import type { ChannelVideo, HistoryEntry, PickedVideo, WatchedChannel } from "@/types/models";
 import { EmptyState } from "@/components/EmptyState";
 import { planAddMore, pickKeyForMore, planCheckNow } from "@/lib/bulk-more";
-import { loiTrung, nhomMacDinh, timTrungUrl } from "@/lib/watch-group";
+import {
+  dsChon, hoiChuyenNhom, loiTrung, nhomMacDinh, timTrungUrl,
+} from "@/lib/watch-group";
 
 /** 1 KÊNH đích của user (kênh TikTok) = nhiều key nguồn chung tên kênh.
  *  `rep` = key đầu tiên, đại diện cấu hình mức kênh (nhóm/chế độ/thư mục). */
@@ -79,6 +81,13 @@ export function WatchPage() {
   const [adding, setAdding] = useState(false);
   // Ô "dán key mới" trong từng thẻ kênh (map theo key của thẻ).
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
+  // ── CHỌN NHIỀU KÊNH để ĐỔI NHÓM HÀNG LOẠT ──
+  // 100-300 kênh thì đổi nhóm từng cái không xong việc (anh Hùng 27/07/2026).
+  // KHÔNG lưu localStorage: chọn xong làm luôn, mở lại app không nên còn dính
+  // lựa chọn cũ rồi đổi oan cả loạt.
+  const [chonMode, setChonMode] = useState(false);
+  const [chonKenh, setChonKenh] = useState<Record<string, boolean>>({});
+  const [doiNhomBusy, setDoiNhomBusy] = useState(false);
   // 50-300 kênh: nhóm GẬP/MỞ được + thẻ kênh THU GỌN 1 dòng, bấm mới xổ.
   // LƯU localStorage → chuyển tab (Đang tải…) rồi quay lại KHÔNG bị gập hết
   // về trống trơn; giữ đúng nhóm/kênh đang mở.
@@ -257,6 +266,45 @@ export function WatchPage() {
       await reload();
     } catch (e) {
       setError(formatErr(e));
+    }
+  };
+
+  /** ĐỔI NHÓM HÀNG LOẠT cho các kênh ĐANG TÍCH CHỌN.
+   *  Chỉ đụng NHÓM — không sửa tên/thư mục/hàng chờ. Hỏi xác nhận kèm danh
+   *  sách tên để soát lại, và chỉ áp cho kênh ĐANG HIỆN (kênh bị bộ lọc ẩn thì
+   *  không bị đổi oan). Lỗi 1 kênh không chặn các kênh còn lại. */
+  const doiNhomHangLoat = async (nhomMoi: string) => {
+    const ds = dsChon(kenhVisible, chonKenh);
+    if (!ds.length || doiNhomBusy) return;
+    const ok = await cmd.confirmDialog(
+      hoiChuyenNhom(ds.map((k) => k.name || "(chưa đặt tên)"), nhomMoi),
+      "Đổi nhóm hàng loạt",
+    );
+    if (!ok) return;
+    setDoiNhomBusy(true);
+    setError(null);
+    const loi: string[] = [];
+    try {
+      for (const k of ds) {
+        try {
+          for (const c of k.keys) {
+            await cmd.setWatchedGroup(c.id, nhomMoi || null);
+          }
+        } catch (e) {
+          loi.push(`${k.name || k.key}: ${formatErr(e)}`);
+        }
+      }
+      await reload();
+      setChonKenh({});
+      setChonMode(false);
+      if (loi.length) {
+        setError(
+          `Đổi nhóm xong ${ds.length - loi.length}/${ds.length} kênh. `
+          + `Lỗi: ${loi.slice(0, 3).join(" · ")}`,
+        );
+      }
+    } finally {
+      setDoiNhomBusy(false);
     }
   };
 
@@ -833,6 +881,21 @@ export function WatchPage() {
             ⚠ {nEmpty} kênh hết hàng chờ
           </span>
         )}
+        {/* CHỌN NHIỀU KÊNH -> đổi nhóm hàng loạt (100-300 kênh) */}
+        <button
+          onClick={() => {
+            setChonMode((v) => !v);
+            setChonKenh({});
+          }}
+          className={`ml-auto px-3 py-1.5 rounded-md text-sm font-medium border ${
+            chonMode
+              ? "bg-accent/15 border-accent text-fg"
+              : "bg-surface-2 border-border text-fg"
+          }`}
+          title="Bật chế độ CHỌN NHIỀU kênh để đổi nhóm một lượt — khỏi đổi từng cái"
+        >
+          {chonMode ? "✕ Thoát chọn" : "☑ Chọn nhiều"}
+        </button>
         <button
           onClick={() => {
             // NẠP NHÓM ĐANG XEM vào hộp thêm: đang lọc nhóm "Mỹ" thì kênh mới
@@ -841,7 +904,7 @@ export function WatchPage() {
             setAddGrp(nhomMacDinh(groupFilter));
             setAddOpen(true);
           }}
-          className="ml-auto px-3 py-1.5 rounded-md bg-accent text-accent-fg text-sm font-medium"
+          className="px-3 py-1.5 rounded-md bg-accent text-accent-fg text-sm font-medium"
         >
           ➕ Thêm kênh
         </button>
@@ -1006,6 +1069,51 @@ export function WatchPage() {
               : "Không kênh nào khớp tìm kiếm/bộ lọc."}
           </div>
         )}
+        {/* THANH ĐỔI NHÓM HÀNG LOẠT — chỉ hiện khi bật ☑ Chọn nhiều */}
+        {chonMode && (
+          <div className="sticky top-0 z-10 flex items-center gap-2 flex-wrap px-3 py-2 rounded-lg border border-accent bg-accent/10">
+            <span className="text-sm font-medium text-fg">
+              Đã chọn {dsChon(kenhVisible, chonKenh).length}/{kenhVisible.length} kênh
+            </span>
+            <button
+              onClick={() => {
+                const t: Record<string, boolean> = {};
+                for (const k of kenhVisible) t[k.key] = true;
+                setChonKenh(t);
+              }}
+              className="px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs"
+              title="Tích hết các kênh ĐANG HIỆN (theo nhóm/tìm kiếm hiện tại)"
+            >
+              Chọn hết đang hiện
+            </button>
+            <button
+              onClick={() => setChonKenh({})}
+              className="px-2 py-1 rounded-md bg-surface-2 border border-border text-fg text-xs"
+            >
+              Bỏ chọn
+            </button>
+            <span className="flex-1" />
+            <span className="text-xs text-muted">Chuyển sang nhóm:</span>
+            <select
+              value=""
+              disabled={doiNhomBusy || dsChon(kenhVisible, chonKenh).length === 0}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "") return;
+                void doiNhomHangLoat(v === "__none" ? "" : v);
+              }}
+              className="px-2 py-1 rounded-md border border-accent bg-surface-2 text-fg text-sm disabled:opacity-50"
+              title="Chọn nhóm đích — hỏi xác nhận rồi đổi cho MỌI kênh đang tích"
+            >
+              <option value="">— chọn nhóm đích —</option>
+              {groups.map((g) => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+              <option value="__none">(bỏ khỏi nhóm)</option>
+            </select>
+            {doiNhomBusy && <span className="text-xs text-muted">đang đổi…</span>}
+          </div>
+        )}
         {kenhVisible.map((k, i) => {
           const anyOn = k.keys.some((c) => c.enabled);
           const dry = k.keys.some((c) => c.sourceEmpty);
@@ -1105,6 +1213,21 @@ export function WatchPage() {
               className="flex items-center gap-3 px-3.5 py-2.5 cursor-pointer hover:bg-surface-2/40 rounded-xl"
               onClick={() => setOpenKenh((m) => ({ ...m, [k.key]: !kOpen }))}
             >
+              {/* Ô TÍCH CHỌN để đổi nhóm hàng loạt — chỉ hiện ở chế độ chọn.
+                  Tách hẳn khỏi ô bật/tắt kênh bên cạnh để không bấm lẫn. */}
+              {chonMode && (
+                <input
+                  type="checkbox"
+                  checked={!!chonKenh[k.key]}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) =>
+                    setChonKenh((m) => ({ ...m, [k.key]: e.target.checked }))
+                  }
+                  className="h-4 w-4 shrink-0 accent-current"
+                  title="Tích để đổi nhóm hàng loạt cho kênh này"
+                  aria-label={`Chọn kênh ${k.name || k.key} để đổi nhóm`}
+                />
+              )}
               <span className="text-xs text-muted w-3 shrink-0">{kOpen ? "▾" : "▸"}</span>
               <input
                 type="checkbox"

@@ -64,3 +64,31 @@ export function loiTrung(k: KenhToiThieu): string {
 export function nhomMacDinh(groupFilter: string | null): string {
   return (groupFilter ?? "").trim();
 }
+
+// ─────────────── ĐỔI NHÓM HÀNG LOẠT (chọn nhiều kênh) ───────────────
+// 100-300 kênh thì đổi từng cái không xong việc. Logic chọn/lọc để ở đây cho
+// test được, WatchPage chỉ lo vẽ.
+
+export type CoKhoa = { key: string };
+
+/** Các kênh ĐANG HIỆN mà được tích chọn (theo `key`).
+ *  Chỉ lấy trong `kenhVisible` — kênh bị bộ lọc nhóm/tìm kiếm ẩn đi thì KHÔNG
+ *  bị đổi oan, dù cờ chọn của nó còn sót lại trong state. */
+export function dsChon<T extends CoKhoa>(
+  kenhVisible: T[],
+  chon: Record<string, boolean>,
+): T[] {
+  return kenhVisible.filter((k) => chon[k.key]);
+}
+
+/** Câu hỏi xác nhận trước khi đổi nhóm hàng loạt — nói RÕ bao nhiêu kênh,
+ *  sang nhóm nào, và liệt kê tên để anh Hùng soát lại trước khi bấm. */
+export function hoiChuyenNhom(ten: string[], nhomMoi: string): string {
+  const dich = (nhomMoi || "").trim() || "Chưa phân nhóm";
+  const dsTen = ten.slice(0, 8).join(", ")
+    + (ten.length > 8 ? `, … và ${ten.length - 8} kênh nữa` : "");
+  return (
+    `Chuyển ${ten.length} kênh sang nhóm "${dich}"?\n\n${dsTen}\n\n`
+    + "Chỉ đổi NHÓM — không đụng tên kênh, thư mục lưu, hàng chờ hay video đã tải."
+  );
+}

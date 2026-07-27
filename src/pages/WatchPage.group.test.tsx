@@ -253,3 +253,113 @@ describe("LỖI 3 — thêm TRÙNG link phải BÁO, và KHÔNG ghi đè gì", (
     expect(goiNhom[0][1]).toBe("Mỹ");
   });
 });
+
+describe("ĐỔI NHÓM HÀNG LOẠT — chọn nhiều kênh rồi đổi một lượt", () => {
+  const btnChon = () => screen.getByRole("button", { name: /Chọn nhiều|Thoát chọn/ });
+  /** Ô <select> nhóm ĐÍCH trên thanh hàng loạt. */
+  const selectDich = () =>
+    screen.getAllByRole("combobox").find((s) =>
+      Array.from((s as HTMLSelectElement).options).some(
+        (o) => o.textContent === "— chọn nhóm đích —",
+      ),
+    ) as HTMLSelectElement;
+  const oTich = (ten: string) =>
+    screen.getByLabelText(new RegExp(`Chọn kênh ${ten} để đổi nhóm`));
+
+  it("bật ☑ Chọn nhiều → hiện thanh hàng loạt + ô tích trên từng kênh", async () => {
+    mockChannels = [
+      mkKey({ id: "a", targetName: "K1", group: "Mỹ" }),
+      mkKey({ id: "b", targetName: "K2", group: "Mỹ" }),
+    ];
+    await mountPage();
+    expect(selectDich()).toBeUndefined();          // chưa bật thì KHÔNG có
+    fireEvent.click(btnChon());
+    await waitFor(() => expect(selectDich()).toBeTruthy());
+    expect(oTich("K1")).toBeInTheDocument();
+    expect(oTich("K2")).toBeInTheDocument();
+  });
+
+  it("tích 2 kênh → đổi nhóm → gọi setWatchedGroup cho MỌI key của CẢ 2", async () => {
+    mockChannels = [
+      mkKey({ id: "a", targetName: "K1", group: "Mỹ" }),
+      mkKey({ id: "b", targetName: "K2", group: "Mỹ" }),
+      mkKey({ id: "c", targetName: "K3", group: "Mỹ" }),   // KHÔNG tích
+    ];
+    await mountPage();
+    fireEvent.click(btnChon());
+    await waitFor(() => expect(selectDich()).toBeTruthy());
+    fireEvent.click(oTich("K1"));
+    fireEvent.click(oTich("K2"));
+    fireEvent.change(selectDich(), { target: { value: "Hàn" } });
+    await waitFor(() => expect(goiNhom.length).toBe(2), { timeout: 3000 });
+    expect(goiNhom.map((x) => x[0]).sort()).toEqual(["a", "b"]);
+    expect(goiNhom.every((x) => x[1] === "Hàn")).toBe(true);
+  });
+
+  it("'Chọn hết đang hiện' chỉ lấy kênh của NHÓM ĐANG XEM", async () => {
+    mockChannels = [
+      mkKey({ id: "a", targetName: "K1", group: "Mỹ" }),
+      mkKey({ id: "b", targetName: "K2", group: "Mỹ mới" }),
+    ];
+    localStorage.setItem("watch.groupFilter", "Mỹ");
+    await mountPage();
+    fireEvent.click(btnChon());
+    await waitFor(() => expect(selectDich()).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Chọn hết đang hiện/ }));
+    await waitFor(() => expect(screen.getByText(/Đã chọn 1\/1 kênh/)).toBeInTheDocument());
+    fireEvent.change(selectDich(), { target: { value: "Hàn" } });
+    await waitFor(() => expect(goiNhom.length).toBe(1), { timeout: 3000 });
+    expect(goiNhom[0][0]).toBe("a");        // kênh nhóm "Mỹ mới" KHÔNG bị đổi oan
+  });
+
+  it("bấm HUỶ ở hộp xác nhận → KHÔNG đổi gì", async () => {
+    mockChannels = [mkKey({ id: "a", targetName: "K1", group: "Mỹ" })];
+    const cmdMod = await import("@/ipc/commands");
+    vi.mocked(cmdMod.confirmDialog).mockResolvedValueOnce(false);
+    await mountPage();
+    fireEvent.click(btnChon());
+    await waitFor(() => expect(selectDich()).toBeTruthy());
+    fireEvent.click(oTich("K1"));
+    fireEvent.change(selectDich(), { target: { value: "Hàn" } });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(goiNhom).toEqual([]);
+  });
+
+  it("'(bỏ khỏi nhóm)' → gọi setWatchedGroup với null", async () => {
+    mockChannels = [mkKey({ id: "a", targetName: "K1", group: "Mỹ" })];
+    await mountPage();
+    fireEvent.click(btnChon());
+    await waitFor(() => expect(selectDich()).toBeTruthy());
+    fireEvent.click(oTich("K1"));
+    fireEvent.change(selectDich(), { target: { value: "__none" } });
+    await waitFor(() => expect(goiNhom.length).toBe(1), { timeout: 3000 });
+    expect(goiNhom[0]).toEqual(["a", null]);
+  });
+
+  it("tích kênh nhóm A rồi ĐỔI SANG xem nhóm B → cờ chọn bị dọn, không đổi oan",
+     async () => {
+    mockChannels = [
+      mkKey({ id: "a", targetName: "K1", group: "Mỹ" }),
+      mkKey({ id: "b", targetName: "K2", group: "Mỹ mới" }),
+    ];
+    localStorage.setItem("watch.groupFilter", "Mỹ");
+    await mountPage();
+    fireEvent.click(btnChon());
+    await waitFor(() => expect(selectDich()).toBeTruthy());
+    fireEvent.click(oTich("K1"));
+    await waitFor(() => expect(screen.getByText(/Đã chọn 1\/1 kênh/)).toBeInTheDocument());
+    // chuyển sang xem nhóm khác -> K1 bị ẩn -> cờ chọn PHẢI bị dọn
+    // chip nhóm "Mỹ mới": title thật là `Chỉ hiện kênh nhóm "Mỹ mới"`
+    fireEvent.click(screen.getByTitle(/Chỉ hiện kênh nhóm "Mỹ mới"/));
+    await waitFor(() => expect(screen.getByText(/Đã chọn 0\//)).toBeInTheDocument());
+    expect(selectDich()).toBeDisabled();
+  });
+
+  it("chưa tích kênh nào → ô nhóm đích bị VÔ HIỆU (không đổi bừa)", async () => {
+    mockChannels = [mkKey({ id: "a", targetName: "K1", group: "Mỹ" })];
+    await mountPage();
+    fireEvent.click(btnChon());
+    await waitFor(() => expect(selectDich()).toBeTruthy());
+    expect(selectDich()).toBeDisabled();
+  });
+});

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { chuanUrl, loiTrung, nhomMacDinh, timTrungUrl } from "./watch-group";
+import {
+  chuanUrl, dsChon, hoiChuyenNhom, loiTrung, nhomMacDinh,
+  timTrungUrl,
+} from "./watch-group";
 
 const K = (name: string, group: string, ...urls: string[]) => ({
   name,
@@ -84,5 +87,43 @@ describe("nhomMacDinh — mở ➕ Thêm kênh phải theo NHÓM ĐANG XEM", () 
   });
   it("cắt khoảng trắng", () => {
     expect(nhomMacDinh("  Nhật  ")).toBe("Nhật");
+  });
+});
+
+const KK = (key: string) => ({ key });
+
+describe("dsChon — chỉ đổi kênh ĐANG HIỆN, không đổi oan kênh bị ẩn", () => {
+  it("lấy đúng những kênh được tích", () => {
+    const hien = [KK("a"), KK("b"), KK("c")];
+    expect(dsChon(hien, { a: true, c: true }).map((k) => k.key)).toEqual(["a", "c"]);
+  });
+  it("cờ chọn của kênh KHÔNG hiện thì BỎ QUA (đây là chỗ dễ đổi oan)", () => {
+    const hien = [KK("a")];
+    expect(dsChon(hien, { a: true, b: true, c: true }).map((k) => k.key)).toEqual(["a"]);
+  });
+  it("không tích gì thì rỗng", () => {
+    expect(dsChon([KK("a")], {})).toEqual([]);
+  });
+  it("tích false không tính", () => {
+    expect(dsChon([KK("a")], { a: false })).toEqual([]);
+  });
+});
+
+describe("hoiChuyenNhom — câu xác nhận phải nói rõ số kênh + nhóm đích", () => {
+  it("có số kênh, tên nhóm đích và danh sách tên", () => {
+    const s = hoiChuyenNhom(["K1", "K2"], "Hàn");
+    expect(s).toContain("2 kênh");
+    expect(s).toContain('"Hàn"');
+    expect(s).toContain("K1, K2");
+    expect(s).toContain("Chỉ đổi NHÓM");
+  });
+  it("nhóm rỗng -> ghi 'Chưa phân nhóm' cho dễ hiểu", () => {
+    expect(hoiChuyenNhom(["K1"], "")).toContain("Chưa phân nhóm");
+  });
+  it("nhiều hơn 8 kênh -> rút gọn danh sách, vẫn báo đủ tổng số", () => {
+    const ten = Array.from({ length: 12 }, (_, i) => `K${i + 1}`);
+    const s = hoiChuyenNhom(ten, "Mỹ");
+    expect(s).toContain("12 kênh");
+    expect(s).toContain("và 4 kênh nữa");
   });
 });
