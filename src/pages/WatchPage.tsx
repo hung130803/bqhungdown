@@ -5,6 +5,7 @@ import { useQueueStore } from "@/stores/useQueueStore";
 import type { ChannelVideo, HistoryEntry, PickedVideo, WatchedChannel } from "@/types/models";
 import { EmptyState } from "@/components/EmptyState";
 import { planAddMore, pickKeyForMore, planCheckNow } from "@/lib/bulk-more";
+import { loiTrung, nhomMacDinh, timTrungUrl } from "@/lib/watch-group";
 
 /** 1 KÊNH đích của user (kênh TikTok) = nhiều key nguồn chung tên kênh.
  *  `rep` = key đầu tiên, đại diện cấu hình mức kênh (nhóm/chế độ/thư mục). */
@@ -134,6 +135,18 @@ export function WatchPage() {
     const name = addName.trim();
     const u = addUrl.trim();
     if (!name || !u || adding) return;
+    // ⛔ CHẶN THÊM TRÙNG LINK — phải kiểm TRƯỚC khi gọi backend.
+    //
+    // LỖI THẬT (anh Hùng 27/07/2026: "thêm trùng link kênh mà nó k báo lỗi gì
+    // cả mà tự thay đổi"): Rust add_watched_channel thấy trùng URL thì trả về
+    // kênh CŨ (idempotent add) mà KHÔNG báo gì. Mấy dòng dưới đây vẫn chạy
+    // tiếp trên kênh cũ đó → GHI ĐÈ tên + nhóm + chế độ + thư mục lưu của kênh
+    // đang hoạt động. Nay báo rõ link đã ở kênh nào / nhóm nào và KHÔNG đụng gì.
+    const trung = timTrungUrl(kenhAll, u);
+    if (trung) {
+      setError(loiTrung(trung));
+      return;
+    }
     setAdding(true);
     setError(null);
     try {
@@ -148,6 +161,11 @@ export function WatchPage() {
       setAddName("");
       setAddUrl("");
       setAddDir("");
+      // RESET nhóm về NHÓM ĐANG XEM, không để nguyên giá trị lần trước.
+      // Đây là gốc của lỗi "đang ở nhóm Mỹ mà kênh lại vào nhóm Mỹ mới":
+      // trước đây 3 dòng trên có reset, còn addGrp thì KHÔNG — nên ô nhóm giữ
+      // mãi chữ gõ ở lần thêm trước.
+      setAddGrp(nhomMacDinh(groupFilter));
       await reload();
     } catch (e) {
       setError(formatErr(e));
@@ -816,7 +834,13 @@ export function WatchPage() {
           </span>
         )}
         <button
-          onClick={() => setAddOpen(true)}
+          onClick={() => {
+            // NẠP NHÓM ĐANG XEM vào hộp thêm: đang lọc nhóm "Mỹ" thì kênh mới
+            // mặc định vào "Mỹ". Trước đây không nạp nên ô nhóm giữ giá trị
+            // lần trước → kênh chạy sang nhóm khác (lỗi anh Hùng báo 27/07).
+            setAddGrp(nhomMacDinh(groupFilter));
+            setAddOpen(true);
+          }}
           className="ml-auto px-3 py-1.5 rounded-md bg-accent text-accent-fg text-sm font-medium"
         >
           ➕ Thêm kênh
@@ -1134,6 +1158,35 @@ export function WatchPage() {
                   ⚠ {kErrs.length} lỗi
                 </span>
               )}
+              {/* ĐỔI NHÓM ngay trên dòng THU GỌN.
+                  LỖI THẬT (anh Hùng 27/07/2026: "thêm kênh rồi không chuyển
+                  được sang nhóm khác"): ô đổi nhóm CÓ SẴN nhưng nằm trong khối
+                  `{kOpen && …}` nên chỉ hiện khi bung thẻ ra — thẻ đã đặt tên
+                  thì mặc định thu gọn, nên không ai thấy nó. Nay để luôn ở đây.
+                  stopPropagation: bấm vào ô không làm gập/mở thẻ. */}
+              <select
+                value={g}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  if (e.target.value === "__manage") {
+                    setShowGroups(true);
+                    return;
+                  }
+                  const v = e.target.value;
+                  void forKenh(k, (id) => cmd.setWatchedGroup(id, v || null));
+                }}
+                className={`shrink-0 max-w-[104px] px-1.5 py-0.5 rounded-md border text-[11px] ${
+                  g ? "bg-accent/15 text-fg border-accent/60" : "bg-surface-2 text-muted border-border"
+                }`}
+                title="Đổi NHÓM của kênh này — chọn là đổi ngay, áp cho mọi key nguồn của kênh"
+              >
+                <option value="">— nhóm —</option>
+                {groups.map((gg) => (
+                  <option key={gg} value={gg}>{gg}</option>
+                ))}
+                <option value="__manage">🏷 Quản lý nhóm…</option>
+              </select>
               {/* MỘT chip trạng thái duy nhất — có chấm màu, đọc phát hiểu ngay */}
               <span
                 className={`shrink-0 inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full ${status.cls}`}
