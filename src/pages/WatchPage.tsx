@@ -639,15 +639,21 @@ export function WatchPage() {
       );
       return;
     }
+    // NÓI RÕ TỔNG SỐ ngay dòng đầu: "nhóm 48 kênh mà báo 43" là vì 5 kênh
+    // đã tải đủ hạn mức TRONG HÔM NAY — hộp thoại phải tự giải thích điều đó.
+    const tongKenh = q.run.length + q.full.length + q.off.length;
     const ok = await cmd.confirmDialog(
-      `Chạy ${q.run.length} kênh của ${scopeTxt} ngay bây giờ?\n\n` +
+      `Trong ${scopeTxt} có ${tongKenh} kênh — chạy ${q.run.length} kênh còn ` +
+        "suất ngay bây giờ?\n\n" +
         `➜ Sẽ tải TỐI ĐA ${q.slots} video (${q.run.length} kênh còn suất hôm nay).\n` +
         (q.full.length
-          ? `➜ ${q.full.length} kênh ĐÃ ĐỦ suất hôm nay sẽ ĐỨNG YÊN, không ` +
-            "tải trùng.\n   (muốn thêm nữa thì dùng ➕ Thêm 1 lượt)\n"
+          ? `➜ ${q.full.length} kênh hôm nay ĐÃ TẢI ĐỦ hạn mức từ trước — ` +
+            "ĐỨNG YÊN, không tải trùng.\n   (muốn thêm nữa thì dùng ➕ Thêm 1 " +
+            "lượt; sang ngày mai bộ đếm tự về 0)\n"
           : "") +
         (q.off.length ? `➜ ${q.off.length} kênh chưa tích ✓ — bỏ qua.\n` : "") +
-        "\nMỗi kênh chỉ tải cho ĐỦ hạn mức ngày của nó (1-3 video/ngày).",
+        "\nMỗi kênh chỉ tải cho ĐỦ hạn mức ngày của nó (1-3 video/ngày). " +
+        "Kênh 🔴 hết kho vẫn được quét để bắt VIDEO MỚI (có bài là tự hết đỏ).",
       "Chạy tất cả?",
     );
     if (!ok) return;
@@ -786,7 +792,11 @@ export function WatchPage() {
     // Chia nhóm bằng HÀM THUẦN đã unit-test (src/lib/bulk-more.ts) — hộp xác
     // nhận và vòng chạy dùng CHUNG kết quả này, không đếm hai kiểu khác nhau.
     const { run, off, busy, dry } = planAddMore(
-      kenhAll, groupFilter, (k) => activeFor(k.rep.destDir).length > 0,
+      kenhAll, groupFilter,
+      (k) => activeFor(k.rep.destDir).length > 0,
+      // Còn hàng chờ 🎯 -> vẫn chạy dù kênh đang đỏ "hết kho" (force_one_more
+      // rót hàng chờ trước, không cần kho). Bug anh Hùng báo 28/07.
+      (k) => k.keys.some((c) => (c.picked?.length ?? 0) > 0),
     );
     const scope =
       groupFilter === null ? "mọi nhóm" : `nhóm "${groupFilter || "Chưa phân nhóm"}"`;
@@ -804,15 +814,20 @@ export function WatchPage() {
     }
     const skip = [
       busy.length ? `• ${busy.length} kênh ĐANG TẢI — chờ xong rồi bấm lại` : "",
-      dry.length ? `• ${dry.length} kênh HẾT KHO — cần đổi key nguồn` : "",
+      dry.length
+        ? `• ${dry.length} kênh HẾT KHO và hàng chờ trống — cần đổi key nguồn`
+        : "",
       off.length ? `• ${off.length} kênh chưa tích ✓` : "",
     ].filter(Boolean).join("\n");
+    // NÓI RÕ TỔNG SỐ: "nhóm có 48 kênh mà sao chỉ chạy 43" — hộp thoại phải
+    // tự trả lời câu đó, đừng bắt user đi hỏi.
+    const tong = run.length + off.length + busy.length + dry.length;
     const ok = await cmd.confirmDialog(
-      `Tải THÊM 1 video cho ${run.length} kênh của ${scope}?\n\n` +
+      `Trong ${scope} có ${tong} kênh — tải THÊM 1 video cho ${run.length} kênh?\n\n` +
         `➜ Tổng cộng ${run.length} video (mỗi kênh ĐÚNG 1, kể cả kênh đang ` +
-        `"Chờ lượt").\n` +
+        `"Chờ lượt" hay kênh đỏ còn hàng chờ 🎯).\n` +
         "GIỮ nguyên video đã tải hôm nay, chỉ lấy thêm cái kế tiếp.\n" +
-        (skip ? `\nBỎ QUA:\n${skip}\n` : "") +
+        (skip ? `\nBỎ QUA ${tong - run.length} kênh:\n${skip}\n` : "") +
         "\nVideo xếp hàng theo số luồng, không tải ồ ạt cùng lúc.",
       "Thêm 1 lượt cho cả nhóm?",
     );
@@ -848,7 +863,9 @@ export function WatchPage() {
       if (empty) parts.push(`${empty} kênh hết video chưa làm`);
       if (failed) parts.push(`${failed} kênh lỗi`);
       if (busy.length) parts.push(`${busy.length} kênh đang tải — bỏ qua`);
-      if (dry.length) parts.push(`${dry.length} kênh hết kho — bỏ qua`);
+      if (dry.length) {
+        parts.push(`${dry.length} kênh hết kho (hàng chờ trống) — bỏ qua`);
+      }
       setNotice((stopped ? "⏹ Đã dừng giữa lượt. " : "") + parts.join(" · ") + ".");
     } catch (e) {
       setError(formatErr(e));

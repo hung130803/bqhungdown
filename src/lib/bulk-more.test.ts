@@ -20,6 +20,8 @@ const ch = (name: string, group: string, keys: MoreKey[] = [key()]): K =>
   ({ name, group, keys });
 const names = (a: K[]) => a.map((x) => x.name);
 const nobodyBusy = () => false;
+/** Hàng chờ 🎯 trống — mặc định cho các test không quan tâm hàng chờ. */
+const noQueue = () => false;
 
 describe("planAddMore — kênh nào được +1", () => {
   it("kênh CHƯA TẢI hôm nay VẪN chạy (đúng câu hỏi của anh Hùng)", () => {
@@ -27,7 +29,7 @@ describe("planAddMore — kênh nào được +1", () => {
     // nếu không thì mấy kênh chưa tới lượt sẽ bị kẹt mãi.
     const choLuot = ch("ChoLuot", "Mỹ", [key({ dripDate: null })]);
     const daTai = ch("DaTai", "Mỹ", [key({ dripDate: TODAY, dripCount: 1 })]);
-    const p = planAddMore([choLuot, daTai], "Mỹ", nobodyBusy);
+    const p = planAddMore([choLuot, daTai], "Mỹ", nobodyBusy, noQueue);
     expect(names(p.run)).toEqual(["ChoLuot", "DaTai"]);
   });
 
@@ -36,23 +38,24 @@ describe("planAddMore — kênh nào được +1", () => {
       [ch("A", "Mỹ"), ch("B", "Hàn"), ch("C", "Mỹ"), ch("D", "Mỹ mới")],
       "Mỹ",
       nobodyBusy,
+      noQueue,
     );
     expect(names(p.run)).toEqual(["A", "C"]);
   });
 
   it("groupFilter = null → chạy MỌI nhóm", () => {
-    const p = planAddMore([ch("A", "Mỹ"), ch("B", "Hàn")], null, nobodyBusy);
+    const p = planAddMore([ch("A", "Mỹ"), ch("B", "Hàn")], null, nobodyBusy, noQueue);
     expect(names(p.run)).toEqual(["A", "B"]);
   });
 
   it("groupFilter = '' → đúng nhóm 'Chưa phân nhóm', không lấy nhóm có tên", () => {
-    const p = planAddMore([ch("KhongNhom", ""), ch("A", "Mỹ")], "", nobodyBusy);
+    const p = planAddMore([ch("KhongNhom", ""), ch("A", "Mỹ")], "", nobodyBusy, noQueue);
     expect(names(p.run)).toEqual(["KhongNhom"]);
   });
 
   it("kênh CHƯA TÍCH ✓ không chạy", () => {
     const off = ch("Off", "Mỹ", [key({ enabled: false })]);
-    const p = planAddMore([off, ch("On", "Mỹ")], "Mỹ", nobodyBusy);
+    const p = planAddMore([off, ch("On", "Mỹ")], "Mỹ", nobodyBusy, noQueue);
     expect(names(p.run)).toEqual(["On"]);
     expect(names(p.off)).toEqual(["Off"]);
   });
@@ -60,27 +63,48 @@ describe("planAddMore — kênh nào được +1", () => {
   it("kênh có ÍT NHẤT 1 key đang tích ✓ thì vẫn chạy", () => {
     const mix = ch("Mix", "Mỹ", [key({ id: "a", enabled: false }),
                                  key({ id: "b", enabled: true })]);
-    expect(names(planAddMore([mix], "Mỹ", nobodyBusy).run)).toEqual(["Mix"]);
+    expect(names(planAddMore([mix], "Mỹ", nobodyBusy, noQueue).run)).toEqual(["Mix"]);
   });
 
   it("kênh ĐANG TẢI bị bỏ qua (khỏi thành 2 video song song 1 kênh)", () => {
     const a = ch("Busy", "Mỹ"), b = ch("Ranh", "Mỹ");
-    const p = planAddMore([a, b], "Mỹ", (k) => k.name === "Busy");
+    const p = planAddMore([a, b], "Mỹ", (k) => k.name === "Busy", noQueue);
     expect(names(p.run)).toEqual(["Ranh"]);
     expect(names(p.busy)).toEqual(["Busy"]);
   });
 
-  it("kênh HẾT KHO bị bỏ qua", () => {
+  it("kênh HẾT KHO (và hàng chờ trống) bị bỏ qua", () => {
     const dry = ch("Dry", "Mỹ", [key({ sourceEmpty: true })]);
-    const p = planAddMore([dry, ch("Ok", "Mỹ")], "Mỹ", nobodyBusy);
+    const p = planAddMore([dry, ch("Ok", "Mỹ")], "Mỹ", nobodyBusy, noQueue);
     expect(names(p.run)).toEqual(["Ok"]);
     expect(names(p.dry)).toEqual(["Dry"]);
+  });
+
+  it("kênh đỏ HẾT KHO nhưng CÒN HÀNG CHỜ 🎯 thì VẪN CHẠY — bug anh Hùng 28/07", () => {
+    // Anh tích 1 video vào hàng chờ của kênh đang đỏ "hết kho", bấm chạy hàng
+    // loạt → bị bỏ qua im lặng. force_one_more rót hàng chờ TRƯỚC, không cần
+    // kho, nên kênh này phải vào 'run'.
+    const doConHang = ch("DoConHang", "Mỹ", [key({ sourceEmpty: true })]);
+    const doTrong = ch("DoTrong", "Mỹ", [key({ id: "x", sourceEmpty: true })]);
+    const p = planAddMore(
+      [doConHang, doTrong], "Mỹ", nobodyBusy,
+      (k) => k === doConHang,          // chỉ DoConHang còn hàng chờ
+    );
+    expect(names(p.run)).toEqual(["DoConHang"]);
+    expect(names(p.dry)).toEqual(["DoTrong"]);
+  });
+
+  it("kênh đỏ còn hàng chờ nhưng ĐANG TẢI → vẫn bỏ qua vì busy (busy xét trước)", () => {
+    const k1 = ch("DoBusy", "Mỹ", [key({ sourceEmpty: true })]);
+    const p = planAddMore([k1], "Mỹ", () => true, () => true);
+    expect(names(p.busy)).toEqual(["DoBusy"]);
+    expect(p.run).toEqual([]);
   });
 
   it("MỘT key hết kho là cả kênh bị coi hết kho (an toàn hơn là cố chạy)", () => {
     const half = ch("Half", "Mỹ", [key({ id: "a", sourceEmpty: false }),
                                    key({ id: "b", sourceEmpty: true })]);
-    expect(names(planAddMore([half], "Mỹ", nobodyBusy).dry)).toEqual(["Half"]);
+    expect(names(planAddMore([half], "Mỹ", nobodyBusy, noQueue).dry)).toEqual(["Half"]);
   });
 
   it("KHÔNG đếm trùng: mỗi kênh vào đúng 1 nhóm, tổng luôn khớp", () => {
@@ -88,7 +112,7 @@ describe("planAddMore — kênh nào được +1", () => {
     const all = ch("All", "Mỹ", [key({ enabled: false, sourceEmpty: true })]);
     const busyDry = ch("BusyDry", "Mỹ", [key({ sourceEmpty: true })]);
     const list = [all, busyDry, ch("Ok", "Mỹ"), ch("NgoaiNhom", "Hàn")];
-    const p = planAddMore(list, "Mỹ", (k) => k.name === "BusyDry");
+    const p = planAddMore(list, "Mỹ", (k) => k.name === "BusyDry", noQueue);
     expect(names(p.off)).toEqual(["All"]);
     expect(names(p.busy)).toEqual(["BusyDry"]);   // busy xét trước dry
     expect(p.dry).toEqual([]);
@@ -99,14 +123,14 @@ describe("planAddMore — kênh nào được +1", () => {
   });
 
   it("danh sách rỗng / nhóm không có kênh nào → không chạy gì", () => {
-    expect(planAddMore([], "Mỹ", nobodyBusy).run).toEqual([]);
-    expect(planAddMore([ch("A", "Hàn")], "Mỹ", nobodyBusy).run).toEqual([]);
+    expect(planAddMore([], "Mỹ", nobodyBusy, noQueue).run).toEqual([]);
+    expect(planAddMore([ch("A", "Hàn")], "Mỹ", nobodyBusy, noQueue).run).toEqual([]);
   });
 
   it("nhãn nhóm bị null/undefined vẫn coi là 'Chưa phân nhóm'", () => {
     const weird = { name: "N", group: undefined as unknown as string,
                     keys: [key()] };
-    expect(names(planAddMore([weird], "", nobodyBusy).run)).toEqual(["N"]);
+    expect(names(planAddMore([weird], "", nobodyBusy, noQueue).run)).toEqual(["N"]);
   });
 });
 

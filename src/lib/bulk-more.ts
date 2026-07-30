@@ -11,8 +11,12 @@
  *   - `off`  : không key nào đang tích ✓ → user chủ động tắt kênh đó.
  *   - `busy` : còn video đang tải/chờ → cộng thêm lúc chưa xong sẽ thành 2
  *              video chạy song song cho 1 kênh, dễ thành "tải quá nhiều".
- *   - `dry`  : hết kho (`sourceEmpty`) → chắc chắn trả 0 mà vẫn tốn 1 lượt
- *              quét mạng; 100 kênh là chờ rất lâu vô ích.
+ *   - `dry`  : hết kho (`sourceEmpty`) VÀ hàng chờ 🎯 trống → chắc chắn trả 0
+ *              mà vẫn tốn 1 lượt quét mạng; 100 kênh là chờ rất lâu vô ích.
+ *              CÒN HÀNG CHỜ thì VẪN CHẠY: backend (`force_one_more`) ưu tiên
+ *              rót hàng chờ trước, không cần kho — bug thật anh Hùng báo
+ *              28/07: kênh đỏ "hết kho" nhưng anh đã tích 1 video vào hàng
+ *              chờ, bấm chạy hàng loạt mà bị bỏ qua im lặng.
  * Mỗi kênh chỉ vào ĐÚNG MỘT nhóm (thứ tự off → busy → dry → run), nên
  * `off + busy + dry + run` luôn bằng số kênh trong phạm vi — không đếm trùng.
  */
@@ -46,11 +50,17 @@ export type MorePlan<T> = {
  * @param groupFilter `null` = mọi nhóm; `""` = nhóm "Chưa phân nhóm";
  *                    ngược lại chỉ đúng nhóm đó (KHÔNG đụng nhóm khác).
  * @param isBusy      kênh còn video đang tải/chờ hay không (UI truyền vào).
+ * @param hasQueue    kênh còn video trong hàng chờ 🎯 hay không. BẮT BUỘC
+ *                    (không phải trường tuỳ chọn) — cùng bài học với `limitOf`
+ *                    của `planCheckNow`: để tuỳ chọn thì quên truyền TypeScript
+ *                    không báo, và kênh đỏ-nhưng-còn-hàng-chờ lại bị bỏ qua im
+ *                    lặng đúng như bug cũ.
  */
 export function planAddMore<T extends MoreKenh>(
   kenh: readonly T[],
   groupFilter: string | null,
   isBusy: (k: T) => boolean,
+  hasQueue: (k: T) => boolean,
 ): MorePlan<T> {
   const out: MorePlan<T> = { run: [], off: [], busy: [], dry: [] };
   for (const k of kenh) {
@@ -59,7 +69,9 @@ export function planAddMore<T extends MoreKenh>(
       out.off.push(k);
     } else if (isBusy(k)) {
       out.busy.push(k);
-    } else if (k.keys.some((c) => c.sourceEmpty)) {
+    } else if (k.keys.some((c) => c.sourceEmpty) && !hasQueue(k)) {
+      // "Hết kho" chỉ đáng bỏ qua khi hàng chờ cũng trống. Còn hàng chờ thì
+      // force_one_more rót thẳng từ hàng chờ, không đụng kho — phải chạy.
       out.dry.push(k);
     } else {
       out.run.push(k);

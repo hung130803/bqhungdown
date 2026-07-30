@@ -80,7 +80,8 @@ const mkKey = (o: Partial<WatchedChannel> & { id: string }): WatchedChannel =>
     sourceEmpty: o.sourceEmpty ?? false,
     dripDate: o.dripDate ?? null,
     dripCount: o.dripCount ?? 0,
-    picked: [], doneIds: [], seenIds: [], skippedIds: [], dlPending: [],
+    picked: o.picked ?? [], doneIds: [], seenIds: [], skippedIds: [],
+    dlPending: [],
     maxHeight: null, lastCheck: null,
   } as unknown as WatchedChannel);
 
@@ -149,6 +150,20 @@ describe("Nút ➕ Thêm 1 lượt (trang Theo dõi)", () => {
     btnMore().click();
     await waitFor(() => expect(moreCalls.length).toBe(1), { timeout: 3000 });
     expect(moreCalls).toEqual(["ok"]);
+  });
+
+  it("kênh đỏ HẾT KHO nhưng CÒN HÀNG CHỜ 🎯 vẫn được chạy — bug 28/07", async () => {
+    // Anh Hùng: kênh báo đỏ hết video, đã tích 1 video vào hàng chờ, bấm chạy
+    // hàng loạt → không chạy gì. Kênh đỏ có hàng chờ PHẢI được gọi tải.
+    mockChannels = [
+      mkKey({ id: "doConHang", sourceEmpty: true,
+              picked: [{ id: "v1", url: "u", title: "t" }] as never }),
+      mkKey({ id: "doTrong", sourceEmpty: true }),
+    ];
+    await mountPage();
+    btnMore().click();
+    await waitFor(() => expect(moreCalls.length).toBe(1), { timeout: 3000 });
+    expect(moreCalls).toEqual(["doConHang"]);   // kênh đỏ hàng chờ trống vẫn bị bỏ qua
   });
 
   it("BỎ QUA kênh đang tải (khỏi 2 video song song 1 kênh)", async () => {
@@ -294,9 +309,12 @@ describe("Nút ▶ Chạy nhóm — hộp thoại phải nói ĐÚNG số kênh 
       expect(vi.mocked(cmdMod.confirmDialog)).toHaveBeenCalled(),
       { timeout: 3000 });
     const msg = vi.mocked(cmdMod.confirmDialog).mock.calls[0][0];
-    expect(msg).toContain("Chạy 3 kênh");          // KHÔNG phải 11
+    // Dòng đầu phải nêu TỔNG (11 kênh) rồi mới tới số chạy (3) — trả lời đúng
+    // thắc mắc "nhóm 48 kênh mà sao báo 43".
+    expect(msg).toContain("có 11 kênh");
+    expect(msg).toContain("chạy 3 kênh còn suất");  // KHÔNG phải 11
     expect(msg).toContain("TỐI ĐA 3 video");
-    expect(msg).toContain("8 kênh ĐÃ ĐỦ suất");
+    expect(msg).toContain("8 kênh hôm nay ĐÃ TẢI ĐỦ hạn mức");
     expect(msg).toContain("ĐỨNG YÊN");
   });
 
@@ -327,7 +345,7 @@ describe("Nút ▶ Chạy nhóm — hộp thoại phải nói ĐÚNG số kênh 
       expect(vi.mocked(cmdMod.confirmDialog)).toHaveBeenCalled(),
       { timeout: 3000 });
     const msg = vi.mocked(cmdMod.confirmDialog).mock.calls[0][0];
-    expect(msg).toContain("Chạy 1 kênh");
+    expect(msg).toContain("chạy 1 kênh còn suất");
     expect(msg).toContain("TỐI ĐA 2 video");
   });
 
