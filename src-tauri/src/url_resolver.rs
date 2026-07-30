@@ -294,7 +294,7 @@ fn extract_douyin_id(url: &str) -> Option<String> {
 /// data) so the caller can fall back to a mirror or a different strategy.
 ///
 /// API contract is identical across mirror endpoints:
-/// ```
+/// ```text
 /// GET <endpoint>?url=<douyin_url>&hd=1
 /// → { "code": 0, "data": { "hdplay": "...mp4", "play": "...", "wmplay": "..." } }
 /// ```

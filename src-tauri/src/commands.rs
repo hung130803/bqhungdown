@@ -1853,6 +1853,43 @@ pub(crate) fn sweep_updater_leftovers() -> u64 {
     n
 }
 
+/// DỌN bản sao cookie mồ côi (`bqh_cookies_<pid>_<n>.txt`) trong `%TEMP%`.
+///
+/// Mỗi lượt yt-dlp nhận MỘT BẢN SAO cookie riêng (xem
+/// `ytdlp_runner::copy_cookies`) và guard tự xoá khi xong — nhưng app bị tắt
+/// ngang / crash thì bản sao ở lại. File chỉ vài KB nhưng CHỨA PHIÊN ĐĂNG
+/// NHẬP YouTube của user, không được để vương vãi vô hạn trong %TEMP%.
+///
+/// AN TOÀN: bỏ qua file của TIẾN TRÌNH HIỆN TẠI (đang dùng cho lượt tải sống)
+/// và file mới đổi trong 6 giờ (app khác/cửa sổ khác còn chạy thì lượt tải
+/// dài nhất cũng không tới 6 giờ).
+pub(crate) fn sweep_cookie_copies() -> u64 {
+    let entries = match std::fs::read_dir(std::env::temp_dir()) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    let me = format!("bqh_cookies_{}_", std::process::id());
+    let mut n = 0u64;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("bqh_cookies_") || !name.ends_with(".txt") {
+            continue;
+        }
+        if name.starts_with(&me) {
+            continue;   // của chính mình — có thể đang dùng
+        }
+        if let Ok(m) = entry.metadata().and_then(|m| m.modified()) {
+            if m.elapsed().map(|e| e.as_secs() < 6 * 3600).unwrap_or(true) {
+                continue;
+            }
+        }
+        if std::fs::remove_file(entry.path()).is_ok() {
+            n += 1;
+        }
+    }
+    n
+}
+
 // ---------- Saved bookmarks ----------
 
 #[tauri::command]
@@ -2118,6 +2155,27 @@ mod tests_don_updater {
         ] {
             assert!(!super::is_updater_leftover(no), "KHÔNG được nhận: {no}");
         }
+    }
+
+    /// Bản sao cookie: file của CHÍNH TIẾN TRÌNH này (đang dùng cho lượt tải
+    /// sống) và file MỚI GHI của tiến trình khác đều phải được GIỮ — chỉ dọn
+    /// đồ mồ côi đã nguội >6h (không giả được mtime trong test nên nhánh xoá
+    /// kiểm bằng tay khi phát hành).
+    #[test]
+    fn giu_ban_sao_cookie_dang_dung() {
+        let tmp = std::env::temp_dir();
+        let cua_minh = tmp.join(format!(
+            "bqh_cookies_{}_999999.txt", std::process::id()));
+        let cua_khac_moi = tmp.join("bqh_cookies_1_1.txt");
+        fs::write(&cua_minh, b"# Netscape HTTP Cookie File").unwrap();
+        fs::write(&cua_khac_moi, b"# Netscape HTTP Cookie File").unwrap();
+
+        super::sweep_cookie_copies();
+
+        assert!(cua_minh.exists(), "bản sao của CHÍNH MÌNH không được xoá");
+        assert!(cua_khac_moi.exists(), "bản sao mới ghi (<6h) không được xoá");
+        let _ = fs::remove_file(&cua_minh);
+        let _ = fs::remove_file(&cua_khac_moi);
     }
 
     /// CHỐT AN TOÀN: thư mục vừa tạo (đang cập nhật) phải được GIỮ.

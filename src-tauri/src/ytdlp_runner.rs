@@ -160,6 +160,28 @@ impl YtDlpRunner {
         // Cookies từ trình duyệt — bắt buộc cho Douyin / Bilibili / IG private /
         // YouTube age-gated. File cookies.txt ưu tiên hơn browser (AppBound
         // encryption issue). Caller retries without cookies on DPAPI failure.
+        //
+        // BẢN SAO RIÊNG cho lượt này (bug anh Hùng 28/07: "mới thêm cookie
+        // xong chạy lại đòi cookie"): fetch_metadata chạy SONG SONG với các
+        // lượt tải/quét khác, mà yt-dlp thoát ra là GHI ĐÈ file --cookies.
+        // Nhiều tiến trình cùng ghi file cookie GỐC của user → file nát/cũ →
+        // YouTube coi cookie chết → đòi cookie mới liên tục. run_once và
+        // probe_views đã có bản sao riêng từ trước — đây là cửa bị sót.
+        let _ck_guard;
+        let settings_copy;
+        let settings: &Settings = match settings.cookies_file.as_deref() {
+            Some(f) if !f.is_empty() => match copy_cookies(f) {
+                Some(tmp) => {
+                    let mut s = settings.clone();
+                    s.cookies_file = Some(tmp.to_string_lossy().into_owned());
+                    _ck_guard = TempCookieCopy(Some(tmp));
+                    settings_copy = s;
+                    &settings_copy
+                }
+                None => settings,
+            },
+            _ => settings,
+        };
         args_builder::push_cookie_args(&mut args, settings);
         args_builder::push_proxy_args(&mut args, settings);
         args_builder::push_bilibili_headers(&mut args, url);

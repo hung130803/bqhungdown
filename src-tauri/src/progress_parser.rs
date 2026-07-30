@@ -47,11 +47,12 @@ fn parse_dlprog(line: &str) -> Option<ProgressSnapshot> {
 /// Parse aria2c summary line. When yt-dlp delegates to aria2c, the
 /// `--summary-interval=1` flag makes aria2c emit lines like:
 ///
-///     [#abc123 12MiB/100MiB(12%) CN:8 DL:5.5MiB ETA:15s]
-///     [#abc123 50.0MiB/100MiB(50%) CN:16 DL:8.2MiB]
+/// ```text
+/// [#abc123 12MiB/100MiB(12%) CN:8 DL:5.5MiB ETA:15s]
+/// [#abc123 50.0MiB/100MiB(50%) CN:16 DL:8.2MiB]
+/// ```
 ///
-/// Some variants without total size:
-///     [#abc123 12MiB CN:8 DL:5.5MiB]
+/// Some variants without total size: `[#abc123 12MiB CN:8 DL:5.5MiB]`
 ///
 /// Field meanings:
 /// - `<dl>/<total>(<pct>%)` — current/total bytes, percent (total may be absent)

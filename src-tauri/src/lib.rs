@@ -196,6 +196,12 @@ pub fn run() {
                     if nu > 0 {
                         eprintln!("[junk] đã dọn {nu} thư mục bộ cài cập nhật cũ trong %TEMP%");
                     }
+                    // Bản sao cookie mồ côi (app tắt ngang giữa lượt tải) —
+                    // chứa phiên đăng nhập, không để đọng trong %TEMP%.
+                    let nc = crate::commands::sweep_cookie_copies();
+                    if nc > 0 {
+                        eprintln!("[junk] đã dọn {nc} bản sao cookie mồ côi trong %TEMP%");
+                    }
                     loop {
                         let n = crate::commands::sweep_junk_all(&q, &w, &s);
                         if n > 0 {
