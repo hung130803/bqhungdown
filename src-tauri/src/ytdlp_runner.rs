@@ -27,6 +27,37 @@ const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 
 static COOKIE_COPY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Thư mục tạm RIÊNG cho mọi tiến trình yt-dlp con.
+///
+/// yt-dlp.exe là PyInstaller **onefile**: mỗi lần chạy nó giải nén ~22 MB vào
+/// `%TEMP%\_MEIxxxxxx` và chỉ dọn khi thoát ÊM. App giết yt-dlp khi user huỷ
+/// tải / đóng app nên khối đó BỎ LẠI. ĐO THẬT máy anh Hùng 31/07/2026: **339
+/// thư mục `_MEI*` = 4,69 GB** trong %TEMP% lúc ổ C chỉ còn 3,19/926 GB.
+/// Trỏ TEMP/TMP của con vào đây => rác gom đúng 1 chỗ, `sweep_ytdlp_temp()`
+/// xoá cả cây lúc mở app, thay vì phải đoán `_MEI` đó của tiến trình nào.
+pub(crate) fn ytdlp_temp_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let d = app.path().app_config_dir().ok()?.join("ytdlp-temp");
+    std::fs::create_dir_all(&d).ok()?;
+    Some(d)
+}
+
+/// Gắn TEMP/TMP riêng vào lệnh yt-dlp. PHẢI gọi ở MỌI cửa spawn yt-dlp —
+/// `grep -n 'sidecar("yt-dlp")' src-tauri/src` phải thấy cửa nào cũng có.
+/// Sót 1 cửa là rác lại rơi vào %TEMP% chung (đúng kiểu bài học cookie
+/// bản-sao-tạm: quên cửa "quét kênh" là cookie user chết oan).
+pub(crate) fn with_temp_env(
+    cmd: tauri_plugin_shell::process::Command,
+    app: &AppHandle,
+) -> tauri_plugin_shell::process::Command {
+    match ytdlp_temp_dir(app) {
+        Some(d) => {
+            let s = d.to_string_lossy().to_string();
+            cmd.env("TEMP", &s).env("TMP", &s)
+        }
+        None => cmd,
+    }
+}
+
 /// Deletes a per-download cookies copy when dropped.
 pub(crate) struct TempCookieCopy(pub(crate) Option<std::path::PathBuf>);
 impl Drop for TempCookieCopy {
@@ -198,6 +229,8 @@ impl YtDlpRunner {
         let _ = args_builder::BuildMode::FetchMetadata; // keep reference
 
         let cmd = self.app.shell().sidecar("yt-dlp").map_err(|e| AppError::YtDlpFailed(e.to_string()))?.args(args);
+        // TEMP riêng: rác giải nén _MEI của yt-dlp không rơi vào %TEMP% chung
+        let cmd = with_temp_env(cmd, &self.app);
 
         let fut = async {
             let (mut rx, _child) = cmd.spawn().map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
@@ -426,6 +459,8 @@ impl YtDlpRunner {
         }
 
         let cmd = self.app.shell().sidecar("yt-dlp").map_err(|e| AppError::YtDlpFailed(e.to_string()))?.args(args);
+        // TEMP riêng: rác giải nén _MEI của yt-dlp không rơi vào %TEMP% chung
+        let cmd = with_temp_env(cmd, &self.app);
 
         let (mut rx, child) = cmd.spawn().map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
         // SAFETY: rustc tưởng `child` không cần `mut` vì .kill() lấy &self,

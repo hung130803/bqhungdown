@@ -1890,6 +1890,80 @@ pub(crate) fn sweep_cookie_copies() -> u64 {
     n
 }
 
+/// DỌN RÁC GIẢI NÉN CỦA yt-dlp (`_MEI*`).
+///
+/// yt-dlp.exe là PyInstaller **onefile**: mỗi lần chạy nó tự giải nén ~22 MB
+/// vào `%TEMP%\_MEIxxxxxx`, và CHỈ dọn khi thoát ÊM. App giết yt-dlp khi user
+/// huỷ tải / đóng app (`taskkill /F /T`) nên khối đó BỎ LẠI nguyên vẹn.
+/// ĐO THẬT máy anh Hùng 31/07/2026: **339 thư mục `_MEI*` = 4,69 GB** trong
+/// %TEMP% đúng lúc ổ C chỉ còn 3,19/926 GB (ổ đầy → DB ghi dở, job lỗi).
+///
+/// Từ bản này `ytdlp_runner::with_temp_env` trỏ TEMP của tiến trình con vào
+/// `<config>/ytdlp-temp`, nên rác MỚI gom đúng 1 chỗ. Hàm này dọn cả 2:
+///   1. cây `<config>/ytdlp-temp`,
+///   2. `_MEI*` còn đọng trong %TEMP% do các bản CŨ để lại.
+/// AN TOÀN: bỏ qua mục mới hơn 2 giờ (có thể là lượt tải đang chạy), bị khoá
+/// thì bỏ qua im lặng.
+pub(crate) fn sweep_ytdlp_temp(app: &tauri::AppHandle) -> u64 {
+    let mut n = 0u64;
+    if let Some(d) = crate::ytdlp_runner::ytdlp_temp_dir(app) {
+        n += sweep_muc_cu_hon(&d, 2 * 3600, "");
+    }
+    n + sweep_muc_cu_hon(&std::env::temp_dir(), 2 * 3600, "_MEI")
+}
+
+/// Xoá mọi mục trong `dir` cũ hơn `giay` giây (và khớp `tien_to` nếu có).
+/// `tien_to` RỖNG = xoá mọi mục trong thư mục đó (chỉ dùng cho thư mục
+/// của chính app — đừng bao giờ gọi với %TEMP% mà để tiền tố rỗng).
+fn sweep_muc_cu_hon(dir: &std::path::Path, giay: u64, tien_to: &str) -> u64 {
+    if tien_to.is_empty() && dir == std::env::temp_dir() {
+        return 0;           // chốt cứng: không bao giờ quét trắng %TEMP%
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    let mut n = 0u64;
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !tien_to.is_empty() && !name.starts_with(tien_to) {
+            continue;
+        }
+        if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+            if m.elapsed().map(|x| x.as_secs() < giay).unwrap_or(true) {
+                continue;
+            }
+        }
+        let p = e.path();
+        let ok = if p.is_dir() {
+            std::fs::remove_dir_all(&p).is_ok()
+        } else {
+            std::fs::remove_file(&p).is_ok()
+        };
+        if ok {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// DỌN CACHE QUÉT KÊNH ĐÃ NGUỘI (`channel_cache/*.json`).
+///
+/// File cache chỉ được GHI ĐÈ, không ai xoá khi user bỏ theo dõi kênh — đo
+/// 31/07/2026: **365 file / 77,7 MB**. Dọn theo TUỔI (mặc định 30 ngày), KHÔNG
+/// dò "kênh nào đã bỏ": tên file là `<channel_id>.json` hoặc `full_<hash>.json`
+/// nên map ngược dễ xoá oan, mà xoá oan = phải quét lại = TỐN QUOTA YouTube
+/// API. Kênh còn theo dõi thì cache được ghi lại mỗi lượt quét, không bao giờ
+/// nguội tới 30 ngày.
+pub(crate) fn prune_channel_cache_nguoi(app: &tauri::AppHandle, ngay: u64) -> u64 {
+    use tauri::Manager;
+    let dir = match app.path().app_config_dir() {
+        Ok(d) => d.join("channel_cache"),
+        Err(_) => return 0,
+    };
+    sweep_muc_cu_hon(&dir, ngay * 24 * 3600, "")
+}
+
 // ---------- Saved bookmarks ----------
 
 #[tauri::command]
@@ -2196,5 +2270,77 @@ mod tests_don_updater {
         assert!(khac.exists(), "app KHÁC không được chạm");
         let _ = fs::remove_dir_all(&moi);
         let _ = fs::remove_dir_all(&khac);
+    }
+}
+
+/// DỌN RÁC GIẢI NÉN yt-dlp (`_MEI*`) — đo thật 31/07/2026: 339 thư mục =
+/// 4,69 GB trong %TEMP% lúc ổ C còn 3,19/926 GB.
+#[cfg(test)]
+mod tests_don_mei {
+    use std::fs;
+
+    /// Đặt giờ sửa của 1 FILE về `giay` giây trước.
+    /// (KHÔNG dùng được cho thư mục: Windows cần FILE_FLAG_BACKUP_SEMANTICS mà
+    /// std không mở ra — nên ca "bỏ qua vì còn mới" test bằng file.)
+    fn lam_cu_file(p: &std::path::Path, giay: u64) {
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(giay);
+        if let Ok(f) = fs::File::options().write(true).open(p) {
+            f.set_times(fs::FileTimes::new().set_modified(t)).unwrap();
+        }
+    }
+
+    /// Xoá ĐÚNG thư mục khớp tiền tố, KHÔNG chạm thứ khác trong cùng chỗ.
+    #[test]
+    fn xoa_dung_tien_to_khong_cham_thu_khac() {
+        let goc = std::env::temp_dir().join("bqd_test_mei_a");
+        let _ = fs::remove_dir_all(&goc);
+        fs::create_dir_all(&goc).unwrap();
+        let mei = goc.join("_MEI111");
+        fs::create_dir_all(&mei).unwrap();
+        fs::write(mei.join("python310.dll"), b"x").unwrap();
+        let khac = goc.join("video_quan_trong.mp4");
+        fs::write(&khac, b"v").unwrap();
+        let khac_dir = goc.join("ThuMucKhac");
+        fs::create_dir_all(&khac_dir).unwrap();
+
+        let n = super::sweep_muc_cu_hon(&goc, 0, "_MEI");
+        assert!(!mei.exists(), "_MEI* phải bị xoá");
+        assert!(khac.exists(), "file KHÔNG khớp tiền tố không được chạm");
+        assert!(khac_dir.exists(), "thư mục khác không được chạm");
+        assert_eq!(n, 1, "đếm đúng 1 mục đã xoá");
+        let _ = fs::remove_dir_all(&goc);
+    }
+
+    /// CÒN MỚI thì phải GIỮ — có thể là lượt tải đang chạy.
+    #[test]
+    fn giu_muc_con_moi_xoa_muc_du_tuoi() {
+        let goc = std::env::temp_dir().join("bqd_test_mei_b");
+        let _ = fs::remove_dir_all(&goc);
+        fs::create_dir_all(&goc).unwrap();
+        let moi = goc.join("_MEI_dang_chay");
+        fs::write(&moi, b"a").unwrap();                 // vừa tạo
+        let cu = goc.join("_MEI_bo_lai");
+        fs::write(&cu, b"b").unwrap();
+        lam_cu_file(&cu, 5 * 3600);                    // 5 giờ trước
+
+        let n = super::sweep_muc_cu_hon(&goc, 2 * 3600, "_MEI");
+        assert!(moi.exists(), "mục mới (<2h) phải được GIỮ");
+        assert!(!cu.exists(), "mục cũ hơn 2h phải bị xoá");
+        assert_eq!(n, 1);
+        let _ = fs::remove_dir_all(&goc);
+    }
+
+    /// CHỐT CỨNG: không bao giờ được quét trắng %TEMP% (tiền tố rỗng).
+    #[test]
+    fn khong_bao_gio_quet_trang_temp() {
+        let n = super::sweep_muc_cu_hon(&std::env::temp_dir(), 0, "");
+        assert_eq!(n, 0, "gọi với %TEMP% + tiền tố rỗng phải trả 0, không xoá gì");
+    }
+
+    /// Thư mục không tồn tại -> im lặng trả 0 (dọn rác không được làm app chết).
+    #[test]
+    fn thu_muc_khong_ton_tai_tra_0() {
+        let p = std::path::Path::new(r"Z:\khong_co_thu_muc_nay_bqd");
+        assert_eq!(super::sweep_muc_cu_hon(p, 0, "_MEI"), 0);
     }
 }

@@ -186,6 +186,7 @@ pub fn run() {
                 let q = queue.clone();
                 let w = watchlist.clone();
                 let s = settings.clone();
+                let h = handle.clone();
                 std::thread::spawn(move || {
                     // Lượt đầu chờ hàng đợi khôi phục xong (khỏi dọn oan file
                     // của mục sắp tiếp tục tải).
@@ -201,6 +202,22 @@ pub fn run() {
                     let nc = crate::commands::sweep_cookie_copies();
                     if nc > 0 {
                         eprintln!("[junk] đã dọn {nc} bản sao cookie mồ côi trong %TEMP%");
+                    }
+                    // RÁC GIẢI NÉN CỦA yt-dlp — thứ CHIẾM ĐĨA NHẤT. Đo máy anh
+                    // Hùng 31/07/2026: 339 thư mục `_MEI*` = 4,69 GB trong
+                    // %TEMP% lúc ổ C chỉ còn 3,19/926 GB. yt-dlp onefile giải
+                    // nén ~22 MB mỗi lần chạy, app giết nó khi huỷ tải/đóng app
+                    // nên khối đó bỏ lại.
+                    let nm = crate::commands::sweep_ytdlp_temp(&h);
+                    if nm > 0 {
+                        eprintln!("[junk] đã dọn {nm} thư mục giải nén yt-dlp (_MEI*)");
+                    }
+                    // Cache quét kênh đã nguội 30 ngày (365 file / 77,7 MB).
+                    // Kênh còn theo dõi được ghi lại mỗi lượt quét nên không
+                    // bao giờ nguội tới mốc này -> không tốn quota quét lại.
+                    let np = crate::commands::prune_channel_cache_nguoi(&h, 30);
+                    if np > 0 {
+                        eprintln!("[junk] đã dọn {np} file cache kênh nguội");
                     }
                     loop {
                         let n = crate::commands::sweep_junk_all(&q, &w, &s);

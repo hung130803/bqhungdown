@@ -915,6 +915,8 @@ async fn run_flat_fetch_attempt(
         .sidecar("yt-dlp")
         .map_err(|e| AppError::YtDlpFailed(e.to_string()))?
         .args(args);
+    // TEMP riêng cho yt-dlp (rác _MEI gom 1 chỗ, xem ytdlp_runner)
+    let cmd = crate::ytdlp_runner::with_temp_env(cmd, app);
 
     let (mut rx, child) = cmd
         .spawn()
@@ -1193,6 +1195,8 @@ async fn probe_batch_attempt(
         .sidecar("yt-dlp")
         .map_err(|e| AppError::YtDlpFailed(e.to_string()))?
         .args(args);
+    // TEMP riêng cho yt-dlp (rác _MEI gom 1 chỗ, xem ytdlp_runner)
+    let cmd = crate::ytdlp_runner::with_temp_env(cmd, app);
     let (mut rx, child) = cmd
         .spawn()
         .map_err(|e| AppError::YtDlpFailed(e.to_string()))?;

@@ -106,6 +106,8 @@ async fn run_update(app: &AppHandle) -> Result<String, String> {
         // nhiều ngày → thời gian "tool chết" sau mỗi đợt YouTube đổi player
         // ngắn đi đáng kể. Nếu đã mới nhất, yt-dlp báo "up to date", exit 0.
         .args(["--update-to", "nightly", "--no-warnings"]);
+    // TEMP riêng cho yt-dlp (rác _MEI gom 1 chỗ, xem ytdlp_runner)
+    let cmd = crate::ytdlp_runner::with_temp_env(cmd, app);
 
     let (mut rx, _child) = cmd.spawn().map_err(|e| e.to_string())?;
     let mut out = String::new();
