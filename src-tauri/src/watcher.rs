@@ -65,12 +65,23 @@ pub fn reconcile_all(
         })
         .map(|it| video_id_of(&it.request.url))
         .collect();
-    // Video đã tải XONG (history chỉ chứa Completed, nhưng lọc cho chắc).
-    let done_hist: std::collections::HashSet<String> = history
-        .list(None, 2000, 0)
-        .unwrap_or_default()
+    // Đọc history 1 lần: vừa lấy video ĐÃ XONG, vừa lấy video LỖI VĨNH VIỄN
+    // (private/xoá/…) để đánh dấu bỏ qua thay vì nạp lại vô tận.
+    let hist = history.list(None, 2000, 0).unwrap_or_default();
+    let done_hist: std::collections::HashSet<String> = hist
         .iter()
         .filter(|e| e.status == HistoryStatus::Completed)
+        .map(|e| video_id_of(&e.url))
+        .collect();
+    // id -> LỖI VĨNH VIỄN (video sẽ không bao giờ tải được). LỖI THẬT
+    // 02/08/2026: video bị đặt private → reconcile gỡ khỏi seen_ids để "quét
+    // lại" → lượt sau nạp lại → lại lỗi → LẶP VÔ TẬN. Nay id nào lỗi vĩnh viễn
+    // thì cho vào skipped_ids, không nạp lại (chừa video còn sống thử lại).
+    let dead_perm: std::collections::HashSet<String> = hist
+        .iter()
+        .filter(|e| e.status == HistoryStatus::Failed
+            && e.error.as_deref().map(crate::error::is_permanent_fail)
+                .unwrap_or(false))
         .map(|e| video_id_of(&e.url))
         .collect();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -89,8 +100,24 @@ pub fn reconcile_all(
                     vua_xong += 1;
                 } else if live.contains(&vid) {
                     c.dl_pending.push(vid); // vẫn đang tải/chờ/retry
+                } else if dead_perm.contains(&vid) {
+                    // LỖI VĨNH VIỄN (private/xoá/…) → BỎ QUA hẳn: giữ trong
+                    // seen_ids + thêm skipped_ids để KHÔNG BAO GIỜ nạp lại.
+                    // Trả suất drip (video này coi như không tính) nhưng KHÔNG
+                    // gỡ seen — đó là mấu chốt chặn vòng lặp vô tận.
+                    if !c.skipped_ids.contains(&vid) {
+                        c.skipped_ids.push(vid.clone());
+                    }
+                    if !c.seen_ids.contains(&vid) {
+                        c.seen_ids.push(vid);
+                    }
+                    if c.drip_date.as_deref() == Some(today.as_str()) && c.drip_count > 0 {
+                        c.drip_count -= 1;
+                    }
+                    c.auto_fetch_date = None;
                 } else {
-                    // Hủy/lỗi cứng → trả suất, gỡ seen, cho quét kho lại.
+                    // Hủy / lỗi TẠM THỜI (mạng, bị chặn IP) → trả suất, gỡ seen,
+                    // cho quét kho lại (lượt sau thử lại là qua).
                     c.seen_ids.retain(|s| s != &vid);
                     if c.drip_date.as_deref() == Some(today.as_str()) && c.drip_count > 0 {
                         c.drip_count -= 1;
@@ -788,6 +815,11 @@ fn pick_auto_candidates(
 /// hit thật của cả kênh, đủ hẹp để probe nhanh (~3 batch × 30).
 const VET_PROBE_WINDOW: usize = 80;
 
+/// TTL kho video kênh: cache CŨ hơn mốc này thì QUÉT LẠI từ YouTube để bắt
+/// video mới. Anh Hùng 02/08/2026 chọn 6 giờ — video đăng trong ngày là thấy,
+/// ~200 kênh quét lại vài lần/ngày, tốn chút quota API nhưng không đáng.
+const VET_CACHE_TTL_SECS: u64 = 6 * 3600;
+
 /// Cache kho video của kênh trên đĩa (app_data_dir/channel_cache).
 fn vet_cache(app: &AppHandle) -> Option<crate::channel_cache::ChannelCache> {
     use tauri::Manager;
@@ -810,9 +842,14 @@ async fn vet_pool(
 ) -> Vec<ChannelVideo> {
     let cache = vet_cache(app);
     let key = crate::channel_cache::url_key(url, tab);
-    // 1. Còn video CHƯA làm trong kho đã lưu → dùng lại, khỏi quét mạng.
+    // 1. Còn video CHƯA làm trong kho đã lưu VÀ kho còn TƯƠI (≤ TTL) → dùng
+    //    lại, khỏi quét mạng.
+    //    LỖI THẬT (anh Hùng 02/08/2026): trước dùng `c.load` KHÔNG xét tuổi ->
+    //    kênh đăng video MỚI hôm sau, app vẫn trả cache cũ nên báo "kho cạn" /
+    //    bấm Tải không ra video mới. Nay chỉ tin cache còn tươi; cũ hơn TTL ->
+    //    rơi xuống bước 2 quét lại từ YouTube (bắt được video mới).
     if let Some(c) = &cache {
-        if let Some(vids) = c.load(&key) {
+        if let Some(vids) = c.load_fresh(&key, VET_CACHE_TTL_SECS) {
             let has_unused = vids
                 .iter()
                 .any(|v| !v.is_photo && !exclude.contains(&video_id_of(&v.url)));
@@ -821,7 +858,7 @@ async fn vet_pool(
             }
         }
     }
-    // 2. Kho trống/cạn → QUÉT CẢ KÊNH 1 lần (limit 0, flat = 1 lần gọi).
+    // 2. Kho trống/cạn/CŨ → QUÉT CẢ KÊNH 1 lần (limit 0, flat = 1 lần gọi).
     let mut videos = match crate::channel_fetcher::fetch_channel(
         app, url, 0, false, tab, settings, false,
     )

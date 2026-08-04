@@ -69,6 +69,23 @@ impl ChannelCache {
         Some((parsed.videos, age))
     }
 
+    /// Như `load` nhưng CHỈ trả cache còn "tươi" (tuổi ≤ `ttl_giay`).
+    ///
+    /// VÌ SAO CẦN (lỗi thật anh Hùng 02/08/2026): cache kênh KHÔNG hết hạn bao
+    /// giờ — chỉ nút 🔄 Làm mới mới lấy lại. Nên kênh đăng video MỚI hôm sau mà
+    /// bấm Tải / mở Kho video đều KHÔNG thấy video đó (app trả thẳng cache cũ),
+    /// còn watcher thì báo "kho cạn" vĩnh viễn. Có TTL thì cache tự cũ, tự lấy
+    /// lại → video mới xuất hiện mà không cần user nhớ bấm Làm mới.
+    /// `ttl_giay == 0` → luôn coi là hết hạn (buộc lấy mới).
+    pub fn load_fresh(&self, channel_id: &str, ttl_giay: u64)
+        -> Option<Vec<ChannelVideo>> {
+        if ttl_giay == 0 {
+            return None;              // 0 = luôn coi là hết hạn, buộc lấy mới
+        }
+        let (v, age) = self.load_with_age(channel_id)?;
+        if age <= ttl_giay { Some(v) } else { None }
+    }
+
     /// Ghi danh sách video xuống cache (atomic: tmp + rename). Lỗi → bỏ qua
     /// im lặng (cache chỉ là tối ưu, không được phép làm hỏng luồng chính).
     pub fn save(&self, channel_id: &str, videos: &[ChannelVideo]) {
@@ -182,6 +199,24 @@ mod tests {
         let (videos, age) = cache.load_with_age("UCage").unwrap();
         assert_eq!(videos.len(), 1);
         assert!(age < 60, "vừa lưu xong tuổi phải ~0, ra {age}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_fresh_ton_trong_ttl() {
+        // LỖI THẬT 02/08/2026: cache không TTL nên kênh đăng video mới không
+        // hiện. load_fresh chỉ trả cache còn tươi.
+        let dir = std::env::temp_dir().join(format!("cctest_fresh_{}", now_unix()));
+        let cache = ChannelCache::new(dir.clone());
+        cache.save("UCfresh", &[vid("a")]);
+        // vừa lưu, TTL 6h → còn tươi, trả về được
+        assert!(cache.load_fresh("UCfresh", 6 * 3600).is_some(),
+            "cache vừa lưu phải còn tươi");
+        // TTL 0 → luôn coi là hết hạn → None (buộc lấy mới)
+        assert!(cache.load_fresh("UCfresh", 0).is_none(),
+            "TTL=0 phải coi là hết hạn");
+        // chưa có cache → None
+        assert!(cache.load_fresh("UCchua_co", 6 * 3600).is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 }

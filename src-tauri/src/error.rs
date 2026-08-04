@@ -97,6 +97,34 @@ pub fn is_unavailable_error(msg: &str) -> bool {
     msg.to_lowercase().contains("video unavailable")
 }
 
+/// LỖI VĨNH VIỄN: video sẽ KHÔNG BAO GIỜ tải được dù thử lại (chủ đặt riêng
+/// tư / xoá / chỉ cho thành viên / chặn theo vùng). KHÁC lỗi tạm thời (mạng,
+/// 403, bị chặn IP) — cái đó thử lại là qua.
+///
+/// LỖI THẬT (anh Hùng 02/08/2026): video bị đặt private sau khi quét thấy →
+/// `reconcile` gỡ nó khỏi `seen_ids` để "cho quét lại", nhưng nó chết vĩnh
+/// viễn nên lượt sau lại nạp → lại lỗi → lại gỡ → LẶP VÔ TẬN. Video như vậy
+/// phải bị đánh dấu BỎ QUA, không nạp lại. CẢNH GIÁC soft-block: chỉ tin khi
+/// KHÔNG có marker `[bi-chan-tam-thoi]` (lúc đó là YouTube chặn IP tạm thời).
+pub fn is_permanent_fail(msg: &str) -> bool {
+    if msg.contains(SOFT_BLOCK_MARKER) {
+        return false; // YouTube chặn IP tạm — video vẫn sống, thử lại được
+    }
+    let l = msg.to_lowercase();
+    l.contains("private video")
+        || l.contains("this video is private")
+        || l.contains("video unavailable")
+        || l.contains("this video is not available")
+        || l.contains("members-only")
+        || l.contains("members only")
+        || l.contains("join this channel")
+        || l.contains("removed by the uploader")
+        || l.contains("account associated with this video has been terminated")
+        || l.contains("who has blocked it in your country")
+        || l.contains("not available in your country")
+        || l.contains("video has been removed")
+}
+
 /// True when yt-dlp extracted the video but couldn't produce a downloadable
 /// format ("Requested format is not available" / no formats). On YouTube this
 /// is usually the SABR rollout hiding direct URLs on the default client — we
@@ -443,6 +471,41 @@ mod tests {
         assert!(is_forbidden_error("(exit 1) ERROR: ... HTTP Error 403: Forbidden"));
         assert!(!is_forbidden_error("HTTP Error 404: Not Found"));
         assert!(!is_forbidden_error("Sign in to confirm you're not a bot"));
+    }
+
+    #[test]
+    fn permanent_fail_bat_dung_loai() {
+        // VĨNH VIỄN: các câu này = video không bao giờ tải được → bỏ qua hẳn.
+        for s in [
+            "ERROR: [youtube] x: Private video. Sign in if you've been granted access",
+            "ERROR: [youtube] x: This video is private",
+            "ERROR: [youtube] x: Video unavailable. This video is private",
+            "ERROR: Join this channel to get access to members-only content",
+            "ERROR: This video has been removed by the uploader",
+            "ERROR: This video is not available in your country",
+        ] {
+            assert!(is_permanent_fail(s), "phải là lỗi vĩnh viễn: {s}");
+        }
+        // TẠM THỜI: KHÔNG được coi là vĩnh viễn (thử lại là qua).
+        for s in [
+            "HTTP Error 403: Forbidden",
+            "Sign in to confirm you're not a bot",
+            "Unable to download webpage: timed out",
+            "HTTP Error 429: Too Many Requests",
+            "Requested format is not available",
+        ] {
+            assert!(!is_permanent_fail(s), "KHÔNG được coi là vĩnh viễn: {s}");
+        }
+    }
+
+    #[test]
+    fn soft_block_khong_bi_coi_la_vinh_vien() {
+        // "Video unavailable" nhưng có marker soft-block = YouTube chặn IP tạm,
+        // video vẫn sống → PHẢI thử lại, KHÔNG được bỏ qua hẳn (nếu không sẽ bỏ
+        // sót video tốt khi tải cả kênh dồn dập).
+        let r = format!("{SOFT_BLOCK_MARKER} ERROR: [youtube] x: Video unavailable");
+        assert!(!is_permanent_fail(&r),
+            "soft-block KHÔNG được coi là chết vĩnh viễn: {r}");
     }
 }
 impl From<serde_json::Error> for AppError {

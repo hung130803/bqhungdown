@@ -135,10 +135,15 @@ pub async fn fetch_channel_videos(
         None
     };
     let key = crate::channel_cache::url_key(&url, &tab_s);
+    // TTL 6 giờ: cache CŨ hơn thì đi lấy lại như bấm 🔄 Làm mới. LỖI THẬT
+    // (anh Hùng 02/08/2026): trước đây mở Kho video LUÔN trả cache cũ (chỉ nút
+    // Làm mới mới lấy lại), nên kênh đăng video mới hôm sau không hiện. Nay
+    // cache quá hạn -> rơi xuống nhánh fetch thật + ghi đè cache.
+    const KHO_TTL_SECS: u64 = 6 * 3600;
     if !force {
         if let Some(cache) = &full_cache {
             if let Some((videos, age)) = cache.load_with_age(&key) {
-                if !videos.is_empty() {
+                if !videos.is_empty() && age <= KHO_TTL_SECS {
                     let info = ChannelInfo {
                         url: url.clone(),
                         title: String::new(),
