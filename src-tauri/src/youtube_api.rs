@@ -543,9 +543,23 @@ async fn list_upload_ids(
     Ok((ids, hit_cached))
 }
 
-/// Parse 1 item trong videos.list → (id, ChannelVideo). None nếu thiếu id.
+/// Parse 1 item trong videos.list → (id, ChannelVideo). None nếu thiếu id
+/// HOẶC video đang live / đang chờ live.
 fn parse_video_item(it: &Value) -> Option<(String, ChannelVideo)> {
     let id = it.get("id").and_then(|v| v.as_str())?.to_string();
+    // BỎ video ĐANG live / ĐANG CHỜ live (anh Hùng 07/08/2026). Đường API là
+    // cửa THỨ HAI lấy video — chỉ vá channel_fetcher là còn lọt ở đây.
+    // `snippet.liveBroadcastContent` = "live" | "upcoming" | "none"; snippet
+    // ĐÃ có sẵn trong `part=snippet,statistics,contentDetails` nên lọc KHÔNG
+    // tốn thêm quota. `order_by_ids` bỏ qua id không có trong map nên trả
+    // None là an toàn, không sinh dòng rỗng trong danh sách.
+    let lbc = it
+        .pointer("/snippet/liveBroadcastContent")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none");
+    if lbc == "live" || lbc == "upcoming" {
+        return None;
+    }
     let title = it
         .pointer("/snippet/title")
         .and_then(|v| v.as_str())
@@ -823,6 +837,39 @@ fn build_api_note(pool: &KeyPool) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bo_video_live_va_cho_live_duong_api() {
+        // Đường API là CỬA THỨ HAI. Cổng này canh riêng nó — vá 1 cửa mà quên
+        // cửa kia là video live vẫn lọt vào danh sách (bài học đã sập nhiều
+        // lần: cookie yt-dlp, mẫu theo kênh...).
+        let mk = |id: &str, lbc: &str, dur: &str| {
+            serde_json::json!({
+                "id": id,
+                "snippet": {"title": format!("video {id}"), "description": "",
+                            "publishedAt": "2026-08-07T01:00:00Z",
+                            "liveBroadcastContent": lbc},
+                "statistics": {"viewCount": "100"},
+                "contentDetails": {"duration": dur}})
+        };
+        // BỎ
+        assert!(parse_video_item(&mk("lv1", "live", "P0D")).is_none(),
+                "đang live phải bị bỏ");
+        assert!(parse_video_item(&mk("up1", "upcoming", "P0D")).is_none(),
+                "chờ live phải bị bỏ");
+        // GIỮ — ĐỐI CHỨNG chống vá quá tay
+        let (id, v) = parse_video_item(&mk("nm1", "none", "PT10M")).unwrap();
+        assert_eq!(id, "nm1");
+        assert_eq!(v.duration_sec, Some(600), "video thường giữ nguyên");
+        assert!(parse_video_item(&mk("wl1", "none", "PT15M49S")).is_some(),
+                "live ĐÃ xong (API trả 'none') -> phải GIỮ");
+        // thiếu hẳn trường -> mặc định 'none' -> GIỮ (không phán bừa)
+        let thieu = serde_json::json!({
+            "id": "x1", "snippet": {"title": "t", "description": ""},
+            "contentDetails": {"duration": "PT5M"}});
+        assert!(parse_video_item(&thieu).is_some(),
+                "thiếu liveBroadcastContent -> GIỮ");
+    }
 
     #[test]
     fn parses_iso8601_durations() {

@@ -1296,7 +1296,33 @@ fn parse_channel(source_url: &str, value: Value) -> (ChannelInfo, Vec<ChannelVid
     (info, videos)
 }
 
+/// Video ĐANG phát live hoặc ĐANG CHỜ phát (premiere/lịch hẹn) thì BỎ HẲN.
+///
+/// Anh Hùng 07/08/2026: "video phát live hoặc đang chờ phát live sẽ k lấy mấy
+/// video đó bỏ đi nhé, k tự tải và k cho rằng video nó là video mới nhất; nếu
+/// có tải tôi sẽ tự thêm hàng chờ". Trước đây chúng lọt vào danh sách nên
+/// chiếm chỗ "video mới nhất" của kênh -> tự tải -> yt-dlp báo "live event
+/// will begin" (câu lỗi này ĐÃ có sẵn trong error.rs, tức là app chỉ biết SAU
+/// KHI đã tải) -> kênh coi như đứng im, không lấy được video thật.
+///
+/// ĐO THẬT bằng yt-dlp trên @SkyNews/streams (07/08/2026): flat-playlist CÓ
+/// trả `live_status` — `is_upcoming` (duration=None) · `is_live` (duration=
+/// None) · `was_live` (đã xong, có duration 949s / 25568s / 3161s...).
+/// `post_live` = vừa kết thúc, YouTube còn đang xử lý -> tải ra file hỏng nên
+/// cũng bỏ. GIỮ `was_live`: nó đã thành video thường, đúng thứ cần cắt.
+pub(crate) fn la_live_hoac_cho_live(live_status: Option<&str>) -> bool {
+    matches!(
+        live_status,
+        Some("is_live") | Some("is_upcoming") | Some("post_live")
+    )
+}
+
 fn parse_entry(e: &Value) -> Option<ChannelVideo> {
+    // Lọc TRƯỚC MỌI THỨ: entry live/chờ-live không được vào danh sách, để nó
+    // không bao giờ bị coi là "video mới nhất" của kênh.
+    if la_live_hoac_cho_live(e.get("live_status").and_then(|v| v.as_str())) {
+        return None;
+    }
     let url = e
         .get("url")
         .or_else(|| e.get("webpage_url"))
@@ -1378,6 +1404,56 @@ mod tests {
             hashtags: tags.iter().map(|s| s.to_string()).collect(),
             downloaded: false,
         }
+    }
+
+    #[test]
+    fn bo_video_live_va_cho_live() {
+        // Dữ liệu ĐO THẬT từ yt-dlp trên @SkyNews/streams 07/08/2026 —
+        // KHÔNG bịa: is_upcoming/is_live trả duration=null, was_live có
+        // duration thật (949s, 25568s...).
+        let cho_live = serde_json::json!({
+            "url": "https://www.youtube.com/watch?v=up1",
+            "title": "Solar eclipse | Full Sky News coverage",
+            "live_status": "is_upcoming", "duration": serde_json::Value::Null});
+        let dang_live = serde_json::json!({
+            "url": "https://www.youtube.com/watch?v=lv1",
+            "title": "Mornings | Friday 7 August 2026",
+            "live_status": "is_live", "duration": serde_json::Value::Null});
+        let vua_xong = serde_json::json!({
+            "url": "https://www.youtube.com/watch?v=pl1",
+            "title": "vua ket thuc, YouTube dang xu ly",
+            "live_status": "post_live", "duration": serde_json::Value::Null});
+        let live_da_xong = serde_json::json!({
+            "url": "https://www.youtube.com/watch?v=wl1",
+            "title": "Trump signs executive order on birthright",
+            "live_status": "was_live", "duration": 949});
+        let thuong = serde_json::json!({
+            "url": "https://www.youtube.com/watch?v=nm1",
+            "title": "video thuong", "live_status": "not_live", "duration": 600});
+        let khong_co_truong = serde_json::json!({
+            "url": "https://www.youtube.com/watch?v=nf1",
+            "title": "extractor khac khong tra live_status", "duration": 300});
+
+        // BỎ
+        assert!(parse_entry(&cho_live).is_none(), "chờ live phải bị bỏ");
+        assert!(parse_entry(&dang_live).is_none(), "đang live phải bị bỏ");
+        assert!(parse_entry(&vua_xong).is_none(), "post_live phải bị bỏ");
+        // GIỮ — đây là ĐỐI CHỨNG: vá quá tay là mất video thật
+        assert!(parse_entry(&live_da_xong).is_some(),
+                "was_live ĐÃ thành video thường -> phải GIỮ");
+        assert_eq!(parse_entry(&live_da_xong).unwrap().duration_sec, Some(949));
+        assert!(parse_entry(&thuong).is_some(), "video thường phải giữ");
+        assert!(parse_entry(&khong_co_truong).is_some(),
+                "không có live_status (TikTok/Douyin...) -> GIỮ, đừng phán bừa");
+
+        // Video mới nhất của kênh KHÔNG được là video live: dựng đúng thứ tự
+        // YouTube trả (live/upcoming nằm TRÊN CÙNG) rồi kiểm phần tử đầu.
+        let ds = serde_json::json!({"entries": [
+            cho_live, dang_live, live_da_xong, thuong]});
+        let (_i, vs) = parse_channel("https://x", ds);
+        assert_eq!(vs.len(), 2, "chỉ còn 2 video thật");
+        assert!(vs[0].url.ends_with("wl1"),
+                "video mới nhất phải là video THẬT, không phải bản live");
     }
 
     #[test]
