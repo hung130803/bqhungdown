@@ -1407,6 +1407,35 @@ mod tests {
     }
 
     #[test]
+    fn bo_video_live_du_lieu_that_tu_ytdlp() {
+        // QUY TẮC SẮT: test bằng THÀNH PHẦN THẬT. Test dưới dùng JSON tự dựng —
+        // đủ để canh logic nhưng KHÔNG chứng minh được yt-dlp trả đúng hình
+        // dạng đó. Mẫu này là ĐẦU RA NGUYÊN VĂN của
+        //   yt-dlp --flat-playlist --dump-single-json --playlist-end 20
+        //          https://www.youtube.com/@SkyNews/streams
+        // bắt ngày 07/08/2026: 20 entry = 15 was_live + 3 is_live + 2
+        // is_upcoming. Cho nó đi qua ĐÚNG hàm production `parse_channel`.
+        let raw = include_str!("../tests/fixtures/yt_streams_live.json");
+        let v: Value = serde_json::from_str(raw).expect("mẫu JSON thật phải parse được");
+        let tong = v["entries"].as_array().unwrap().len();
+        assert_eq!(tong, 20, "mẫu phải còn nguyên 20 entry");
+
+        let (info, videos) = parse_channel("https://www.youtube.com/@SkyNews/streams", v);
+        assert_eq!(info.title, "Sky News", "vẫn đọc đúng tên kênh");
+        assert_eq!(videos.len(), 15,
+                   "phải bỏ đúng 5 bản live/chờ-live, giữ 15 video thật");
+        // Không một video nào còn thiếu duration (live/upcoming = duration null)
+        for x in &videos {
+            assert!(x.duration_sec.is_some() && x.duration_sec.unwrap() > 0,
+                    "video giữ lại phải có độ dài thật: {}", x.title);
+        }
+        // Video MỚI NHẤT (phần tử đầu) không được là bản live — YouTube xếp
+        // live/upcoming lên trên cùng nên đây là ca dễ sai nhất.
+        assert!(videos[0].duration_sec.unwrap() > 0,
+                "video mới nhất phải là video THẬT");
+    }
+
+    #[test]
     fn bo_video_live_va_cho_live() {
         // Dữ liệu ĐO THẬT từ yt-dlp trên @SkyNews/streams 07/08/2026 —
         // KHÔNG bịa: is_upcoming/is_live trả duration=null, was_live có
