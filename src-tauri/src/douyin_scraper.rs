@@ -57,9 +57,32 @@ struct TikwmResponse {
     data: Option<TikwmData>,
 }
 
+/// Bóc một trường DANH SÁCH mà API có thể trả `null` thay vì `[]`.
+///
+/// `#[serde(default)]` CHỈ cứu trường THIẾU HẲN. Trường CÓ MẶT nhưng giá trị
+/// `null` vẫn nổ `invalid type: null, expected a sequence` — đây là chỗ ai cũng
+/// tưởng đã an toàn vì "đã có serde(default) rồi".
+///
+/// Douyin trả `"images": null` cho MỌI video thường (chỉ bài ảnh mới có mảng),
+/// nên chỉ cần kênh có ĐÚNG 1 video thường là gãy CẢ lượt quét kênh — anh Hùng
+/// gặp 14/08/2026: "Dữ liệu Douyin không hợp lệ: invalid type: null, expected a
+/// sequence at line 1 column 89208". Chú ý cột 89208: dữ liệu ĐÃ về đủ 89 KB,
+/// mạng/chữ ký/cookie đều tốt, chỉ chết đúng lúc bóc JSON.
+///
+/// DÙNG CHO MỌI `Vec` bóc từ JSON của Douyin/TikWM, đừng chỉ vá `images` —
+/// bất kỳ trường danh sách nào cũng có thể về `null` khi bài không có loại
+/// nội dung đó.
+fn null_to_vec<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
+}
+
 #[derive(Debug, Deserialize)]
 struct TikwmData {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_vec")]
     aweme_list: Vec<TikwmAweme>,
     #[serde(default)]
     has_more: bool,
@@ -71,7 +94,7 @@ struct TikwmAweme {
     desc: Option<String>,
     #[serde(default)]
     video: Option<TikwmVideo>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_vec")]
     images: Vec<serde_json::Value>,
 }
 
@@ -83,7 +106,7 @@ struct TikwmVideo {
 
 #[derive(Debug, Deserialize, Default)]
 struct TikwmCover {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_vec")]
     url_list: Vec<String>,
 }
 
@@ -102,7 +125,7 @@ struct PostResp {
     max_cursor: i64,
     #[serde(default)]
     has_more: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_vec")]
     aweme_list: Vec<TikwmAweme>,
 }
 
@@ -538,5 +561,64 @@ pub async fn scrape_douyin_channel(
             api_err.unwrap_or_else(|| "không rõ".into()),
             &sec_uid[..sec_uid.len().min(24)],
         ))),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  CỔNG: JSON Douyin có trường danh sách = null
+// ─────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests_null_list {
+    use super::*;
+
+    /// CHỨNG MINH CÁI BẪY LÀ THẬT: chỉ `#[serde(default)]` thôi thì `null` NỔ.
+    ///
+    /// Cổng này tồn tại để ai đó gỡ `deserialize_with = "null_to_vec"` (tưởng
+    /// thừa vì "đã có default rồi") sẽ thấy ngay vì sao không được gỡ.
+    #[test]
+    fn chi_serde_default_van_no_voi_null() {
+        #[derive(Debug, Deserialize)]
+        struct ChiDefault {
+            #[serde(default)]
+            #[allow(dead_code)]
+            images: Vec<serde_json::Value>,
+        }
+        // Trường THIẾU HẲN -> default cứu được.
+        assert!(serde_json::from_str::<ChiDefault>(r#"{}"#).is_ok());
+        // Trường CÓ MẶT nhưng null -> VẪN NỔ. Đây chính là lỗi anh Hùng gặp.
+        let e = serde_json::from_str::<ChiDefault>(r#"{"images":null}"#).unwrap_err();
+        assert!(
+            e.to_string().contains("invalid type: null"),
+            "phải nổ đúng lỗi 'invalid type: null', thực tế: {e}"
+        );
+    }
+
+    /// Bản đã vá: đúng hình dạng Douyin trả về cho VIDEO THƯỜNG (`images: null`)
+    /// thì phải bóc trót lọt và ra đủ số bài.
+    #[test]
+    fn video_thuong_images_null_van_boc_duoc() {
+        let raw = r#"{
+            "status_code": 0, "max_cursor": 1723600000000, "has_more": 1,
+            "aweme_list": [
+                {"aweme_id":"7655989781075217704","desc":"video thường",
+                 "video":{"cover":{"url_list":["https://x/1.jpg"]}}, "images": null},
+                {"aweme_id":"7655989781075217705","desc":"bài ảnh",
+                 "video":{"cover":{"url_list": null}}, "images": [{"a":1}]}
+            ]
+        }"#;
+        let r: PostResp = serde_json::from_str(raw).expect("images:null phải bóc được");
+        assert_eq!(r.aweme_list.len(), 2, "phải giữ đủ 2 bài");
+        assert_eq!(r.aweme_list[0].images.len(), 0, "images:null -> mảng rỗng");
+        assert_eq!(r.aweme_list[1].images.len(), 1, "bài ảnh giữ nguyên mảng");
+        assert_eq!(r.has_more, 1);
+    }
+
+    /// `aweme_list` chính nó bằng null (kênh trống/riêng tư) -> rỗng, KHÔNG nổ.
+    #[test]
+    fn aweme_list_null_ra_rong_khong_no() {
+        let r: PostResp =
+            serde_json::from_str(r#"{"status_code":0,"aweme_list":null}"#).unwrap();
+        assert_eq!(r.aweme_list.len(), 0);
     }
 }
