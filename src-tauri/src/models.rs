@@ -154,6 +154,15 @@ pub struct ChannelVideo {
     pub title: String,
     pub duration_sec: Option<u64>,
     pub view_count: Option<u64>,
+    /// Lượt THÍCH (tim). Douyin/TikTok trả số này thật, còn `view_count` thì
+    /// KHÔNG (web API luôn trả `play_count = 0`, kể cả có cookie đăng nhập —
+    /// đo 16/08/2026: 0/21 bài có play_count, 21/21 bài có digg_count). Nên
+    /// đây là thước đo "bài nào hot" DUY NHẤT có thật cho Douyin.
+    ///
+    /// `#[serde(default)]` BẮT BUỘC: ChannelVideo nằm trong kho cache trên đĩa
+    /// (`channel_cache/*.json`), thiếu nó là file cũ parse hỏng → mất cache.
+    #[serde(default)]
+    pub like_count: Option<u64>,
     /// Upload date in `YYYYMMDD` form when available — left as opaque string
     /// because not every extractor sets it.
     pub upload_date: Option<String>,

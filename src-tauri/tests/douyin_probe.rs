@@ -203,3 +203,116 @@ async fn probe_douyin_channel_raw_body() {
         Err(e) => println!("== BÓC JSON HỎNG: {e}"),
     }
 }
+
+/// PROBE: Douyin CÓ trả lượt xem thật + ngày đăng trong gói `aweme_list` không?
+///
+/// Chạy tay (cần cookie đăng nhập):
+///   BQD_COOKIE_FILE=<duong-dan> cargo test --test douyin_probe \
+///     -- --ignored probe_view_va_ngay --nocapture
+///
+/// LUẬT: KHÔNG in cookie/sec_uid đầy đủ.
+#[tokio::test]
+#[ignore]
+async fn probe_view_va_ngay() {
+    let sec_uid = std::env::var("BQD_SEC_UID")
+        .unwrap_or_else(|_| "MS4wLjABAAAA7yRYvacLzSF5V0J8mrM0eE-PdL3O9_dNdDJTb-0peRw".into());
+    println!("== sec_uid: {}", mask(&sec_uid));
+
+    let cookie = std::env::var("BQD_COOKIE_FILE").ok().and_then(|p| {
+        let raw = std::fs::read_to_string(p).ok()?;
+        bqhungdown_lib::douyin_scraper::netscape_to_cookie_header(&raw, "douyin.com")
+    });
+    println!(
+        "== cookie đăng nhập: {}",
+        match &cookie {
+            Some(c) => format!("CÓ ({} byte)", c.len()),
+            None => "KHÔNG".into(),
+        }
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent(DOUYIN_UA)
+        .build()
+        .unwrap();
+    let ab = ABogus::new();
+    let params = build_post_params(&sec_uid, 0);
+    let url = format!(
+        "https://www.douyin.com/aweme/v1/web/aweme/post/?{params}&a_bogus={}",
+        pct_encode(&ab.get_value(&params, "GET"))
+    );
+    let mut req = client
+        .get(&url)
+        .header("Referer", format!("https://www.douyin.com/user/{sec_uid}"));
+    if let Some(c) = &cookie {
+        req = req.header("Cookie", c.as_str());
+    }
+    let resp = req.send().await.expect("gửi request thất bại");
+    println!("== HTTP status: {}", resp.status());
+    let body = resp.text().await.unwrap_or_default();
+    println!("== body len = {} byte", body.len());
+
+    let v: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("== BÓC JSON HỎNG: {e}");
+            let head: String = body.chars().take(300).collect();
+            println!("== đầu thân: {}", mask_body(&head));
+            return;
+        }
+    };
+    println!("== status_code = {:?}", v.get("status_code"));
+    let list = match v.get("aweme_list").and_then(|x| x.as_array()) {
+        Some(a) => a,
+        None => {
+            println!("== aweme_list KHÔNG phải mảng: {:?}", v.get("aweme_list"));
+            return;
+        }
+    };
+    println!("== aweme_list = {} bài\n", list.len());
+
+    let (mut co_play, mut co_time, mut co_digg) = (0usize, 0usize, 0usize);
+    for (i, a) in list.iter().enumerate() {
+        let st = a.get("statistics");
+        let play = st.and_then(|s| s.get("play_count")).and_then(|x| x.as_i64());
+        let digg = st.and_then(|s| s.get("digg_count")).and_then(|x| x.as_i64());
+        let cmt = st.and_then(|s| s.get("comment_count")).and_then(|x| x.as_i64());
+        let shr = st.and_then(|s| s.get("share_count")).and_then(|x| x.as_i64());
+        let ct = a.get("create_time").and_then(|x| x.as_i64());
+        if play.unwrap_or(0) > 0 { co_play += 1; }
+        if digg.unwrap_or(0) > 0 { co_digg += 1; }
+        if ct.unwrap_or(0) > 0 { co_time += 1; }
+        if i < 6 {
+            let ngay = ct
+                .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "<không có>".into());
+            let tieu_de: String = a
+                .get("desc")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .chars()
+                .take(24)
+                .collect();
+            println!(
+                "  [{i}] create_time={ct:?} ({ngay}) play={play:?} digg={digg:?} cmt={cmt:?} share={shr:?} | {tieu_de}"
+            );
+        }
+    }
+    println!("\n== TỔNG KẾT trên {} bài:", list.len());
+    println!("   create_time > 0 : {co_time}/{}", list.len());
+    println!("   play_count  > 0 : {co_play}/{}", list.len());
+    println!("   digg_count  > 0 : {co_digg}/{}", list.len());
+    println!(
+        "   => lượt xem THẬT? {}",
+        if co_play > 0 { "CÓ" } else { "KHÔNG (Douyin trả 0 cho web API)" }
+    );
+    if let Some(st) = list.first().and_then(|a| a.get("statistics")) {
+        println!("== các khoá trong `statistics` của bài đầu:");
+        if let Some(o) = st.as_object() {
+            let mut ks: Vec<&String> = o.keys().collect();
+            ks.sort();
+            println!("   {ks:?}");
+        }
+    }
+}

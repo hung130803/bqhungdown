@@ -261,6 +261,15 @@ export function ChannelInput({ onSubmit }: Props) {
     setError(null);
   };
 
+  // ── THƯỚC ĐO "BÀI NÀO HOT" ────────────────────────────────────────────
+  // YouTube trả lượt XEM. Douyin/TikTok thì KHÔNG (play_count luôn 0, kể cả
+  // có cookie đăng nhập) nhưng trả lượt TIM thật. Nên chọn thước đo theo
+  // dữ liệu THỰC SỰ có, rồi sort/lọc/hiện đều dùng chung nó.
+  const hasViews = useMemo(() => videos.some((v) => v.viewCount != null), [videos]);
+  const hasLikes = useMemo(() => videos.some((v) => v.likeCount != null), [videos]);
+  const metricOf = (v: ChannelVideo): number | null =>
+    (hasViews ? v.viewCount : hasLikes ? v.likeCount : null) ?? null;
+
   /** Chung 1 hàm lọc: nhận list nguồn → áp toàn bộ filter / sort. Dùng riêng
    *  cho long & shorts để bộ lọc apply trên cả 2 cột. */
   const applyFilter = (src: ChannelVideo[]): ChannelVideo[] => {
@@ -306,16 +315,31 @@ export function ChannelInput({ onSubmit }: Props) {
     }
     const minV = parseCommaNum(minViewsRaw);
     const maxV = parseCommaNum(maxViewsRaw);
-    if (minV != null) list = list.filter((v) => (v.viewCount ?? 0) >= minV);
-    if (maxV != null) list = list.filter((v) => (v.viewCount ?? 0) <= maxV);
+    if (minV != null) list = list.filter((v) => (metricOf(v) ?? 0) >= minV);
+    if (maxV != null) list = list.filter((v) => (metricOf(v) ?? 0) <= maxV);
     if (sortKey === "popular") {
-      list.sort((a, b) => (b.viewCount ?? 0) - (a.viewCount ?? 0));
+      list.sort((a, b) => (metricOf(b) ?? 0) - (metricOf(a) ?? 0));
     } else if (sortKey === "longest") {
       list.sort((a, b) => (b.durationSec ?? 0) - (a.durationSec ?? 0));
     } else if (sortKey === "shortest") {
       list.sort((a, b) => (a.durationSec ?? 0) - (b.durationSec ?? 0));
-    } else if (sortKey === "oldest") {
-      list.reverse();
+    } else if (sortKey === "newest" || sortKey === "oldest") {
+      // Khi CÓ ngày thật thì sắp theo ngày, đừng tin thứ tự nguồn.
+      // Douyin trả bài GHIM lên đầu nên thứ tự nguồn KHÔNG theo thời gian —
+      // đo 16/08/2026: 3 bài đầu là 2026-01-18, 2025-12-10, 2025-10-26 rồi
+      // mới tới 2026-07-28. "Mới nhất" kiểu cũ (giữ nguyên thứ tự nguồn) là
+      // sai hẳn; "Cũ nhất" (reverse) cũng sai theo.
+      const coNgay = list.length > 0 && list.every((v) => (v.uploadDate ?? "").length >= 8);
+      if (coNgay) {
+        // uploadDate là YYYYMMDD nên so chuỗi = so thời gian.
+        list.sort((a, b) =>
+          sortKey === "newest"
+            ? (b.uploadDate ?? "").localeCompare(a.uploadDate ?? "")
+            : (a.uploadDate ?? "").localeCompare(b.uploadDate ?? ""),
+        );
+      } else if (sortKey === "oldest") {
+        list.reverse();
+      }
     }
     return list;
   };
@@ -342,6 +366,14 @@ export function ChannelInput({ onSubmit }: Props) {
   /** Items thuộc tab đang hiện. Cho non-YouTube → luôn dùng allList. */
   const visible = isYoutube ? (resultTab === "long" ? longList : shortList) : allList;
   const selectedCount = visible.filter((v) => !excluded.has(v.url)).length;
+
+  /** NGUỒN DUY NHẤT cho "sẽ tải cái gì". Nhãn nút VÀ handleSubmit đều đọc đây
+   *  — trước kia mỗi chỗ tự tính một kiểu nên lệch nhau (nút đếm cứng
+   *  longList+shortList = 0 với Douyin, còn submit lại đúng). */
+  const selectedForSubmit = useMemo(
+    () => (isYoutube ? [...longList, ...shortList] : allList).filter((v) => !excluded.has(v.url)),
+    [isYoutube, longList, shortList, allList, excluded],
+  );
 
   /** Các năm thực sự có video (cho dropdown "Theo năm/tháng"), mới → cũ. */
   const availableYears = useMemo(() => {
@@ -537,10 +569,9 @@ export function ChannelInput({ onSubmit }: Props) {
   }, [visible, excluded, setExcluded]);
 
   const handleSubmit = async () => {
-    // Submit TẤT CẢ video đang được tick. YouTube tổng cả 2 tab; nền tảng
-    // khác chỉ có allList.
-    const all = isYoutube ? [...longList, ...shortList] : allList;
-    const urls = all.filter((v) => !excluded.has(v.url)).map((v) => v.url);
+    // Submit TẤT CẢ video đang được tick — đọc CHUNG `selectedForSubmit` với
+    // nhãn nút để hai chỗ không bao giờ lệch nhau nữa.
+    const urls = selectedForSubmit.map((v) => v.url);
     if (urls.length === 0) return;
     setSubmitting(true);
     try {
@@ -619,6 +650,13 @@ export function ChannelInput({ onSubmit }: Props) {
                 <div className="text-xs text-muted truncate flex items-center gap-2">
                   {v.durationSec != null && <span>{formatDuration(v.durationSec)}</span>}
                   {v.viewCount != null && <span>{formatComma(v.viewCount)} view</span>}
+                  {/* Douyin không có view nhưng có tim — hiện số THẬT đang có
+                      thay vì để dòng trống. */}
+                  {v.viewCount == null && v.likeCount != null && (
+                    <span title="Lượt thích (tim). Douyin không cho lấy lượt xem.">
+                      {formatComma(v.likeCount)} tim
+                    </span>
+                  )}
                   {date && <span>{date.toLocaleDateString("vi-VN")}</span>}
                   {dled && (
                     <button
@@ -772,7 +810,7 @@ export function ChannelInput({ onSubmit }: Props) {
             <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} className="px-2 py-1.5 rounded-md bg-surface border border-border">
               <option value="newest">Mới nhất</option>
               <option value="oldest">Cũ nhất</option>
-              <option value="popular">Nhiều view nhất</option>
+              <option value="popular">{hasViews ? "Nhiều view nhất" : "Nhiều tim nhất"}</option>
               <option value="longest">Dài nhất</option>
               <option value="shortest">Ngắn nhất</option>
             </select>
@@ -822,7 +860,7 @@ export function ChannelInput({ onSubmit }: Props) {
                 const n = parseCommaNum(e.target.value);
                 setMinViewsRaw(n != null ? formatComma(n) : "");
               }}
-              placeholder="View từ"
+              placeholder={hasViews ? "View từ" : "Tim từ"}
               className="px-2 py-1.5 rounded-md bg-surface border border-border w-28"
             />
             <span className="text-muted">–</span>
@@ -834,7 +872,7 @@ export function ChannelInput({ onSubmit }: Props) {
                 const n = parseCommaNum(e.target.value);
                 setMaxViewsRaw(n != null ? formatComma(n) : "");
               }}
-              placeholder="View đến"
+              placeholder={hasViews ? "View đến" : "Tim đến"}
               className="px-2 py-1.5 rounded-md bg-surface border border-border w-28"
             />
             <button onClick={toggleAll} className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2">
@@ -873,9 +911,19 @@ export function ChannelInput({ onSubmit }: Props) {
               </optgroup>
             </select>
             <span className="text-muted text-xs ml-auto">
-              Sẽ thêm {selectedCount} / {visible.length} {resultTab === "short" ? "shorts" : "video dài"} (tab này)
+              Sẽ thêm {selectedCount} / {visible.length}{" "}
+              {isYoutube ? (resultTab === "short" ? "shorts (tab này)" : "video dài (tab này)") : "bài"}
             </span>
           </div>
+
+          {/* NÓI THẲNG vì sao không có cột lượt xem, thay vì im lặng để trống
+              hoặc tệ hơn là hiện 0 như thể là số thật. */}
+          {!hasViews && hasLikes && (
+            <p className="text-[11px] text-muted -mt-1">
+              Douyin không cho lấy <b>lượt xem</b> (API luôn trả 0, kể cả khi đã đăng nhập)
+              — nên lọc/sắp xếp theo <b>lượt tim</b> và <b>ngày đăng</b>, đều là số thật.
+            </p>
+          )}
 
           {/* YouTube: 2 tab (Video dài / Shorts). Khác: 1 list. */}
           <div data-channel-list onMouseDown={onListMouseDown} onClickCapture={onListClickCapture}>
@@ -918,7 +966,12 @@ export function ChannelInput({ onSubmit }: Props) {
             className="w-full py-2.5 rounded-md bg-accent text-accent-fg font-medium disabled:opacity-50"
           >
             {(() => {
-              const totalSelected = [...longList, ...shortList].filter((v) => !excluded.has(v.url)).length;
+              // PHẢI dùng ĐÚNG nguồn mà handleSubmit dùng. YouTube = 2 tab
+              // (longList+shortList); nền tảng khác (Douyin/TikTok) chỉ có
+              // allList — longList/shortList luôn RỖNG. Bản trước cộng cứng
+              // longList+shortList nên với Douyin luôn ra 0 → nút báo oan
+              // "Chưa chọn video nào" dù 250 bài đang tích.
+              const totalSelected = selectedForSubmit.length;
               if (submitting) return "Đang thêm…";
               if (totalSelected === 0) return "Chưa chọn video nào";
               return `Tải ${totalSelected} video vào hàng đợi`;

@@ -172,6 +172,11 @@ export interface ChannelVideo {
   title: string;
   durationSec?: number | null;
   viewCount?: number | null;
+  /** Lượt THÍCH (tim). Douyin/TikTok trả số này thật, còn `viewCount` thì
+   *  KHÔNG — web API luôn trả `play_count = 0` kể cả khi có cookie đăng nhập
+   *  (đo 16/08/2026: 0/21 bài có view, 21/21 bài có tim). Với Douyin đây là
+   *  thước đo "bài nào hot" DUY NHẤT có thật. */
+  likeCount?: number | null;
   /** `YYYYMMDD` when extractor exposes it. */
   uploadDate?: string | null;
   thumbnail?: string | null;

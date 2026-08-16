@@ -174,6 +174,7 @@ async fn fetch_bilibili_tv_series(
                 title,
                 duration_sec: None,
                 view_count: None,
+                like_count: None,
                 upload_date,
                 thumbnail,
                 is_photo: false,
@@ -806,6 +807,7 @@ fn parse_tikwm_entry(v: &serde_json::Value) -> Option<ChannelVideo> {
         title,
         duration_sec,
         view_count,
+        like_count: None,
         upload_date,
         thumbnail,
         is_short: false,
@@ -1387,6 +1389,7 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
         title,
         duration_sec,
         view_count,
+        like_count: None,
         upload_date,
         thumbnail,
         is_short: false,
@@ -1403,7 +1406,7 @@ mod tests {
     fn v(url: &str, title: &str, dur: Option<u64>, tags: &[&str]) -> ChannelVideo {
         ChannelVideo {
             url: url.into(), title: title.into(), duration_sec: dur,
-            view_count: None, upload_date: None, thumbnail: None,
+            view_count: None, like_count: None, upload_date: None, thumbnail: None,
             is_photo: false, is_short: false,
             hashtags: tags.iter().map(|s| s.to_string()).collect(),
             downloaded: false,

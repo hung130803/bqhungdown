@@ -46,6 +46,19 @@ pub struct DouyinPost {
     pub title: String,
     pub thumbnail: String,
     pub is_photo: bool,
+    /// Dấu thời gian Unix lúc đăng (`create_time`). Douyin trả THẬT cho mọi
+    /// bài — đo 16/08/2026: 21/21 bài có. `#[serde(default)]` vì struct này
+    /// serialize được, dữ liệu cũ không có trường này.
+    #[serde(default)]
+    pub create_time: Option<i64>,
+    /// Lượt THÍCH (`statistics.digg_count`) — số THẬT.
+    ///
+    /// KHÔNG lấy `play_count`: Douyin web API luôn trả 0 cho nó, kể cả khi
+    /// gửi cookie ĐĂNG NHẬP (đo 16/08/2026 trên kênh 250 bài của anh Hùng:
+    /// play_count > 0 là 0/21 bài, digg_count > 0 là 21/21 bài). Hiện 0 view
+    /// như thể là thật thì tệ hơn là không hiện.
+    #[serde(default)]
+    pub like_count: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +109,31 @@ struct TikwmAweme {
     video: Option<TikwmVideo>,
     #[serde(default, deserialize_with = "null_to_vec")]
     images: Vec<serde_json::Value>,
+    /// Unix timestamp lúc đăng. CÓ SẴN trong chính gói `aweme_list` đã tải về
+    /// — không tốn thêm một lượt gọi mạng nào.
+    #[serde(default)]
+    create_time: Option<i64>,
+    #[serde(default)]
+    statistics: Option<TikwmStats>,
+}
+
+/// Khối `statistics` của một bài Douyin. Các khoá thật đo được 16/08/2026:
+/// admire_count, collect_count, comment_count, digg_count, play_count,
+/// recommend_count, share_count.
+#[derive(Debug, Deserialize, Default)]
+struct TikwmStats {
+    /// Lượt thích — SỐ THẬT.
+    #[serde(default)]
+    digg_count: Option<u64>,
+}
+
+/// Đổi dấu thời gian Unix của Douyin sang `YYYYMMDD` — đúng định dạng
+/// `ChannelVideo.upload_date` mà bộ lọc ngày của UI đang đọc.
+///
+/// Trả None khi thiếu hoặc <= 0 để UI hiện "không có ngày" thay vì 1970-01-01.
+fn unix_to_yyyymmdd(ts: Option<i64>) -> Option<String> {
+    let t = ts.filter(|x| *x > 0)?;
+    chrono::DateTime::from_timestamp(t, 0).map(|d| d.format("%Y%m%d").to_string())
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -380,6 +418,8 @@ fn awemes_to_posts(list: Vec<TikwmAweme>) -> Vec<DouyinPost> {
                 title: aweme.desc.unwrap_or_default(),
                 thumbnail: thumb,
                 is_photo: !aweme.images.is_empty(),
+                create_time: aweme.create_time.filter(|t| *t > 0),
+                like_count: aweme.statistics.as_ref().and_then(|s| s.digg_count),
             })
         })
         .collect()
@@ -636,8 +676,14 @@ pub async fn fetch_channel_listing_douyin(
                 p.title
             },
             duration_sec: None,
+            // ĐỂ NGUYÊN None — Douyin web API luôn trả `play_count = 0` kể cả
+            // có cookie đăng nhập (đo 16/08/2026: 0/21 bài có số). Nhét 0 vào
+            // đây thì UI hiện "0 view" trông như thật → anh Hùng lọc theo số
+            // đó là lọc trên số BỊA. Không có thì hiện KHÔNG CÓ.
             view_count: None,
-            upload_date: None,
+            // Lượt thích là thước đo "bài nào hot" DUY NHẤT có thật ở Douyin.
+            like_count: p.like_count,
+            upload_date: unix_to_yyyymmdd(p.create_time),
             thumbnail: if p.thumbnail.is_empty() {
                 None
             } else {
@@ -730,6 +776,8 @@ async fn try_tikwm_endpoint(
                 title: aweme.desc.unwrap_or_default(),
                 thumbnail: thumb,
                 is_photo: !aweme.images.is_empty(),
+                create_time: aweme.create_time.filter(|t| *t > 0),
+                like_count: aweme.statistics.as_ref().and_then(|s| s.digg_count),
             })
         })
         .collect();
@@ -1003,6 +1051,65 @@ mod tests_null_list {
         let r: PostResp =
             serde_json::from_str(r#"{"status_code":0,"aweme_list":null}"#).unwrap();
         assert_eq!(r.aweme_list.len(), 0);
+    }
+
+    /// NGÀY ĐĂNG + LƯỢT THÍCH phải bóc được từ chính gói `aweme_list`.
+    ///
+    /// SỐ LIỆU THẬT, đo 16/08/2026 bằng `tests/douyin_probe.rs` (có cookie đăng
+    /// nhập của anh Hùng) trên đúng kênh trong ảnh anh gửi — 2 bài dưới là 2
+    /// bài anh Hùng đã tích trong ảnh chụp màn hình:
+    ///   create_time=1785239590 -> 2026-07-28, digg=35316, play_count=0
+    ///   create_time=1784464747 -> 2026-07-19, digg=12733, play_count=0
+    ///
+    /// Cổng này giữ 2 điều: (1) không quay lại đời "danh sách chỉ có ảnh +
+    /// tiêu đề", (2) KHÔNG ai lỡ tay ánh xạ `play_count` vào view.
+    #[test]
+    fn bóc_được_ngày_đăng_và_lượt_thích_số_thật() {
+        let raw = r#"{
+            "status_code": 0, "has_more": 1,
+            "aweme_list": [
+                {"aweme_id":"7655989781075217704","desc":"2026下半年按这份片单来",
+                 "create_time":1785239590, "images": null,
+                 "video":{"cover":{"url_list":["https://x/1.jpg"]}},
+                 "statistics":{"play_count":0,"digg_count":35316,
+                               "comment_count":908,"share_count":12272}},
+                {"aweme_id":"7655989781075217705","desc":"用算盘和粉笔",
+                 "create_time":1784464747, "images": null,
+                 "video":{"cover":{"url_list":["https://x/2.jpg"]}},
+                 "statistics":{"play_count":0,"digg_count":12733,
+                               "comment_count":325,"share_count":1593}}
+            ]
+        }"#;
+        let r: PostResp = serde_json::from_str(raw).expect("phải bóc được");
+        let posts = awemes_to_posts(r.aweme_list);
+        assert_eq!(posts.len(), 2);
+
+        assert_eq!(posts[0].create_time, Some(1785239590));
+        assert_eq!(posts[0].like_count, Some(35316), "digg_count là SỐ THẬT");
+        assert_eq!(posts[1].create_time, Some(1784464747));
+        assert_eq!(posts[1].like_count, Some(12733));
+
+        // Ngày phải ra đúng YYYYMMDD — định dạng bộ lọc ngày của UI đang đọc.
+        assert_eq!(unix_to_yyyymmdd(posts[0].create_time).as_deref(), Some("20260728"));
+        assert_eq!(unix_to_yyyymmdd(posts[1].create_time).as_deref(), Some("20260719"));
+    }
+
+    /// Thiếu `statistics`/`create_time` (bài cũ, hoặc Douyin đổi gói) thì ra
+    /// None — KHÔNG được ra Some(0) hay 1970-01-01.
+    #[test]
+    fn thiếu_thống_kê_ra_none_chứ_không_bịa_số_0() {
+        let raw = r#"{"status_code":0,"aweme_list":[
+            {"aweme_id":"7","desc":"x","images":null},
+            {"aweme_id":"8","desc":"y","images":null,"create_time":0,"statistics":{}}
+        ]}"#;
+        let r: PostResp = serde_json::from_str(raw).unwrap();
+        let posts = awemes_to_posts(r.aweme_list);
+        assert_eq!(posts[0].create_time, None, "thiếu hẳn -> None");
+        assert_eq!(posts[0].like_count, None);
+        assert_eq!(posts[1].create_time, None, "create_time=0 -> None, KHÔNG phải 1970");
+        assert_eq!(posts[1].like_count, None, "statistics rỗng -> None chứ không phải Some(0)");
+        assert_eq!(unix_to_yyyymmdd(None), None);
+        assert_eq!(unix_to_yyyymmdd(Some(0)), None, "mốc 0 KHÔNG được ra 19700101");
     }
 }
 

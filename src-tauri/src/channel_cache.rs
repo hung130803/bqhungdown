@@ -143,6 +143,7 @@ mod tests {
             title: id.to_string(),
             duration_sec: Some(100),
             view_count: Some(1),
+            like_count: None,
             upload_date: Some("20240101".into()),
             thumbnail: None,
             is_photo: false,
