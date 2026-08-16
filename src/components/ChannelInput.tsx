@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "@/ipc/commands";
-import { onDouyinScraperProgress } from "@/ipc/events";
+import { onDouyinScraperProgress, onDouyinScraperNote } from "@/ipc/events";
 import type { ChannelInfo, ChannelVideo } from "@/types/models";
 import { formatDuration } from "@/lib/format";
 import { Thumbnail } from "./Thumbnail";
@@ -121,6 +121,8 @@ export function ChannelInput({ onSubmit }: Props) {
   const channelSubfolder = useSettingsStore((s) => s.settings?.channelSubfolder ?? true);
   const [folderName, setFolderName] = useState("");
   const [addedMsg, setAddedMsg] = useState<string | null>(null);
+  /** Cảnh báo từ lượt quét Douyin (thiếu video / bị chặn giữa chừng). */
+  const [douyinNote, setDouyinNote] = useState<string | null>(null);
   useEffect(() => {
     if (info?.title) setFolderName(info.title);
   }, [info?.title]);
@@ -144,6 +146,21 @@ export function ChannelInput({ onSubmit }: Props) {
     };
     let unlisten: (() => void) | undefined;
     setup().then((u) => { unlisten = u; });
+    return () => {
+      ignore = true;
+      unlisten?.();
+    };
+  }, []);
+
+  /** Cảnh báo khi lượt quét Douyin RA KẾT QUẢ nhưng thiếu (chưa có cookie đăng
+   *  nhập → Douyin cắt ở ~20 video) hoặc bị chặn giữa chừng. Không chặn thao
+   *  tác, chỉ nói cho anh Hùng biết vì sao danh sách ngắn. */
+  useEffect(() => {
+    let ignore = false;
+    let unlisten: (() => void) | undefined;
+    onDouyinScraperNote((p) => {
+      if (!ignore) setDouyinNote(p.message);
+    }).then((u) => { unlisten = u; });
     return () => {
       ignore = true;
       unlisten?.();
@@ -185,6 +202,7 @@ export function ChannelInput({ onSubmit }: Props) {
     setFetchStartedAt(Date.now());
     setError(null);
     setAddedMsg(null);
+    setDouyinNote(null);
     setScrapeProgress(0);
     resetResult();
 
@@ -700,6 +718,12 @@ export function ChannelInput({ onSubmit }: Props) {
       {addedMsg && (
         <div className="px-3 py-2 rounded-md bg-success/10 border border-success text-success text-sm">
           {addedMsg}
+        </div>
+      )}
+
+      {douyinNote && (
+        <div className="px-3 py-2 rounded-md bg-warning/10 border border-warning text-warning text-sm whitespace-pre-line">
+          {douyinNote}
         </div>
       )}
 

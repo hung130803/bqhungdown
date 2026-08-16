@@ -116,6 +116,172 @@ struct TikwmCover {
 // ─────────────────────────────────────────────────────────────────────────
 
 use crate::douyin_sign::{ABogus, DOUYIN_UA};
+use crate::models::Settings;
+
+// ─────────────────────────────────────────────────────────────────────────
+//  COOKIE ĐĂNG NHẬP — thứ quyết định lấy được 20 hay 250 video
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Bóc cookie của một domain từ file Netscape (đúng định dạng `--cookies` của
+/// yt-dlp) thành chuỗi header `ten1=gt1; ten2=gt2`.
+///
+/// VÌ SAO PHẢI CÓ: Douyin chỉ cho KHÁCH VÃNG LAI xem TRANG ĐẦU (~20 video) rồi
+/// phán `has_more=0` — trông y như "kênh chỉ có 20 video". Đo thật 16/08/2026
+/// trên đúng kênh anh Hùng gửi:
+///   · chỉ ttwid ẩn danh (app 0.1.139 làm thế) → 21 video / 2 trang
+///   · cookie đăng nhập của anh Hùng          → 250 video / 14 trang
+/// Gấp 11,9 lần. Trước bản này `fetch_channel_api` KHÔNG hề đọc
+/// `settings.cookies_file`, nên dù anh Hùng đã nạp cookie Douyin đầy đủ
+/// (63 dòng, có sessionid/sid_guard/passport_*) app vẫn đi như khách.
+///
+/// CHỈ ĐỌC, KHÔNG BAO GIỜ GHI: chính file này cũng được đưa cho yt-dlp qua
+/// `--cookies`, mà yt-dlp lúc thoát thì GHI ĐÈ file đó. Ở đây ta chỉ đọc nên
+/// an toàn — đừng bao giờ đưa đường dẫn này cho tiến trình con.
+pub fn netscape_to_cookie_header(raw: &str, domain_filter: &str) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in raw.lines() {
+        // yt-dlp/Chrome ghi cookie HttpOnly với tiền tố này.
+        let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 7 || !f[0].contains(domain_filter) {
+            continue;
+        }
+        let (name, value) = (f[5].trim(), f[6].trim());
+        if name.is_empty() || value.is_empty() {
+            continue;
+        }
+        // Cookie trùng tên giữa `.douyin.com` và `www.douyin.com` — giữ cái đầu.
+        if seen.insert(name.to_string()) {
+            parts.push(format!("{name}={value}"));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("; "))
+    }
+}
+
+/// True khi chuỗi cookie có dấu hiệu ĐÃ ĐĂNG NHẬP (không chỉ cookie khách).
+fn cookie_has_login(header: &str) -> bool {
+    ["sessionid=", "sessionid_ss=", "sid_tt=", "sid_guard="]
+        .iter()
+        .any(|k| header.contains(k))
+}
+
+/// Lấy cookie Douyin từ cài đặt của user (file Netscape). Trả None nếu user
+/// chưa cấu hình file cookie hoặc file không có dòng nào cho douyin.com.
+fn douyin_cookie_header(settings: &Settings) -> Option<String> {
+    let path = settings.cookies_file.as_deref()?;
+    if path.is_empty() {
+        return None;
+    }
+    let raw = std::fs::read_to_string(path).ok()?;
+    netscape_to_cookie_header(&raw, "douyin.com")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  PHÂN LOẠI LỖI — mỗi loại một cách xử khác nhau, nói đúng cho user
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Vì sao một lượt gọi API Douyin hỏng. Tách riêng để thông báo cho user nói
+/// ĐÚNG việc phải làm, thay vì đổ hết vào "Dữ liệu Douyin không hợp lệ".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DouyinFail {
+    /// Douyin CHẶN theo tần suất. Đo thật: sau ~25 request liên tiếp không
+    /// nghỉ, Douyin trả HTTP 403 + thân `Blocked by ArgusSecurityPlugin
+    /// Validate Error` (text/plain, 45 byte). Thân này KHÔNG phải JSON nên
+    /// bản cũ nổ đúng câu anh Hùng thấy: "expected value at line 1 column 1".
+    Blocked,
+    /// Thân RỖNG kèm HTTP 200 — Douyin từ chối im lặng. Đo thật: khi không có
+    /// ttwid thì MỌI request đều rơi vào đây.
+    EmptyBody,
+    /// Douyin trả JSON nhưng `status_code != 0`.
+    ApiCode(i64),
+    /// Trả về thứ không phải JSON mà cũng không phải trang chặn đã biết —
+    /// nhiều khả năng Douyin đổi API hoặc bắt giải xác minh.
+    NotJson { status: u16, ctype: String, head: String },
+    /// Lỗi mạng/timeout.
+    Network(String),
+}
+
+impl DouyinFail {
+    /// Câu tiếng Việt nói THẲNG chuyện gì xảy ra và phải làm gì.
+    pub fn message(&self, co_cookie: bool) -> String {
+        let goi_y_cookie = if co_cookie {
+            "Cookie Douyin của bạn có thể đã hết hạn — đăng nhập lại douyin.com \
+             rồi xuất cookie mới vào Cài đặt."
+        } else {
+            "Bạn CHƯA nạp cookie Douyin. Vào Cài đặt → Cookie, chọn file cookie \
+             đã đăng nhập douyin.com — không có cookie thì Douyin chặn rất nhanh."
+        };
+        match self {
+            DouyinFail::Blocked => format!(
+                "Douyin CHẶN TẠM THỜI vì hỏi quá nhanh (máy chủ trả 403 \
+                 \"Blocked by ArgusSecurityPlugin\").\n\
+                 Đây KHÔNG phải lỗi link kênh — link của bạn vẫn đúng.\n\
+                 Cách xử: chờ 5-10 phút rồi lấy lại; đừng bấm \"Lấy danh sách\" \
+                 liên tiếp; lấy từng kênh một thay vì nhiều kênh cùng lúc.\n{goi_y_cookie}"
+            ),
+            DouyinFail::EmptyBody => format!(
+                "Douyin nhận request nhưng trả về RỖNG — nghĩa là nó từ chối \
+                 phục vụ (thường do thiếu cookie/ttwid, hoặc IP đang bị hạn chế).\n\
+                 Link kênh của bạn không sai.\n{goi_y_cookie}"
+            ),
+            DouyinFail::ApiCode(c) => match c {
+                // 2154/2156: cần xác minh; 8: phiên hỏng.
+                2154 | 2156 => format!(
+                    "Douyin ĐÒI XÁC MINH (mã {c}). Mở douyin.com trên trình duyệt, \
+                     làm bước xác minh/đăng nhập lại, rồi xuất cookie mới vào Cài đặt."
+                ),
+                8 => format!(
+                    "Phiên đăng nhập Douyin không còn hiệu lực (mã {c}). \
+                     Đăng nhập lại douyin.com rồi xuất cookie mới."
+                ),
+                _ => format!(
+                    "Douyin trả mã lỗi {c}. Kênh có thể riêng tư/đã xoá, hoặc cần \
+                     đăng nhập.\n{goi_y_cookie}"
+                ),
+            },
+            DouyinFail::NotJson { status, ctype, head } => format!(
+                "Douyin trả về thứ KHÔNG phải dữ liệu video (HTTP {status}, kiểu {ctype}).\n\
+                 Nhiều khả năng Douyin đã đổi API hoặc đang bắt giải xác minh.\n\
+                 Nội dung nhận được: {head}\n{goi_y_cookie}"
+            ),
+            DouyinFail::Network(e) => format!(
+                "Không kết nối được tới Douyin: {e}\n\
+                 Kiểm tra mạng, hoặc Douyin đang chặn IP của bạn."
+            ),
+        }
+    }
+}
+
+/// Đọc phản hồi THÔ (đã biết status + content-type + thân) và phán đúng loại.
+/// Hàm THUẦN để test được không cần mạng.
+pub fn classify_body(status: u16, ctype: &str, body: &str) -> Result<serde_json::Value, DouyinFail> {
+    if body.trim().is_empty() {
+        return Err(DouyinFail::EmptyBody);
+    }
+    // Trang chặn của Douyin: 403 + text/plain "Blocked by ArgusSecurityPlugin".
+    if status == 403 || body.contains("Blocked by ArgusSecurityPlugin") {
+        return Err(DouyinFail::Blocked);
+    }
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(v) => Ok(v),
+        Err(_) => {
+            let head: String = body.chars().take(200).collect();
+            Err(DouyinFail::NotJson {
+                status,
+                ctype: ctype.to_string(),
+                head: head.replace(['\n', '\r'], " "),
+            })
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct PostResp {
@@ -216,30 +382,113 @@ fn awemes_to_posts(list: Vec<TikwmAweme>) -> Vec<DouyinPost> {
         .collect()
 }
 
+/// Kết quả một lượt bò kênh: video lấy được + vì sao dừng.
+pub struct CrawlOutcome {
+    pub posts: Vec<DouyinPost>,
+    /// Lỗi làm lượt bò dừng giữa chừng (None = dừng tự nhiên vì hết video).
+    pub stopped_by: Option<DouyinFail>,
+    /// True khi Douyin CẮT NGAY sau trang đầu (dấu hiệu kinh điển của "đi như
+    /// khách vãng lai"): đủ một trang rồi has_more=0.
+    pub cut_after_first_page: bool,
+    pub pages: usize,
+}
+
+/// Gọi 1 trang, tự thử lại khi bị chặn (403). Backoff 3s → 6s → 12s.
+///
+/// VÌ SAO PHẢI THỬ LẠI: 403 "Blocked by ArgusSecurityPlugin" là chặn TẠM THỜI
+/// theo tần suất, không phải hỏng vĩnh viễn. Bản cũ gặp 403 là hỏng cả lượt và
+/// đổ lỗi cho dữ liệu, làm anh Hùng đi kiểm tra link (vốn đúng).
+async fn fetch_page_retry(
+    client: &reqwest::Client,
+    url: &str,
+    referer: &str,
+    cookie: Option<&str>,
+) -> Result<serde_json::Value, DouyinFail> {
+    let mut last = DouyinFail::Network("chưa gọi".into());
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            // 3s, 6s — cho Douyin nguôi. Cố tình chậm: nhanh nữa là bị chặn tiếp.
+            tokio::time::sleep(Duration::from_secs(3 * (1 << (attempt - 1)))).await;
+        }
+        let mut req = client.get(url).header("Referer", referer);
+        if let Some(c) = cookie {
+            req = req.header("Cookie", c);
+        }
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let ctype = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("?")
+                    .to_string();
+                let body = resp.text().await.unwrap_or_default();
+                match classify_body(status, &ctype, &body) {
+                    Ok(v) => return Ok(v),
+                    // Chỉ 2 loại này đáng thử lại; còn lại thử lại cũng vô ích.
+                    Err(e @ (DouyinFail::Blocked | DouyinFail::EmptyBody)) => last = e,
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(e) => last = DouyinFail::Network(e.to_string()),
+        }
+    }
+    Err(last)
+}
+
 /// Lấy TOÀN BỘ video của kênh qua API douyin.com, phân trang bằng max_cursor.
 /// Tự ký a_bogus mỗi lần gọi. Emit tiến độ để UI cập nhật số video.
+///
+/// KHÁC BẢN CŨ: gửi cookie đăng nhập của user (nếu có) — đây là thứ quyết định
+/// lấy được ~20 hay HÀNG TRĂM video; và ĐỌC HTTP status thay vì nhét thẳng
+/// trang chặn 403 vào serde_json.
 async fn fetch_channel_api(
     app: &tauri::AppHandle,
     sec_uid: &str,
     proxy: &Option<String>,
-) -> AppResult<Vec<DouyinPost>> {
-    let client = with_proxy(
+    cookie: Option<&str>,
+) -> CrawlOutcome {
+    let client = match with_proxy(
         reqwest::Client::builder()
             .timeout(HTTP_TIMEOUT)
             .user_agent(DOUYIN_UA),
         proxy,
     )
     .build()
-    .map_err(|e| AppError::Other(format!("HTTP client lỗi: {e}")))?;
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return CrawlOutcome {
+                posts: Vec::new(),
+                stopped_by: Some(DouyinFail::Network(e.to_string())),
+                cut_after_first_page: false,
+                pages: 0,
+            }
+        }
+    };
 
-    let ttwid = fetch_ttwid(proxy).await;
+    // Cookie user đã có ttwid riêng rồi; chỉ xin ttwid ẩn danh khi user chưa
+    // nạp cookie (thiếu ttwid thì MỌI request trả thân rỗng — đã đo).
+    let cookie_owned: Option<String> = match cookie {
+        Some(c) if cookie_has_login(c) => Some(c.to_string()),
+        Some(c) => match fetch_ttwid(proxy).await {
+            Some(tt) if !c.contains("ttwid=") => Some(format!("{c}; ttwid={tt}")),
+            _ => Some(c.to_string()),
+        },
+        None => fetch_ttwid(proxy).await.map(|tt| format!("ttwid={tt}")),
+    };
+
     let ab = ABogus::new();
     let referer = format!("https://www.douyin.com/user/{sec_uid}");
 
     let mut all: Vec<DouyinPost> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut cursor: i64 = 0;
-    const MAX_PAGES: usize = 120; // 120 × 18 ≈ 2160 video — dư cho hầu hết kênh
+    let mut stopped_by: Option<DouyinFail> = None;
+    let mut pages = 0usize;
+    // 200 × 18 ≈ 3600 video. Kênh to hơn thì lấy được 3600 mới nhất.
+    const MAX_PAGES: usize = 200;
 
     for page in 0..MAX_PAGES {
         let params = build_post_params(sec_uid, cursor);
@@ -249,48 +498,34 @@ async fn fetch_channel_api(
             pct_encode(&a_bogus)
         );
 
-        let mut req = client.get(&url).header("Referer", &referer);
-        if let Some(tt) = &ttwid {
-            req = req.header("Cookie", format!("ttwid={tt}"));
-        }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| AppError::Other(format!("Gọi API Douyin thất bại: {e}")))?;
-        let body = resp.text().await.unwrap_or_default();
-
-        // Rỗng = chữ ký bị từ chối / rate-limit. Trang đầu rỗng → lỗi thật;
-        // trang sau rỗng → dừng, giữ những gì đã lấy.
-        if body.trim().is_empty() {
-            if page == 0 {
-                return Err(AppError::Other(
-                    "Douyin không trả dữ liệu (có thể đã đổi thuật toán chặn, hoặc kênh riêng tư). \
-                     Thử lại sau, hoặc thêm cookie Douyin trong Cài đặt."
-                        .into(),
-                ));
-            }
-            break;
-        }
-
-        let json: PostResp = match serde_json::from_str(&body) {
-            Ok(j) => j,
-            Err(_) if page > 0 => break,
+        let v = match fetch_page_retry(&client, &url, &referer, cookie_owned.as_deref()).await {
+            Ok(v) => v,
             Err(e) => {
-                return Err(AppError::Other(format!("Dữ liệu Douyin không hợp lệ: {e}")))
+                stopped_by = Some(e);
+                break;
+            }
+        };
+        pages = page + 1;
+
+        let json: PostResp = match serde_json::from_value(v) {
+            Ok(j) => j,
+            Err(e) => {
+                // JSON hợp lệ nhưng hình dạng lạ -> Douyin đổi API.
+                stopped_by = Some(DouyinFail::NotJson {
+                    status: 200,
+                    ctype: "application/json".into(),
+                    head: format!("hình dạng lạ: {e}"),
+                });
+                break;
             }
         };
         if json.status_code != 0 {
-            if page == 0 {
-                return Err(AppError::Other(format!(
-                    "Douyin trả mã lỗi {} — kênh có thể riêng tư hoặc cần cookie.",
-                    json.status_code
-                )));
-            }
+            stopped_by = Some(DouyinFail::ApiCode(json.status_code.into()));
             break;
         }
 
-        let fresh = awemes_to_posts(json.aweme_list);
-        for p in fresh {
+        let got = json.aweme_list.len();
+        for p in awemes_to_posts(json.aweme_list) {
             if seen.insert(p.id.clone()) {
                 all.push(p);
             }
@@ -301,7 +536,9 @@ async fn fetch_channel_api(
             serde_json::json!({ "count": all.len() }),
         );
 
-        if json.has_more != 1 || json.max_cursor == 0 || json.max_cursor == cursor {
+        let _ = got;
+        let het = json.has_more != 1 || json.max_cursor == 0 || json.max_cursor == cursor;
+        if het {
             break;
         }
         cursor = json.max_cursor;
@@ -309,7 +546,19 @@ async fn fetch_channel_api(
         tokio::time::sleep(Duration::from_millis(400)).await;
     }
 
-    Ok(all)
+    // Dấu hiệu "bị đối xử như khách vãng lai": Douyin bảo hết video sau 1-2
+    // trang. ĐO THẬT trên kênh anh Hùng gửi — không cookie: dừng ở trang 2 với
+    // 21 video; có cookie đăng nhập: đi 14 trang, 250 video. Nên `pages <= 2`
+    // + dừng "tự nhiên" là cờ đáng ngờ (caller chỉ cảnh báo khi user CHƯA có
+    // cookie đăng nhập, để kênh thật sự ít video không bị báo nhầm).
+    let cut_after_first_page = stopped_by.is_none() && pages <= 2 && !all.is_empty();
+
+    CrawlOutcome {
+        posts: all,
+        stopped_by,
+        cut_after_first_page,
+        pages,
+    }
 }
 
 /// Gọi 1 endpoint cụ thể. Trả về (posts, has_more) hoặc lỗi.
@@ -497,6 +746,18 @@ pub async fn scrape_douyin_channel(
         serde_json::json!({ "label": "douyin-api", "secUid": &sec_uid }),
     );
 
+    // Cookie đăng nhập của user — THỨ QUYẾT ĐỊNH lấy được ~20 hay hàng trăm
+    // video. Bản trước không hề đọc nó (xem `netscape_to_cookie_header`).
+    let cookie = douyin_cookie_header(&settings.get());
+    let co_dang_nhap = cookie.as_deref().map(cookie_has_login).unwrap_or(false);
+    eprintln!(
+        "[douyin] cookie: {} (đăng nhập: {co_dang_nhap})",
+        match &cookie {
+            Some(c) => format!("{} cookie douyin.com", c.split("; ").count()),
+            None => "KHÔNG có".into(),
+        }
+    );
+
     // Đường CHÍNH: API douyin.com tự ký a_bogus. QUAN TRỌNG — thử TRỰC TIẾP
     // trước (IP thật): Douyin thường chặn proxy DATACENTER (đã kiểm chứng:
     // proxy datacenter → ttwid fail), nên KHÔNG ép proxy cho Douyin dù user
@@ -508,23 +769,52 @@ pub async fn scrape_douyin_channel(
     }
     let mut api_err: Option<String> = None;
     for (i, px) in attempts.iter().enumerate() {
-        match fetch_channel_api(&app, &sec_uid, px).await {
-            Ok(posts) if !posts.is_empty() => {
-                let _ = app.emit(
-                    "bqd-douyin-scraper-progress",
-                    serde_json::json!({ "count": posts.len() }),
+        let out = fetch_channel_api(&app, &sec_uid, px, cookie.as_deref()).await;
+        if !out.posts.is_empty() {
+            let _ = app.emit(
+                "bqd-douyin-scraper-progress",
+                serde_json::json!({ "count": out.posts.len() }),
+            );
+            // Nói THẲNG khi kết quả có mùi thiếu, thay vì im lặng trả 20 video
+            // rồi để anh Hùng tự đoán.
+            let mut note = String::new();
+            if let Some(f) = &out.stopped_by {
+                note = format!(
+                    "Mới lấy được {} video thì Douyin dừng lượt quét.\n{}",
+                    out.posts.len(),
+                    f.message(co_dang_nhap)
                 );
-                return Ok(posts);
+            } else if out.cut_after_first_page && !co_dang_nhap {
+                note = format!(
+                    "CHỈ lấy được {} video — Douyin báo hết ngay sau trang đầu. \
+                     Đây là cách Douyin đối xử với KHÁCH VÃNG LAI: chưa đăng nhập \
+                     thì nó chỉ cho xem khoảng 20 video mới nhất.\n\
+                     Muốn lấy ĐỦ cả kênh: vào Cài đặt → Cookie, nạp file cookie đã \
+                     đăng nhập douyin.com (đo thật trên kênh này: không cookie 21 \
+                     video, có cookie 250 video).",
+                    out.posts.len()
+                );
             }
-            Ok(_) => {
+            if !note.is_empty() {
+                let _ = app.emit(
+                    "bqd-douyin-scraper-note",
+                    serde_json::json!({ "message": note }),
+                );
+            }
+            return Ok(out.posts);
+        }
+        match out.stopped_by {
+            Some(f) => {
+                eprintln!("[douyin] lần {i} (proxy={}) lỗi: {f:?}", px.is_some());
+                api_err = Some(f.message(co_dang_nhap));
+            }
+            None => {
                 eprintln!("[douyin] lần {i} (proxy={}) rỗng", px.is_some());
                 api_err.get_or_insert_with(|| {
-                    "Douyin trả về rỗng (kênh riêng tư/không có video, hoặc bị chặn tạm)".into()
+                    "Douyin trả danh sách RỖNG — kênh không có video công khai, \
+                     đã bị xoá, hoặc để riêng tư."
+                        .into()
                 });
-            }
-            Err(e) => {
-                eprintln!("[douyin] lần {i} (proxy={}) lỗi: {e:?}", px.is_some());
-                api_err = Some(format!("{e}"));
             }
         }
     }
@@ -550,16 +840,15 @@ pub async fn scrape_douyin_channel(
             );
             Ok(posts)
         }
-        // Cả API chính lẫn tikwm đều thất bại → báo LỖI THẬT của đường chính
-        // (đường chính mới là cái quan trọng), kèm sec_uid để chẩn đoán.
+        // Cả API chính lẫn tikwm đều thất bại → báo LỖI THẬT của đường chính,
+        // đã phân loại sẵn (chặn / cookie / riêng tư / đổi API).
+        //
+        // KHÔNG in sec_uid nữa: nó là định danh của user, và câu cũ "kiểm tra
+        // link kênh" khiến anh Hùng đi soi lại cái link vốn ĐÚNG, trong khi
+        // nguyên nhân thật là Douyin chặn theo tần suất.
         _ => Err(AppError::Other(format!(
-            "Không lấy được video của kênh Douyin này.\n\
-             Nguyên nhân (từ API chính): {}\n\
-             sec_uid: {}\n\
-             Thử: kiểm tra link kênh (dạng douyin.com/user/…), thử lại sau vài phút, \
-             hoặc kênh có thể riêng tư/trống.",
-            api_err.unwrap_or_else(|| "không rõ".into()),
-            &sec_uid[..sec_uid.len().min(24)],
+            "Không lấy được video của kênh Douyin này.\n\n{}",
+            api_err.unwrap_or_else(|| "Không rõ nguyên nhân.".into()),
         ))),
     }
 }
@@ -620,5 +909,166 @@ mod tests_null_list {
         let r: PostResp =
             serde_json::from_str(r#"{"status_code":0,"aweme_list":null}"#).unwrap();
         assert_eq!(r.aweme_list.len(), 0);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  CỔNG: trang CHẶN của Douyin không được coi là "dữ liệu không hợp lệ"
+// ─────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests_phan_loai_loi {
+    use super::*;
+
+    /// THÂN THẬT Douyin trả khi chặn — bắt được 16/08/2026 bằng
+    /// `tests/douyin_block.rs`: sau 25 request liên tiếp, HTTP 403 +
+    /// text/plain 45 byte. Bản cũ nhét thẳng cái này vào serde_json và in ra
+    /// "Dữ liệu Douyin không hợp lệ: expected value at line 1 column 1" —
+    /// đúng câu anh Hùng chụp màn hình gửi.
+    const THAN_CHAN_THAT: &str = "Blocked by ArgusSecurityPlugin Validate Error";
+
+    #[test]
+    fn trang_chan_403_phai_ra_bi_chan_khong_phai_du_lieu_hong() {
+        let e = classify_body(403, "text/plain", THAN_CHAN_THAT).unwrap_err();
+        assert_eq!(e, DouyinFail::Blocked, "403 + Argus phải là BỊ CHẶN");
+
+        let msg = e.message(true);
+        assert!(msg.contains("CHẶN TẠM THỜI"), "phải nói bị chặn: {msg}");
+        assert!(
+            msg.contains("KHÔNG phải lỗi link kênh"),
+            "phải nói rõ link không sai, đừng bắt user đi soi link: {msg}"
+        );
+        assert!(
+            !msg.contains("không hợp lệ"),
+            "TUYỆT ĐỐI không được đổ lỗi 'dữ liệu không hợp lệ' khi bị chặn: {msg}"
+        );
+    }
+
+    /// Chặn nhưng máy chủ trả 200 (đã gặp biến thể) — vẫn phải nhận ra.
+    #[test]
+    fn nhan_ra_chan_ca_khi_status_200() {
+        assert_eq!(
+            classify_body(200, "text/plain", THAN_CHAN_THAT).unwrap_err(),
+            DouyinFail::Blocked
+        );
+    }
+
+    /// Thân rỗng (đo thật: xảy ra với MỌI request khi không có ttwid) phải là
+    /// một loại RIÊNG, có lời khuyên riêng.
+    #[test]
+    fn than_rong_la_loai_rieng() {
+        assert_eq!(
+            classify_body(200, "text/plain", "").unwrap_err(),
+            DouyinFail::EmptyBody
+        );
+        assert_eq!(
+            classify_body(200, "text/plain", "   \n").unwrap_err(),
+            DouyinFail::EmptyBody
+        );
+    }
+
+    /// JSON thật thì phải đi lọt.
+    #[test]
+    fn json_that_van_boc_duoc() {
+        let v = classify_body(200, "application/json", r#"{"status_code":0}"#).unwrap();
+        assert_eq!(v.get("status_code").and_then(|x| x.as_i64()), Some(0));
+    }
+
+    /// HTML lạ = Douyin đổi API / bắt xác minh — phải nói thế, và phải KÈM
+    /// nội dung nhận được để còn chẩn đoán.
+    #[test]
+    fn html_la_bao_doi_api_kem_noi_dung() {
+        let e = classify_body(200, "text/html", "<!DOCTYPE html><html>xac minh").unwrap_err();
+        match &e {
+            DouyinFail::NotJson { head, .. } => assert!(head.contains("DOCTYPE")),
+            other => panic!("phải là NotJson, thực tế {other:?}"),
+        }
+        let msg = e.message(false);
+        assert!(msg.contains("đổi API") || msg.contains("xác minh"), "{msg}");
+    }
+
+    /// Mỗi loại lỗi phải cho ra lời khuyên KHÁC nhau — nếu ai đó gộp chung
+    /// message thì cổng này đỏ.
+    #[test]
+    fn moi_loai_mot_loi_khuyen_khac_nhau() {
+        let msgs = [
+            DouyinFail::Blocked.message(true),
+            DouyinFail::EmptyBody.message(true),
+            DouyinFail::ApiCode(2154).message(true),
+            DouyinFail::ApiCode(8).message(true),
+            DouyinFail::Network("timeout".into()).message(true),
+        ];
+        for (i, a) in msgs.iter().enumerate() {
+            for (j, b) in msgs.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "loại {i} và {j} cho ra CÙNG một câu");
+                }
+            }
+        }
+    }
+
+    /// Chưa có cookie thì phải bảo user nạp cookie; có rồi thì bảo cookie hết hạn.
+    #[test]
+    fn loi_khuyen_cookie_doi_theo_tinh_trang() {
+        assert!(DouyinFail::Blocked.message(false).contains("CHƯA nạp cookie"));
+        assert!(DouyinFail::Blocked.message(true).contains("hết hạn"));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  CỔNG: đọc cookie đăng nhập Douyin từ file Netscape
+// ─────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests_cookie {
+    use super::*;
+
+    /// Hình dạng THẬT của file cookie yt-dlp/trình duyệt xuất ra: có dòng
+    /// bình luận, có tiền tố `#HttpOnly_`, có cả domain khác phải loại bỏ.
+    const FILE_MAU: &str = "\
+# Netscape HTTP Cookie File
+# This file is generated by yt-dlp.
+
+.douyin.com\tTRUE\t/\tTRUE\t1799999999\tttwid\tGIA_TRI_TTWID
+#HttpOnly_.douyin.com\tTRUE\t/\tTRUE\t1799999999\tsessionid\tGIA_TRI_PHIEN
+.douyin.com\tTRUE\t/\tTRUE\t1799999999\tsid_guard\tGIA_TRI_GUARD
+www.douyin.com\tFALSE\t/\tFALSE\t1799999999\ts_v_web_id\tGIA_TRI_WEBID
+.youtube.com\tTRUE\t/\tTRUE\t1799999999\tSID\tKHONG_LIEN_QUAN
+.douyin.com\tTRUE\t/\tTRUE\t1799999999\ttrong_rong\t
+";
+
+    #[test]
+    fn boc_dung_cookie_douyin_bo_domain_khac() {
+        let h = netscape_to_cookie_header(FILE_MAU, "douyin.com").expect("phải có cookie");
+        assert!(h.contains("ttwid=GIA_TRI_TTWID"));
+        assert!(h.contains("sessionid=GIA_TRI_PHIEN"), "phải bóc được dòng #HttpOnly_");
+        assert!(h.contains("s_v_web_id=GIA_TRI_WEBID"), "www.douyin.com cũng phải lấy");
+        assert!(!h.contains("SID=KHONG_LIEN_QUAN"), "KHÔNG được lẫn cookie YouTube");
+        assert!(!h.contains("trong_rong"), "cookie rỗng giá trị phải bỏ");
+    }
+
+    #[test]
+    fn nhan_ra_cookie_da_dang_nhap() {
+        let h = netscape_to_cookie_header(FILE_MAU, "douyin.com").unwrap();
+        assert!(cookie_has_login(&h), "có sessionid/sid_guard = đã đăng nhập");
+        assert!(
+            !cookie_has_login("ttwid=abc; s_v_web_id=xyz"),
+            "chỉ ttwid = KHÁCH VÃNG LAI, không phải đăng nhập"
+        );
+    }
+
+    #[test]
+    fn file_khong_co_douyin_tra_none() {
+        let chi_youtube = ".youtube.com\tTRUE\t/\tTRUE\t1\tSID\tabc\n";
+        assert!(netscape_to_cookie_header(chi_youtube, "douyin.com").is_none());
+        assert!(netscape_to_cookie_header("", "douyin.com").is_none());
+    }
+
+    /// Dòng hỏng/thiếu cột không được làm sập cả file cookie.
+    #[test]
+    fn dong_hong_khong_lam_sap() {
+        let ban = format!("{FILE_MAU}.douyin.com\tTRUE\tthieu_cot\n\n\t\t\n");
+        let h = netscape_to_cookie_header(&ban, "douyin.com").expect("vẫn phải bóc được");
+        assert!(h.contains("sessionid=GIA_TRI_PHIEN"));
     }
 }

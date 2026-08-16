@@ -26,6 +26,8 @@ export const EVENTS = {
   QueueUpdated: "queue://updated",
   DouyinScraperProgress: "bqd-douyin-scraper-progress",
   DouyinScraperStarted: "bqd-douyin-scraper-started",
+  /** Cảnh báo lượt quét Douyin bị thiếu/bị chặn (vẫn có kết quả một phần). */
+  DouyinScraperNote: "bqd-douyin-scraper-note",
 } as const;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -81,6 +83,10 @@ export interface DouyinScraperProgressPayload {
 export interface DouyinScraperStartedPayload {
   label: string;
   secUid: string;
+}
+
+export interface DouyinScraperNotePayload {
+  message: string;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -159,6 +165,12 @@ export function onDouyinScraperStarted(
   handler: (p: DouyinScraperStartedPayload) => void,
 ): Promise<UnlistenFn> {
   return tauriListen(EVENTS.DouyinScraperStarted, handler);
+}
+
+export function onDouyinScraperNote(
+  handler: (p: DouyinScraperNotePayload) => void,
+): Promise<UnlistenFn> {
+  return tauriListen(EVENTS.DouyinScraperNote, handler);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
