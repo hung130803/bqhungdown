@@ -14,7 +14,10 @@ use std::path::PathBuf;
 /// (vd: v2 sửa nhận diện Shorts theo tab + ngưỡng 90s). Kho lưu bởi bản CŨ có
 /// version khác -> coi như MISS -> tự lấy lại 1 lần cho đúng. Nhờ vậy 300 máy
 /// nhân viên có kho cũ mis-tag Shorts tự khỏi mà không cần bấm gì.
-const CACHE_SCHEMA_VERSION: u32 = 7;
+/// v8: video Douyin nay CO ngay dang (`upload_date`) + luot tim (`like_count`).
+/// Kho luu boi ban <= v7 khong co hai truong nay, giu lai thi anh Hung cap
+/// nhat xong mo kenh ra VAN thay trong tron va tuong chua sua gi.
+const CACHE_SCHEMA_VERSION: u32 = 8;
 
 #[derive(Serialize, Deserialize)]
 struct CachedChannel {
