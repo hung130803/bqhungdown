@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { platformInfo } from "@/lib/platforms";
 
@@ -59,6 +59,43 @@ async function getProxiedSrc(src: string): Promise<string> {
 export function Thumbnail({ src, extractor, alt }: Props) {
   const [errored, setErrored] = useState(false);
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(src ?? null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  /** Đã lọt vào (gần) tầm nhìn chưa — CHỈ khi rồi mới đi tải ảnh qua backend. */
+  const [inView, setInView] = useState(false);
+
+  // ── CHỈ TẢI ẢNH CỦA DÒNG ĐANG NHÌN THẤY ───────────────────────────────
+  // Ảnh Douyin/Instagram/Bilibili bị CDN chặn hotlink nên phải nhờ backend
+  // tải hộ (1 lượt IPC + 1 request cho MỖI dòng). Không chặn theo tầm nhìn
+  // thì mở kênh 250 bài là bắn 250 request một lúc — đo được đúng 250, xem
+  // `ChannelInput.perf.test.tsx`. Kênh to 3600 bài thì 3600.
+  //
+  // Hai cái hỏng vì chuyện này: (1) giật + tốn RAM, vì mỗi ảnh về dạng data
+  // URL base64 phình ~33%; (2) Douyin CHẶN THEO TẦN SUẤT — nã vài trăm
+  // request cùng lúc vào CDN của họ là tự chuốc 403.
+  //
+  // `loading="lazy"` của <img> KHÔNG cứu được: lúc đó ảnh đã tải xong rồi.
+  useEffect(() => {
+    // WebView cũ / môi trường không có API này -> giữ nguyên nếp cũ (tải ngay)
+    // để không bao giờ có chuyện ảnh không bao giờ hiện.
+    if (typeof IntersectionObserver === "undefined") {
+      setInView(true);
+      return;
+    }
+    const el = boxRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setInView(true);
+          io.disconnect(); // tải một lần là đủ, khỏi theo dõi tiếp
+        }
+      },
+      // Tải sớm hơn tầm nhìn một quãng để cuộn tới là ảnh đã sẵn.
+      { rootMargin: "400px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
 
   useEffect(() => {
     setErrored(false);
@@ -68,6 +105,11 @@ export function Thumbnail({ src, extractor, alt }: Props) {
     }
     if (!needsProxy(src)) {
       setResolvedSrc(src);
+      return;
+    }
+    // Ảnh phải nhờ backend tải: đợi tới lượt nhìn thấy đã.
+    if (!inView) {
+      setResolvedSrc(dataUrlCache.get(src) ?? null);
       return;
     }
     // Cache hit → set sync.
@@ -89,13 +131,13 @@ export function Thumbnail({ src, extractor, alt }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [src]);
+  }, [src, inView]);
 
   const showImg = !!resolvedSrc && !errored;
   const p = platformInfo(extractor);
 
   return (
-    <div className="relative w-full h-full rounded-md overflow-hidden bg-surface-2 shrink-0">
+    <div ref={boxRef} className="relative w-full h-full rounded-md overflow-hidden bg-surface-2 shrink-0">
       {showImg && (
         <img
           src={resolvedSrc!}
