@@ -442,13 +442,17 @@ pub async fn fetch_channel(
         }
     }
 
+    // Douyin: API web tự ký a_bogus + cookie đăng nhập của user.
+    //
+    // Ở ĐÂY TRƯỚC KIA CHẶN CỨNG với câu "Douyin chặn quá chặt nên không thể tự
+    // lấy danh sách kênh được". Câu đó GIỜ SAI: đo 16/08/2026 lấy đủ 250/250
+    // video của kênh anh Hùng gửi khi có cookie đăng nhập. `limit` được tôn
+    // trọng để lượt kiểm của watcher không bò hết trang (300 kênh mà bò hết
+    // thì chắc chắn ăn 403 "Blocked by ArgusSecurityPlugin").
     if lower_url.contains("douyin.com/user/") {
-        return Err(AppError::YtDlpFailed(
-            "Douyin chặn quá chặt nên không thể tự lấy danh sách kênh được. \
-             Cách tải: mở Douyin trong trình duyệt, sao chép link từng video bạn muốn tải, \
-             rồi dán vào tab \"Hàng loạt\" (mỗi link 1 dòng). App sẽ tải hết bằng tikwm proxy."
-                .into(),
-        ));
+        let (info, vids) =
+            crate::douyin_scraper::fetch_channel_listing_douyin(app, url, limit, settings).await?;
+        return finalize_listing(app, info, vids, settings);
     }
 
     // Đường tắt: nếu là kênh YouTube VÀ người dùng đã nhập API key → dùng

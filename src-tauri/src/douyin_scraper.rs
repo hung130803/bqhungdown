@@ -443,11 +443,16 @@ async fn fetch_page_retry(
 /// KHÁC BẢN CŨ: gửi cookie đăng nhập của user (nếu có) — đây là thứ quyết định
 /// lấy được ~20 hay HÀNG TRĂM video; và ĐỌC HTTP status thay vì nhét thẳng
 /// trang chặn 403 vào serde_json.
+///
+/// `limit` = 0 nghĩa là lấy HẾT. Khác 0 thì dừng ngay khi đủ — QUAN TRỌNG cho
+/// đường theo dõi kênh: anh Hùng có 200-300 kênh, mỗi lượt kiểm mà bò hết
+/// trang thì chắc chắn ăn 403 "Blocked by ArgusSecurityPlugin".
 async fn fetch_channel_api(
     app: &tauri::AppHandle,
     sec_uid: &str,
     proxy: &Option<String>,
     cookie: Option<&str>,
+    limit: usize,
 ) -> CrawlOutcome {
     let client = match with_proxy(
         reqwest::Client::builder()
@@ -537,6 +542,11 @@ async fn fetch_channel_api(
         );
 
         let _ = got;
+        // Đủ số cần thì dừng — đừng bò tiếp cho Douyin có cớ chặn.
+        if limit > 0 && all.len() >= limit {
+            all.truncate(limit);
+            break;
+        }
         let het = json.has_more != 1 || json.max_cursor == 0 || json.max_cursor == cursor;
         if het {
             break;
@@ -559,6 +569,87 @@ async fn fetch_channel_api(
         cut_after_first_page,
         pages,
     }
+}
+
+/// Lấy danh sách kênh Douyin ở dạng `ChannelInfo` + `ChannelVideo` cho đường
+/// "Theo dõi kênh" / `fetch_channel_listing` dùng chung với YouTube/TikTok.
+///
+/// TRƯỚC BẢN NÀY đường đó CHẶN CỨNG Douyin bằng câu "Douyin chặn quá chặt nên
+/// không thể tự lấy danh sách kênh được" — câu đó GIỜ ĐÃ SAI: đo 16/08/2026
+/// lấy được 250/250 video khi có cookie đăng nhập.
+///
+/// `limit = 0` = lấy hết (nút "Lấy danh sách"); `limit > 0` = lượt kiểm định
+/// kỳ của watcher, dừng sớm để khỏi bị Douyin chặn.
+pub async fn fetch_channel_listing_douyin(
+    app: &tauri::AppHandle,
+    url: &str,
+    limit: u32,
+    settings: &Settings,
+) -> AppResult<(crate::models::ChannelInfo, Vec<crate::models::ChannelVideo>)> {
+    let sec_uid = extract_sec_uid(url)
+        .ok_or_else(|| AppError::Other("Link Douyin phải dạng douyin.com/user/…".into()))?;
+
+    let cookie = douyin_cookie_header(settings);
+    let co_dang_nhap = cookie.as_deref().map(cookie_has_login).unwrap_or(false);
+
+    let out = fetch_channel_api(app, &sec_uid, &None, cookie.as_deref(), limit as usize).await;
+    if out.posts.is_empty() {
+        let msg = match out.stopped_by {
+            Some(f) => f.message(co_dang_nhap),
+            None => "Kênh Douyin này không có video công khai.".into(),
+        };
+        return Err(AppError::YtDlpFailed(msg));
+    }
+
+    // Nói thẳng khi danh sách có mùi bị cắt vì chưa đăng nhập.
+    let api_note = if out.cut_after_first_page && !co_dang_nhap && limit == 0 {
+        Some(
+            "Chưa có cookie đăng nhập Douyin nên chỉ lấy được khoảng 20 video mới \
+             nhất. Nạp cookie douyin.com trong Cài đặt để lấy đủ cả kênh."
+                .to_string(),
+        )
+    } else {
+        out.stopped_by.as_ref().map(|f| f.message(co_dang_nhap))
+    };
+
+    let info = crate::models::ChannelInfo {
+        url: url.to_string(),
+        title: format!("Kênh Douyin — {} video", out.posts.len()),
+        thumbnail: out.posts.first().map(|p| p.thumbnail.clone()),
+        video_count: Some(out.posts.len() as u32),
+        extractor: "douyin".into(),
+        hidden_downloaded: None,
+        channel_id: Some(sec_uid),
+        api_note,
+    };
+    let videos = out
+        .posts
+        .into_iter()
+        .map(|p| crate::models::ChannelVideo {
+            url: p.url,
+            title: if p.title.is_empty() {
+                "(Không có tiêu đề)".into()
+            } else {
+                p.title
+            },
+            duration_sec: None,
+            view_count: None,
+            upload_date: None,
+            thumbnail: if p.thumbnail.is_empty() {
+                None
+            } else {
+                Some(p.thumbnail)
+            },
+            is_photo: p.is_photo,
+            // Douyin không có khái niệm Shorts; extractor cũng không trả
+            // live_status nên KHÔNG lọc gì thêm (bất biến trong CLAUDE.md:
+            // vá quá tay ở đây là mất video thật).
+            is_short: false,
+            hashtags: Vec::new(),
+            downloaded: false,
+        })
+        .collect();
+    Ok((info, videos))
 }
 
 /// Gọi 1 endpoint cụ thể. Trả về (posts, has_more) hoặc lỗi.
@@ -769,7 +860,7 @@ pub async fn scrape_douyin_channel(
     }
     let mut api_err: Option<String> = None;
     for (i, px) in attempts.iter().enumerate() {
-        let out = fetch_channel_api(&app, &sec_uid, px, cookie.as_deref()).await;
+        let out = fetch_channel_api(&app, &sec_uid, px, cookie.as_deref(), 0).await;
         if !out.posts.is_empty() {
             let _ = app.emit(
                 "bqd-douyin-scraper-progress",
