@@ -267,7 +267,10 @@ pub fn classify_body(status: u16, ctype: &str, body: &str) -> Result<serde_json:
         return Err(DouyinFail::EmptyBody);
     }
     // Trang chặn của Douyin: 403 + text/plain "Blocked by ArgusSecurityPlugin".
-    if status == 403 || body.contains("Blocked by ArgusSecurityPlugin") {
+    // Chỉ quét chuỗi khi thân KHÔNG phải JSON — thân JSON thật nặng tới vài MB,
+    // quét mỗi trang là phí công vô ích.
+    let la_json = body.trim_start().starts_with(['{', '[']);
+    if status == 403 || (!la_json && body.contains("Blocked by ArgusSecurityPlugin")) {
         return Err(DouyinFail::Blocked);
     }
     match serde_json::from_str::<serde_json::Value>(body) {
