@@ -665,8 +665,13 @@ pub async fn fetch_channel_listing_douyin(
         channel_id: Some(sec_uid),
         api_note,
     };
-    let videos = out
-        .posts
+    Ok((info, posts_to_channel_videos(out.posts)))
+}
+
+/// Đổi bài Douyin -> `ChannelVideo` cho UI. Tách riêng để test được CẢ dây
+/// chuyền (JSON thật -> dòng hiện trên màn) mà không cần dựng `AppHandle`.
+fn posts_to_channel_videos(posts: Vec<DouyinPost>) -> Vec<crate::models::ChannelVideo> {
+    posts
         .into_iter()
         .map(|p| crate::models::ChannelVideo {
             url: p.url,
@@ -697,8 +702,7 @@ pub async fn fetch_channel_listing_douyin(
             hashtags: Vec::new(),
             downloaded: false,
         })
-        .collect();
-    Ok((info, videos))
+        .collect()
 }
 
 /// Gọi 1 endpoint cụ thể. Trả về (posts, has_more) hoặc lỗi.
@@ -1110,6 +1114,34 @@ mod tests_null_list {
         assert_eq!(posts[1].like_count, None, "statistics rỗng -> None chứ không phải Some(0)");
         assert_eq!(unix_to_yyyymmdd(None), None);
         assert_eq!(unix_to_yyyymmdd(Some(0)), None, "mốc 0 KHÔNG được ra 19700101");
+    }
+
+    /// CẢ DÂY CHUYỀN: JSON y như Douyin trả -> đúng cái dòng UI hiện ra.
+    /// Đây là cổng giữ lời hứa với anh Hùng "thấy lượt xem + ngày đăng".
+    #[test]
+    fn ca_day_chuyen_json_thanh_dong_tren_man_hinh() {
+        let raw = r#"{
+            "status_code": 0, "has_more": 1,
+            "aweme_list": [
+                {"aweme_id":"7655989781075217704","desc":"2026下半年按这份片单来",
+                 "create_time":1785239590, "images": null,
+                 "video":{"cover":{"url_list":["https://p3.douyinpic.com/a.jpeg"]}},
+                 "statistics":{"play_count":0,"digg_count":35316}}
+            ]
+        }"#;
+        let r: PostResp = serde_json::from_str(raw).unwrap();
+        let videos = posts_to_channel_videos(awemes_to_posts(r.aweme_list));
+        assert_eq!(videos.len(), 1);
+        let v = &videos[0];
+
+        assert_eq!(v.upload_date.as_deref(), Some("20260728"), "PHẢI có ngày đăng");
+        assert_eq!(v.like_count, Some(35316), "PHẢI có lượt tim");
+        assert_eq!(
+            v.view_count, None,
+            "view PHẢI là None — Douyin trả play_count=0, hiện 0 view là BỊA"
+        );
+        assert_eq!(v.url, "https://www.douyin.com/video/7655989781075217704");
+        assert!(!v.is_photo);
     }
 }
 
