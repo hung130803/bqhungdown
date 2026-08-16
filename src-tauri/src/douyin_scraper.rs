@@ -1155,6 +1155,29 @@ www.douyin.com\tFALSE\t/\tFALSE\t1799999999\ts_v_web_id\tGIA_TRI_WEBID
         assert!(netscape_to_cookie_header("", "douyin.com").is_none());
     }
 
+    /// Mắt xích cuối: app phải đọc ĐÚNG `settings.cookies_file`. Nếu ai đó đổi
+    /// sang field khác (hay quên nối dây) thì Douyin lại tụt về ~20 video mà
+    /// KHÔNG có lỗi nào nổ ra — đúng kiểu hỏng âm thầm anh Hùng đã dính.
+    #[test]
+    fn doc_dung_field_cookies_file_trong_settings() {
+        let p = std::env::temp_dir().join(format!("bqd-ck-test-{}.txt", std::process::id()));
+        std::fs::write(&p, FILE_MAU).unwrap();
+
+        let mut s = Settings::default();
+        assert!(
+            douyin_cookie_header(&s).is_none(),
+            "chưa cấu hình cookie thì phải là None"
+        );
+
+        s.cookies_file = Some(p.to_string_lossy().to_string());
+        let h = douyin_cookie_header(&s).expect("phải đọc được cookie từ settings");
+        assert!(cookie_has_login(&h), "phải thấy cookie đăng nhập");
+
+        // File biến mất / đường dẫn sai -> None, KHÔNG được panic.
+        std::fs::remove_file(&p).ok();
+        assert!(douyin_cookie_header(&s).is_none(), "file mất thì trả None");
+    }
+
     /// Dòng hỏng/thiếu cột không được làm sập cả file cookie.
     #[test]
     fn dong_hong_khong_lam_sap() {
