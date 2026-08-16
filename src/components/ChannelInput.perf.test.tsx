@@ -163,12 +163,13 @@ describe("Danh sách kênh — đo tốc độ khi số bài tăng 21 -> 3600", 
   it("TÍCH 1 ô trong danh sách 250 bài phải nhanh (không dựng lại cả list)", () => {
     napVaoStore(duLieuDouyin(250));
     render(<ChannelInput onSubmit={async () => undefined} />);
+    // Kênh Douyin không có ô "Lấy thêm số view…" (vô tác dụng) nên mọi
+    // checkbox ở đây đều là một bài.
     const ô = screen.getAllByRole("checkbox");
-    // ô[0] là "Lấy thêm số view…", các ô sau là từng bài.
-    expect(ô.length).toBeGreaterThan(250);
+    expect(ô.length).toBeGreaterThanOrEqual(250);
 
     const đo: number[] = [];
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 0; i < 5; i++) {
       const t0 = performance.now();
       act(() => {
         ô[i].dispatchEvent(new MouseEvent("click", { bubbles: true }));

@@ -347,6 +347,9 @@ export function ChannelInput({ onSubmit }: Props) {
   // Tách video → 2 nhóm rồi lọc/sort riêng để mỗi cột độc lập.
   // Chỉ áp dụng cho YouTube — nền tảng khác (TikTok/Douyin) hiển thị 1 list.
   const isYoutube = (info?.extractor ?? "").toLowerCase().includes("youtube");
+  /** Đang làm việc với kênh Douyin — theo link đang gõ HOẶC kết quả đã lấy. */
+  const douyinMode =
+    isDouyinChannelUrl(url) || (info?.extractor ?? "").toLowerCase().includes("douyin");
   const longList = useMemo(
     () => (isYoutube ? applyFilter(videos.filter((v) => !isShortVideo(v))) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -728,20 +731,32 @@ export function ChannelInput({ onSubmit }: Props) {
           </>
         )}
       </div>
-      <label className="inline-flex items-center gap-2 text-xs text-muted">
-        <input
-          type="checkbox"
-          checked={detailed}
-          onChange={(e) => setDetailed(e.target.checked)}
-          disabled={loading}
-          className="h-3.5 w-3.5"
-        />
-        <span>Lấy thêm số view + ngày chính xác (chậm hơn nhiều)</span>
-      </label>
-      <p className="text-[11px] text-muted -mt-1">
-        💡 Đã nhập <b>YouTube API key</b> trong Cài đặt? Thì khỏi cần tích ô trên —
-        view/thời lượng/ngày/hashtag chuẩn tự lấy cho cả kênh trong vài giây.
-      </p>
+      {/* Ô này CHỈ có tác dụng với YouTube: đường Douyin trả kết quả ngay,
+          không đi qua bước "dò thêm" nên tích vào cũng không được gì. Hiện
+          một ô vô tác dụng chỉ khiến anh Hùng tích rồi ngồi chờ vô ích. */}
+      {douyinMode ? (
+        <p className="text-[11px] text-muted">
+          Kênh Douyin: <b>ngày đăng</b> và <b>lượt tim</b> đã lấy sẵn cùng danh sách,
+          không cần bật gì thêm. Riêng <b>lượt xem</b> thì Douyin không cho lấy.
+        </p>
+      ) : (
+        <>
+          <label className="inline-flex items-center gap-2 text-xs text-muted">
+            <input
+              type="checkbox"
+              checked={detailed}
+              onChange={(e) => setDetailed(e.target.checked)}
+              disabled={loading}
+              className="h-3.5 w-3.5"
+            />
+            <span>Lấy thêm số view + ngày chính xác (chậm hơn nhiều)</span>
+          </label>
+          <p className="text-[11px] text-muted -mt-1">
+            💡 Đã nhập <b>YouTube API key</b> trong Cài đặt? Thì khỏi cần tích ô trên —
+            view/thời lượng/ngày/hashtag chuẩn tự lấy cho cả kênh trong vài giây.
+          </p>
+        </>
+      )}
       {loading && elapsedSec > 60 && (
         <p className="text-xs text-warning">
           Lấy danh sách lâu hơn dự kiến. Có thể bấm "Huỷ" và thử lại.

@@ -208,9 +208,9 @@ describe("Kênh Douyin — hiện ngày đăng + lượt tim, KHÔNG bịa lư�
     render(<ChannelInput onSubmit={async () => undefined} />);
     expect(screen.queryByText(/0 view/)).not.toBeInTheDocument();
     expect(
-      screen.getByText(/Douyin không cho lấy/),
+      screen.getAllByText(/Douyin không cho lấy/).length,
       "phải nói rõ vì sao thiếu lượt xem, đừng im lặng để trống",
-    ).toBeInTheDocument();
+    ).toBeGreaterThan(0);
   });
 
   it("'Mới nhất' sắp theo NGÀY THẬT, không tin thứ tự Douyin trả (bài ghim lên đầu)", () => {
