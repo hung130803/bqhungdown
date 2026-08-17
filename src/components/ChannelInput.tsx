@@ -211,27 +211,25 @@ export function ChannelInput({ onSubmit }: Props) {
     try {
       // ── Douyin: use WebView-based scraper ───────────────────────────────
       if (isDouyinChannelUrl(trimmed)) {
-        const posts = await cmd.scrapeDouyinChannel(trimmed);
+        // DÙNG THẲNG mảng Rust trả về. Ở 0.3.0 chỗ này có một vòng `.map()`
+        // tự dựng lại ChannelVideo và chỉ chép 4 trường — `uploadDate` và
+        // `likeCount` Rust gửi lên bị vứt đi ngay tại đây. Đó là lý do anh
+        // Hùng cài đúng 0.3.0 mà vẫn không thấy ngày đăng lẫn lượt tim, dù
+        // Rust đúng và cả 2 bộ test đều xanh. ĐỪNG dựng lại đối tượng ở đây.
+        const videos = await cmd.scrapeDouyinChannel(trimmed);
 
-        if (posts.length === 0) {
+        if (videos.length === 0) {
           setError("Không lấy được video nào từ kênh này.");
           return;
         }
 
-        // Convert scraped posts → ChannelVideo format.
         const info: ChannelInfo = {
           url: trimmed,
-          title: `Kênh Douyin — ${posts.length} video`,
-          thumbnail: posts[0]?.thumbnail ?? null,
-          videoCount: posts.length,
+          title: `Kênh Douyin — ${videos.length} video`,
+          thumbnail: videos[0]?.thumbnail ?? null,
+          videoCount: videos.length,
           extractor: "douyin",
         };
-        const videos: ChannelVideo[] = posts.map((p) => ({
-          url: p.url,
-          title: p.title || "(Không có tiêu đề)",
-          thumbnail: p.thumbnail || null,
-          isPhoto: p.isPhoto,
-        }));
         setResult(info, videos);
         return;
       }

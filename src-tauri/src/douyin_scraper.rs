@@ -855,12 +855,24 @@ fn format_error(e: &AppError) -> String {
     }
 }
 
+/// Trả THẲNG `ChannelVideo` — KHÔNG trả `DouyinPost` thô nữa.
+///
+/// LỖI THẬT 0.3.0 (anh Hùng cài rồi vẫn không thấy ngày đăng / lượt tim):
+/// lệnh này trả `DouyinPost` thô, rồi `ChannelInput.tsx` TỰ VIẾT LẠI một bản
+/// đồ post → ChannelVideo và bản đồ đó chỉ chép 4 trường (url/title/thumbnail/
+/// isPhoto). `createTime` và `likeCount` Rust gửi lên bị VỨT BỎ ngay tại giao
+/// diện. Rust đúng, `rename_all` đúng, test Rust xanh, test TS xanh — mà tính
+/// năng vẫn chết, vì có HAI đường đổi post → ChannelVideo và đường mà UI dùng
+/// là đường tay không ai kiểm.
+///
+/// Nay chỉ còn MỘT đường: `posts_to_channel_videos` (đã có cổng). Giao diện
+/// nhận đúng thứ nó vẽ, không được phép dựng lại nữa.
 #[tauri::command]
 pub async fn scrape_douyin_channel(
     app: tauri::AppHandle,
     url: String,
     settings: tauri::State<'_, std::sync::Arc<crate::settings_store::SettingsStore>>,
-) -> AppResult<Vec<DouyinPost>> {
+) -> AppResult<Vec<crate::models::ChannelVideo>> {
     // Proxy do user cấu hình — Douyin hay chặn IP Việt Nam; đi qua proxy
     // (vd proxy Nhật) thì API mới trả dữ liệu. Không có proxy → đi thẳng.
     let proxy = crate::args_builder::next_proxy(&settings.get());
@@ -947,7 +959,7 @@ pub async fn scrape_douyin_channel(
                     serde_json::json!({ "message": note }),
                 );
             }
-            return Ok(out.posts);
+            return Ok(posts_to_channel_videos(out.posts));
         }
         match out.stopped_by {
             Some(f) => {
@@ -984,7 +996,7 @@ pub async fn scrape_douyin_channel(
                 "bqd-douyin-scraper-progress",
                 serde_json::json!({ "count": posts.len() }),
             );
-            Ok(posts)
+            Ok(posts_to_channel_videos(posts))
         }
         // Cả API chính lẫn tikwm đều thất bại → báo LỖI THẬT của đường chính,
         // đã phân loại sẵn (chặn / cookie / riêng tư / đổi API).
@@ -1142,6 +1154,67 @@ mod tests_null_list {
         );
         assert_eq!(v.url, "https://www.douyin.com/video/7655989781075217704");
         assert!(!v.is_photo);
+    }
+
+    /// CỔNG CHỖ NỐI — khoá GÓI JSON THẬT mà lệnh `scrape_douyin_channel` gửi
+    /// lên giao diện vào một file, để cổng phía TS nạp đúng file đó.
+    ///
+    /// VÌ SAO PHẢI CÓ: bản 0.3.0 Rust ĐÚNG, `rename_all` ĐÚNG, 194 test Rust
+    /// xanh, 101 test TS xanh — mà anh Hùng cài xong vẫn không thấy ngày đăng
+    /// lẫn lượt tim. Vì mọi cổng đều tự dựng dữ liệu giả ĐÃ KHỚP SẴN với giao
+    /// diện, chưa cổng nào đi qua chỗ Rust nối vào TS. File này do CHÍNH Rust
+    /// sinh ra, nên đổi tên khoá / bỏ trường ở Rust là file đổi theo và cổng TS
+    /// đỏ ngay.
+    ///
+    /// Sinh lại khi CỐ Ý đổi gói: `BQD_UPDATE_FIXTURE=1 cargo test khoa_goi_json`
+    #[test]
+    fn khoa_goi_json_that_gui_len_giao_dien() {
+        // Số liệu THẬT đo 16/08/2026 bằng `tests/douyin_probe.rs` (cookie đăng
+        // nhập thật). KHÔNG bịa: play_count Douyin trả 0 nên view phải là None.
+        let raw = r#"{
+            "status_code": 0, "has_more": 1,
+            "aweme_list": [
+                {"aweme_id":"7655989781075217704","desc":"2026下半年按这份片单来",
+                 "create_time":1785239590, "images": null,
+                 "video":{"cover":{"url_list":["https://p3.douyinpic.com/a.jpeg"]}},
+                 "statistics":{"play_count":0,"digg_count":35316}},
+                {"aweme_id":"7655989781075217705","desc":"用算盘和粉笔",
+                 "create_time":1784464747, "images": null,
+                 "video":{"cover":{"url_list":["https://p3.douyinpic.com/b.jpeg"]}},
+                 "statistics":{"play_count":0,"digg_count":12733}}
+            ]
+        }"#;
+        let r: PostResp = serde_json::from_str(raw).unwrap();
+        let videos = posts_to_channel_videos(awemes_to_posts(r.aweme_list));
+        let json = serde_json::to_string_pretty(&videos).unwrap() + "\n";
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/douyin_ui_seam.json"
+        );
+        if std::env::var("BQD_UPDATE_FIXTURE").is_ok() {
+            std::fs::write(path, &json).expect("ghi fixture");
+        }
+
+        // Khẳng định TÊN KHOÁ thật đi qua dây — đây là thứ 0.3.0 đánh rơi.
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let obj = v[0].as_object().expect("phần tử phải là object");
+        for k in ["url", "title", "uploadDate", "likeCount", "viewCount", "isPhoto"] {
+            assert!(obj.contains_key(k), "gói gửi lên giao diện PHẢI có khoá `{k}` — có: {:?}", obj.keys().collect::<Vec<_>>());
+        }
+        assert_eq!(obj["uploadDate"], "20260728", "ngày đăng phải là số THẬT");
+        assert_eq!(obj["likeCount"], 35316, "lượt tim phải là số THẬT");
+        assert!(obj["viewCount"].is_null(), "view phải RỖNG — hiện 0 view là BỊA");
+
+        let da_luu = std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
+        assert_eq!(
+            da_luu, json,
+            "Gói JSON gửi lên giao diện ĐÃ ĐỔI so với file cổng TS đang đọc \
+             ({path}). Nếu đổi có chủ ý: chạy lại với BQD_UPDATE_FIXTURE=1 rồi \
+             commit file đó — và kiểm cổng TS còn xanh không."
+        );
     }
 }
 

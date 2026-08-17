@@ -20,18 +20,17 @@ import type {
   SubtitleTrack,
   ExtractorInfo,
   ChannelFetchResult,
+  ChannelVideo,
   WatchedChannel,
   PickedVideo,
   Bookmark,
 } from "@/types/models";
 
-export interface DouyinPost {
-  id: string;
-  url: string;
-  title: string;
-  thumbnail: string;
-  isPhoto: boolean;
-}
+// GHI CHÚ 0.3.1 — ở đây TỪNG có `interface DouyinPost { id, url, title,
+// thumbnail, isPhoto }`. Nó KHAI THIẾU `createTime` và `likeCount` (Rust vẫn
+// gửi lên đủ), nên khi ChannelInput tự đổi post → ChannelVideo mà bỏ quên hai
+// trường đó thì TypeScript KHÔNG hề kêu — thiếu khai báo = mất khả năng bắt
+// lỗi. Nay lệnh trả thẳng `ChannelVideo`, không còn kiểu trung gian khai thiếu.
 
 // ── Backend abstraction ──────────────────────────────────────────────────────
 
@@ -757,10 +756,13 @@ export async function dismissPending(id: string, videoUrl: string): Promise<Watc
 
 // ── Douyin scraper ──────────────────────────────────────────────────────────
 
-export async function scrapeDouyinChannel(url: string): Promise<DouyinPost[]> {
+/** Rust trả SẴN `ChannelVideo` (đã có `uploadDate` + `likeCount`). Người gọi
+ *  dùng THẲNG mảng này — TUYỆT ĐỐI không dựng lại đối tượng từng trường, vì
+ *  đó chính là chỗ 0.3.0 đánh rơi ngày đăng và lượt tim. */
+export async function scrapeDouyinChannel(url: string): Promise<ChannelVideo[]> {
   if (IS_WEB) throw new Error("Kênh Douyin chưa hỗ trợ trên web. Dùng app desktop.");
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<DouyinPost[]>("scrape_douyin_channel", { url });
+  return invoke<ChannelVideo[]>("scrape_douyin_channel", { url });
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
