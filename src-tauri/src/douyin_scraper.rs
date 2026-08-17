@@ -1656,6 +1656,49 @@ mod tests_null_list {
         assert_eq!(posts[0].author_name.as_deref(), Some("大雄探片"));
         assert_eq!(posts[0].author_avatar.as_deref(), Some("https://cdn/av.jpeg"));
     }
+
+    /// ĐỐI CHỨNG MẠNG THẬT: chính hàm CỦA APP (không phải bản sao trong
+    /// `tests/douyin_probe.rs`) có lấy được tên + ảnh đại diện thật không.
+    ///
+    /// VÌ SAO CẦN RIÊNG: probe tự dựng chuỗi tham số và tự ký a_bogus của nó.
+    /// App có bản riêng (`build_profile_params` + `fetch_user_profile`). Hai
+    /// bản lệch nhau là probe xanh mà app vẫn hỏng — đúng lớp bẫy "có hai
+    /// đường, chỉ một đường được kiểm" đã làm thủng 0.3.0.
+    ///
+    /// Bắn ĐÚNG 1 lượt. Không chạy tự động (Douyin chặn theo tần suất):
+    ///   BQD_COOKIE_FILE=<duong-dan> cargo test ho_so_that_qua_ham_cua_app \
+    ///     -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn ho_so_that_qua_ham_cua_app() {
+        let sec_uid = std::env::var("BQD_SEC_UID")
+            .unwrap_or_else(|_| "MS4wLjABAAAA7yRYvacLzSF5V0J8mrM0eE-PdL3O9_dNdDJTb-0peRw".into());
+        let cookie = std::env::var("BQD_COOKIE_FILE").ok().and_then(|p| {
+            let raw = std::fs::read_to_string(p).ok()?;
+            netscape_to_cookie_header(&raw, "douyin.com")
+        });
+
+        let p = fetch_user_profile(&sec_uid, &None, cookie.as_deref())
+            .await
+            .expect("hàm CỦA APP phải lấy được hồ sơ kênh");
+
+        // KHÔNG in sec_uid; tên kênh là tên công khai nên in được.
+        println!("== tên kênh app lấy được: {:?}", p.nickname);
+        println!("== tổng bài            : {:?}", p.aweme_count);
+        let anh = p.avatar.clone().unwrap_or_default();
+        println!("== ảnh đại diện host   : {}", anh.split('/').nth(2).unwrap_or("?"));
+
+        assert!(p.nickname.is_some(), "phải lấy được TÊN kênh");
+        assert!(
+            anh.contains("aweme-avatar"),
+            "phải là ảnh ĐẠI DIỆN kênh (đường dẫn có `aweme-avatar`), đang là: {anh}"
+        );
+        assert!(
+            !anh.contains("x-signature"),
+            "ảnh đại diện không được là ảnh bìa bài có chữ ký hết hạn: {anh}"
+        );
+        assert!(p.aweme_count.unwrap_or(0) > 0, "phải lấy được tổng số bài");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
