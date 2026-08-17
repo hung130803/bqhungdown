@@ -59,6 +59,16 @@ pub struct DouyinPost {
     /// như thể là thật thì tệ hơn là không hiện.
     #[serde(default)]
     pub like_count: Option<u64>,
+    /// TÊN HIỂN THỊ của kênh (`author.nickname`) — có sẵn trong CHÍNH gói
+    /// danh sách, không tốn thêm lượt gọi nào. Đo 17/08/2026: 55 khoá trong
+    /// `author`, `nickname` = "大雄探片".
+    #[serde(default)]
+    pub author_name: Option<String>,
+    /// ẢNH ĐẠI DIỆN kênh (`author.avatar_thumb`) — ảnh CỦA KÊNH, KHÔNG phải
+    /// ảnh bìa bài. Trong gói danh sách chỉ có `avatar_thumb` (100x100);
+    /// bản to hơn phải hỏi `user/profile/other/`.
+    #[serde(default)]
+    pub author_avatar: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,6 +125,23 @@ struct TikwmAweme {
     create_time: Option<i64>,
     #[serde(default)]
     statistics: Option<TikwmStats>,
+    /// Khối tác giả — nguồn TÊN KÊNH + ẢNH ĐẠI DIỆN thật, đi kèm sẵn mỗi bài.
+    #[serde(default)]
+    author: Option<TikwmAuthor>,
+}
+
+/// Khối `author` của một bài Douyin — nơi có TÊN KÊNH thật.
+///
+/// Đo 17/08/2026 (`probe_ten_kenh_va_avatar`): khối này có 55 khoá; các khoá
+/// tên/ảnh CÓ THẬT là `nickname` + `avatar_thumb`. `avatar_larger` và
+/// `avatar_medium` KHÔNG có ở đây (chỉ có trong `user/profile/other/`), nên
+/// đừng trông chờ vào chúng ở đường này.
+#[derive(Debug, Deserialize, Default)]
+struct TikwmAuthor {
+    #[serde(default)]
+    nickname: Option<String>,
+    #[serde(default)]
+    avatar_thumb: Option<TikwmCover>,
 }
 
 /// Khối `statistics` của một bài Douyin. Các khoá thật đo được 16/08/2026:
@@ -412,6 +439,23 @@ fn awemes_to_posts(list: Vec<TikwmAweme>) -> Vec<DouyinPost> {
                 .and_then(|c| c.url_list.first())
                 .cloned()
                 .unwrap_or_default();
+            // Tên kênh + ảnh đại diện đi KÈM SẴN trong từng bài — bóc luôn,
+            // khỏi tốn lượt gọi nào. Trước đây bỏ qua hoàn toàn nên giao diện
+            // phải tự bịa tên "Kênh Douyin — N video" và lấy ẢNH BÌA BÀI ĐẦU
+            // làm ảnh đại diện kênh.
+            let author_name = aweme
+                .author
+                .as_ref()
+                .and_then(|a| a.nickname.as_ref())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let author_avatar = aweme
+                .author
+                .as_ref()
+                .and_then(|a| a.avatar_thumb.as_ref())
+                .and_then(|c| c.url_list.first())
+                .cloned()
+                .filter(|s| !s.is_empty());
             Some(DouyinPost {
                 id: id.clone(),
                 url: format!("https://www.douyin.com/video/{id}"),
@@ -420,6 +464,8 @@ fn awemes_to_posts(list: Vec<TikwmAweme>) -> Vec<DouyinPost> {
                 is_photo: !aweme.images.is_empty(),
                 create_time: aweme.create_time.filter(|t| *t > 0),
                 like_count: aweme.statistics.as_ref().and_then(|s| s.digg_count),
+                author_name,
+                author_avatar,
             })
         })
         .collect()
@@ -614,6 +660,188 @@ async fn fetch_channel_api(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+//  HỒ SƠ KÊNH — TÊN HIỂN THỊ + ẢNH ĐẠI DIỆN THẬT
+//
+//  ANH HÙNG BÁO 17/08/2026: "tên kênh ảnh avatar kênh không chuẩn".
+//  ĐO RA (probe_ten_kenh_va_avatar, cookie đăng nhập thật):
+//    · tên kênh app hiện : "Kênh Douyin — 250 video"  (chuỗi GHÉP CỨNG)
+//      tên kênh THẬT      : "大雄探片"                 (`user.nickname`)
+//    · ảnh app hiện       : ẢNH BÌA BÀI MỚI NHẤT, host p3-pc-sign.douyinpic.com
+//                           (URL có x-expires + x-signature → hết hạn được)
+//      ảnh THẬT           : avatar kênh, host p3-pc.douyinpic.com, không chữ ký
+//  Nói cách khác: KHÔNG phải "ảnh vỡ" mà là ĐÚNG ẢNH CỦA THỨ KHÁC. Đã đo cả
+//  hai host đều KHÔNG chặn hotlink (200 dù có hay không Referer), nên ảnh vẫn
+//  hiện — chỉ là hiện sai.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Tên + ảnh đại diện + tổng số bài của một kênh Douyin.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DouyinProfile {
+    pub nickname: Option<String>,
+    pub avatar: Option<String>,
+    /// `user.aweme_count` — TỔNG số bài kênh có, khác với số app lấy được.
+    pub aweme_count: Option<u32>,
+}
+
+impl DouyinProfile {
+    fn is_empty(&self) -> bool {
+        self.nickname.is_none() && self.avatar.is_none() && self.aweme_count.is_none()
+    }
+}
+
+/// Bóc hồ sơ từ JSON `user/profile/other/`. Tách THUẦN để test không cần mạng.
+///
+/// Thứ tự ưu tiên ảnh: to → nhỏ. `avatar_larger` (1080x1080) đẹp nhất, nhưng
+/// không phải kênh nào cũng có đủ mọi cỡ nên phải rơi dần xuống.
+fn parse_profile(v: &serde_json::Value) -> DouyinProfile {
+    let u = match v.get("user") {
+        Some(u) => u,
+        None => return DouyinProfile::default(),
+    };
+    let first_url = |key: &str| -> Option<String> {
+        u.get(key)?
+            .get("url_list")?
+            .as_array()?
+            .iter()
+            .find_map(|x| x.as_str())
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+    };
+    DouyinProfile {
+        nickname: u
+            .get("nickname")
+            .and_then(|x| x.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        avatar: first_url("avatar_larger")
+            .or_else(|| first_url("avatar_medium"))
+            .or_else(|| first_url("avatar_300x300"))
+            .or_else(|| first_url("avatar_168x168"))
+            .or_else(|| first_url("avatar_thumb")),
+        aweme_count: u
+            .get("aweme_count")
+            .and_then(|x| x.as_u64())
+            .map(|n| n as u32),
+    }
+}
+
+fn build_profile_params(sec_uid: &str) -> String {
+    format!(
+        "device_platform=webapp&aid=6383&channel=channel_pc_web&sec_user_id={sec_uid}\
+&publish_video_strategy_type=2&version_code=290100&version_name=29.1.0&cookie_enabled=true\
+&screen_width=1536&screen_height=864&browser_language=zh-CN&browser_platform=Win32\
+&browser_name=Chrome&browser_version=90.0.4430.212&browser_online=true&engine_name=Blink\
+&engine_version=90.0&os_name=Windows&os_version=10&cpu_core_num=8&device_memory=8\
+&platform=PC&downlink=10&effective_type=4g&round_trip_time=50"
+    )
+}
+
+/// Hỏi Douyin tên + ảnh đại diện thật của kênh. ĐÚNG MỘT lượt gọi.
+///
+/// KHÔNG BAO GIỜ làm hỏng lượt quét: mọi lỗi đều trả `None` để phía gọi rơi
+/// xuống `author.nickname` có sẵn trong gói danh sách (miễn phí). Douyin chặn
+/// theo tần suất nên thêm lượt gọi là có giá — nhưng 1 lượt cho cả kênh
+/// (so với 14 lượt phân trang) là chấp nhận được.
+async fn fetch_user_profile(
+    sec_uid: &str,
+    proxy: &Option<String>,
+    cookie: Option<&str>,
+) -> Option<DouyinProfile> {
+    let client = with_proxy(
+        reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .user_agent(DOUYIN_UA),
+        proxy,
+    )
+    .build()
+    .ok()?;
+
+    let cookie_owned: Option<String> = match cookie {
+        Some(c) if cookie_has_login(c) => Some(c.to_string()),
+        Some(c) => match fetch_ttwid(proxy).await {
+            Some(tt) if !c.contains("ttwid=") => Some(format!("{c}; ttwid={tt}")),
+            _ => Some(c.to_string()),
+        },
+        None => fetch_ttwid(proxy).await.map(|tt| format!("ttwid={tt}")),
+    };
+
+    let params = build_profile_params(sec_uid);
+    let url = format!(
+        "https://www.douyin.com/aweme/v1/web/user/profile/other/?{params}&a_bogus={}",
+        pct_encode(&ABogus::new().get_value(&params, "GET"))
+    );
+    let referer = format!("https://www.douyin.com/user/{sec_uid}");
+
+    let mut req = client.get(&url).header("Referer", &referer);
+    if let Some(c) = &cookie_owned {
+        req = req.header("Cookie", c.as_str());
+    }
+    let resp = req.send().await.ok()?;
+    let body = resp.text().await.ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let p = parse_profile(&v);
+    if p.is_empty() {
+        eprintln!("[douyin] hồ sơ kênh: không bóc được tên/ảnh — dùng phao author.*");
+        None
+    } else {
+        eprintln!(
+            "[douyin] hồ sơ kênh: tên={} ảnh={} tổng bài={:?}",
+            p.nickname.is_some(),
+            p.avatar.is_some(),
+            p.aweme_count
+        );
+        Some(p)
+    }
+}
+
+/// Dựng `ChannelInfo` cho kênh Douyin — MỘT đường duy nhất, phía Rust.
+///
+/// TRƯỚC BẢN NÀY KHÔNG HỀ CÓ HÀM NÀY: `ChannelInput.tsx` tự ghép
+/// `title: \`Kênh Douyin — ${videos.length} video\`` và
+/// `thumbnail: videos[0]?.thumbnail` NGAY TẠI GIAO DIỆN. Đúng lớp bệnh của
+/// 0.3.0 (giao diện tự dựng lại đối tượng thay vì dùng thứ Rust gửi lên) —
+/// chỉ khác là lần đó làm RƠI trường, lần này là BỊA trường.
+///
+/// Thứ tự nguồn, tốt nhất trước:
+///   1. `user/profile/other/` — tên thật + ảnh đại diện to nhất + tổng số bài
+///   2. `author.*` kèm sẵn mỗi bài — miễn phí, dùng khi lượt (1) hỏng
+///   3. Cùng đường: tên ghép cứng cũ, và ẢNH = None (KHÔNG lấy ảnh bìa bài
+///      làm ảnh đại diện nữa — thà không có ảnh còn hơn ảnh của thứ khác)
+pub fn build_channel_info(
+    url: &str,
+    sec_uid: String,
+    profile: Option<&DouyinProfile>,
+    posts: &[DouyinPost],
+    api_note: Option<String>,
+) -> crate::models::ChannelInfo {
+    let ten_tu_bai = posts.iter().find_map(|p| p.author_name.clone());
+    let anh_tu_bai = posts.iter().find_map(|p| p.author_avatar.clone());
+
+    let title = profile
+        .and_then(|p| p.nickname.clone())
+        .or(ten_tu_bai)
+        .unwrap_or_else(|| format!("Kênh Douyin — {} video", posts.len()));
+
+    let thumbnail = profile.and_then(|p| p.avatar.clone()).or(anh_tu_bai);
+
+    let video_count = profile
+        .and_then(|p| p.aweme_count)
+        .filter(|n| *n > 0)
+        .unwrap_or(posts.len() as u32);
+
+    crate::models::ChannelInfo {
+        url: url.to_string(),
+        title,
+        thumbnail,
+        video_count: Some(video_count),
+        extractor: "douyin".into(),
+        hidden_downloaded: None,
+        channel_id: Some(sec_uid),
+        api_note,
+    }
+}
+
 /// Lấy danh sách kênh Douyin ở dạng `ChannelInfo` + `ChannelVideo` cho đường
 /// "Theo dõi kênh" / `fetch_channel_listing` dùng chung với YouTube/TikTok.
 ///
@@ -655,16 +883,16 @@ pub async fn fetch_channel_listing_douyin(
         out.stopped_by.as_ref().map(|f| f.message(co_dang_nhap))
     };
 
-    let info = crate::models::ChannelInfo {
-        url: url.to_string(),
-        title: format!("Kênh Douyin — {} video", out.posts.len()),
-        thumbnail: out.posts.first().map(|p| p.thumbnail.clone()),
-        video_count: Some(out.posts.len() as u32),
-        extractor: "douyin".into(),
-        hidden_downloaded: None,
-        channel_id: Some(sec_uid),
-        api_note,
+    // Hỏi tên + ảnh đại diện thật. `limit > 0` = lượt kiểm định kỳ của watcher
+    // (anh Hùng có 200-300 kênh) — KHÔNG bắn thêm lượt nào ở đó, cứ dùng
+    // `author.*` miễn phí có sẵn trong gói danh sách, tránh tự chuốc 403.
+    let profile = if limit == 0 {
+        fetch_user_profile(&sec_uid, &None, cookie.as_deref()).await
+    } else {
+        None
     };
+
+    let info = build_channel_info(url, sec_uid, profile.as_ref(), &out.posts, api_note);
     Ok((info, posts_to_channel_videos(out.posts)))
 }
 
@@ -774,6 +1002,23 @@ async fn try_tikwm_endpoint(
                 .cloned()
                 .unwrap_or_default();
 
+            // Tên kênh + ảnh đại diện đi KÈM SẴN trong từng bài — bóc luôn,
+            // khỏi tốn lượt gọi nào. Trước đây bỏ qua hoàn toàn nên giao diện
+            // phải tự bịa tên "Kênh Douyin — N video" và lấy ẢNH BÌA BÀI ĐẦU
+            // làm ảnh đại diện kênh.
+            let author_name = aweme
+                .author
+                .as_ref()
+                .and_then(|a| a.nickname.as_ref())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let author_avatar = aweme
+                .author
+                .as_ref()
+                .and_then(|a| a.avatar_thumb.as_ref())
+                .and_then(|c| c.url_list.first())
+                .cloned()
+                .filter(|s| !s.is_empty());
             Some(DouyinPost {
                 id: id.clone(),
                 url: format!("https://www.douyin.com/video/{id}"),
@@ -782,6 +1027,8 @@ async fn try_tikwm_endpoint(
                 is_photo: !aweme.images.is_empty(),
                 create_time: aweme.create_time.filter(|t| *t > 0),
                 like_count: aweme.statistics.as_ref().and_then(|s| s.digg_count),
+                author_name,
+                author_avatar,
             })
         })
         .collect();
@@ -855,6 +1102,22 @@ fn format_error(e: &AppError) -> String {
     }
 }
 
+/// Gói lệnh `scrape_douyin_channel` gửi lên giao diện: THÔNG TIN KÊNH + video.
+///
+/// VÌ SAO CÓ `info` Ở ĐÂY (0.3.2): trước đây lệnh chỉ trả mảng video, nên
+/// `ChannelInput.tsx` phải TỰ GHÉP lấy thông tin kênh ngay tại giao diện —
+/// `title: \`Kênh Douyin — ${videos.length} video\`` và `thumbnail:
+/// videos[0]?.thumbnail`. Kết quả: tên kênh luôn là chuỗi ghép cứng (tên thật
+/// "大雄探片" không bao giờ hiện) và "ảnh đại diện kênh" thực chất là ẢNH BÌA
+/// BÀI MỚI NHẤT. Giao diện không được phép bịa dữ liệu của nền tảng — cái gì
+/// thuộc về Douyin thì Rust phải gửi lên.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DouyinChannelResult {
+    pub info: crate::models::ChannelInfo,
+    pub videos: Vec<crate::models::ChannelVideo>,
+}
+
 /// Trả THẲNG `ChannelVideo` — KHÔNG trả `DouyinPost` thô nữa.
 ///
 /// LỖI THẬT 0.3.0 (anh Hùng cài rồi vẫn không thấy ngày đăng / lượt tim):
@@ -872,7 +1135,7 @@ pub async fn scrape_douyin_channel(
     app: tauri::AppHandle,
     url: String,
     settings: tauri::State<'_, std::sync::Arc<crate::settings_store::SettingsStore>>,
-) -> AppResult<Vec<crate::models::ChannelVideo>> {
+) -> AppResult<DouyinChannelResult> {
     // Proxy do user cấu hình — Douyin hay chặn IP Việt Nam; đi qua proxy
     // (vd proxy Nhật) thì API mới trả dữ liệu. Không có proxy → đi thẳng.
     let proxy = crate::args_builder::next_proxy(&settings.get());
@@ -959,7 +1222,18 @@ pub async fn scrape_douyin_channel(
                     serde_json::json!({ "message": note }),
                 );
             }
-            return Ok(posts_to_channel_videos(out.posts));
+            // Tên + ảnh đại diện thật: 1 lượt gọi cho CẢ kênh. Hỏng thì rơi
+            // xuống `author.*` kèm sẵn trong gói danh sách (không tốn gì).
+            let profile = fetch_user_profile(&sec_uid, px, cookie.as_deref()).await;
+            // `api_note` = None Ở ĐÂY LÀ CỐ Ý: cùng lời cảnh báo đã đi qua sự
+            // kiện `bqd-douyin-scraper-note` ngay trên, mà giao diện vẽ
+            // `info.apiNote` thành một banner RIÊNG — điền cả hai là anh Hùng
+            // thấy y hệt một câu hiện hai lần.
+            let info = build_channel_info(&url, sec_uid.clone(), profile.as_ref(), &out.posts, None);
+            return Ok(DouyinChannelResult {
+                info,
+                videos: posts_to_channel_videos(out.posts),
+            });
         }
         match out.stopped_by {
             Some(f) => {
@@ -996,7 +1270,12 @@ pub async fn scrape_douyin_channel(
                 "bqd-douyin-scraper-progress",
                 serde_json::json!({ "count": posts.len() }),
             );
-            Ok(posts_to_channel_videos(posts))
+            // Phao tikwm không có endpoint hồ sơ → chỉ còn `author.*` kèm bài.
+            let info = build_channel_info(&url, sec_uid.clone(), None, &posts, None);
+            Ok(DouyinChannelResult {
+                info,
+                videos: posts_to_channel_videos(posts),
+            })
         }
         // Cả API chính lẫn tikwm đều thất bại → báo LỖI THẬT của đường chính,
         // đã phân loại sẵn (chặn / cookie / riêng tư / đổi API).
@@ -1169,24 +1448,56 @@ mod tests_null_list {
     /// Sinh lại khi CỐ Ý đổi gói: `BQD_UPDATE_FIXTURE=1 cargo test khoa_goi_json`
     #[test]
     fn khoa_goi_json_that_gui_len_giao_dien() {
-        // Số liệu THẬT đo 16/08/2026 bằng `tests/douyin_probe.rs` (cookie đăng
-        // nhập thật). KHÔNG bịa: play_count Douyin trả 0 nên view phải là None.
+        // Số liệu THẬT đo bằng `tests/douyin_probe.rs` với cookie đăng nhập
+        // thật (16/08/2026 cho ngày+tim, 17/08/2026 cho tên kênh+ảnh đại diện).
+        // KHÔNG bịa: play_count Douyin trả 0 nên view phải là None; khối
+        // `author` là khoá THẬT Douyin gửi kèm từng bài.
         let raw = r#"{
             "status_code": 0, "has_more": 1,
             "aweme_list": [
                 {"aweme_id":"7655989781075217704","desc":"2026下半年按这份片单来",
                  "create_time":1785239590, "images": null,
                  "video":{"cover":{"url_list":["https://p3.douyinpic.com/a.jpeg"]}},
-                 "statistics":{"play_count":0,"digg_count":35316}},
+                 "statistics":{"play_count":0,"digg_count":35316},
+                 "author":{"nickname":"大雄探片","avatar_thumb":{"url_list":[
+                   "https://p3-pc.douyinpic.com/aweme/100x100/aweme-avatar/tos-cn-avt-0015_x.jpeg"]}}},
                 {"aweme_id":"7655989781075217705","desc":"用算盘和粉笔",
                  "create_time":1784464747, "images": null,
                  "video":{"cover":{"url_list":["https://p3.douyinpic.com/b.jpeg"]}},
-                 "statistics":{"play_count":0,"digg_count":12733}}
+                 "statistics":{"play_count":0,"digg_count":12733},
+                 "author":{"nickname":"大雄探片","avatar_thumb":{"url_list":[
+                   "https://p3-pc.douyinpic.com/aweme/100x100/aweme-avatar/tos-cn-avt-0015_x.jpeg"]}}}
             ]
         }"#;
+        // Hồ sơ kênh THẬT (`user/profile/other/`) — nguồn tốt nhất cho tên +
+        // ảnh đại diện + TỔNG số bài của kênh.
+        let raw_profile = r#"{
+            "status_code": 0,
+            "user": {
+                "nickname": "大雄探片",
+                "aweme_count": 250,
+                "avatar_larger": {"url_list": [
+                  "https://p3-pc.douyinpic.com/aweme/1080x1080/aweme-avatar/tos-cn-avt-0015_x.jpeg?from=2956013662"]},
+                "avatar_thumb": {"url_list": [
+                  "https://p3-pc.douyinpic.com/aweme/100x100/aweme-avatar/tos-cn-avt-0015_x.jpeg"]}
+            }
+        }"#;
+
         let r: PostResp = serde_json::from_str(raw).unwrap();
-        let videos = posts_to_channel_videos(awemes_to_posts(r.aweme_list));
-        let json = serde_json::to_string_pretty(&videos).unwrap() + "\n";
+        let posts = awemes_to_posts(r.aweme_list);
+        let profile = parse_profile(&serde_json::from_str(raw_profile).unwrap());
+        // ĐÚNG hai hàm mà lệnh thật dùng — không có đường tay thứ hai.
+        let goi = DouyinChannelResult {
+            info: build_channel_info(
+                "https://www.douyin.com/user/MS4wLjABAAAA-che",
+                "MS4wLjABAAAA-che".into(),
+                Some(&profile),
+                &posts,
+                None,
+            ),
+            videos: posts_to_channel_videos(posts),
+        };
+        let json = serde_json::to_string_pretty(&goi).unwrap() + "\n";
 
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1198,13 +1509,38 @@ mod tests_null_list {
 
         // Khẳng định TÊN KHOÁ thật đi qua dây — đây là thứ 0.3.0 đánh rơi.
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let obj = v[0].as_object().expect("phần tử phải là object");
+        let obj = v["videos"][0].as_object().expect("phần tử phải là object");
         for k in ["url", "title", "uploadDate", "likeCount", "viewCount", "isPhoto"] {
             assert!(obj.contains_key(k), "gói gửi lên giao diện PHẢI có khoá `{k}` — có: {:?}", obj.keys().collect::<Vec<_>>());
         }
         assert_eq!(obj["uploadDate"], "20260728", "ngày đăng phải là số THẬT");
         assert_eq!(obj["likeCount"], 35316, "lượt tim phải là số THẬT");
         assert!(obj["viewCount"].is_null(), "view phải RỖNG — hiện 0 view là BỊA");
+
+        // ── TÊN KÊNH + ẢNH ĐẠI DIỆN (lỗi anh Hùng báo 17/08/2026) ─────────
+        let info = v["info"].as_object().expect("gói PHẢI có khối `info`");
+        for k in ["url", "title", "thumbnail", "videoCount", "extractor"] {
+            assert!(info.contains_key(k), "khối `info` PHẢI có khoá `{k}`");
+        }
+        assert_eq!(
+            info["title"], "大雄探片",
+            "TÊN KÊNH phải là tên THẬT Douyin trả, không phải chuỗi ghép cứng"
+        );
+        assert!(
+            !info["title"].as_str().unwrap().contains("Kênh Douyin —"),
+            "tên ghép cứng 'Kênh Douyin — N video' là dấu hiệu tên thật bị bỏ qua"
+        );
+        let anh = info["thumbnail"].as_str().unwrap_or_default();
+        assert!(
+            anh.contains("aweme-avatar"),
+            "ẢNH ĐẠI DIỆN phải là avatar KÊNH (đường dẫn có `aweme-avatar`), \
+             không phải ảnh bìa bài — đang là: {anh}"
+        );
+        assert_eq!(
+            info["videoCount"], 250,
+            "số bài trên kênh phải là TỔNG thật (user.aweme_count), không phải \
+             số bài lấy được trong lượt này"
+        );
 
         let da_luu = std::fs::read_to_string(path)
             .unwrap_or_default()
@@ -1215,6 +1551,110 @@ mod tests_null_list {
              ({path}). Nếu đổi có chủ ý: chạy lại với BQD_UPDATE_FIXTURE=1 rồi \
              commit file đó — và kiểm cổng TS còn xanh không."
         );
+    }
+
+    /// ẢNH BÌA BÀI KHÔNG BAO GIỜ ĐƯỢC LÀM ẢNH ĐẠI DIỆN KÊNH.
+    ///
+    /// Đúng lỗi anh Hùng báo: app lấy `posts[0].thumbnail` (ảnh bìa bài mới
+    /// nhất, host `p3-pc-sign.douyinpic.com`, URL có `x-expires`+`x-signature`)
+    /// làm ảnh đại diện. Thà KHÔNG có ảnh còn hơn ảnh của thứ khác.
+    #[test]
+    fn khong_lay_anh_bia_bai_lam_anh_dai_dien() {
+        let posts = vec![DouyinPost {
+            id: "1".into(),
+            url: "https://www.douyin.com/video/1".into(),
+            title: "x".into(),
+            thumbnail: "https://p3-pc-sign.douyinpic.com/tos-cn-i-dy/COVER.jpeg?x-expires=1".into(),
+            is_photo: false,
+            create_time: Some(1785239590),
+            like_count: Some(1),
+            author_name: None,
+            author_avatar: None,
+        }];
+        let info = build_channel_info("https://www.douyin.com/user/u", "u".into(), None, &posts, None);
+        assert_eq!(
+            info.thumbnail, None,
+            "không có avatar thật thì để TRỐNG, tuyệt đối không mượn ảnh bìa bài"
+        );
+        assert_eq!(info.title, "Kênh Douyin — 1 video", "hết phao thì mới dùng tên ghép");
+    }
+
+    /// Hỏng lượt hồ sơ thì vẫn phải ra TÊN THẬT nhờ `author.*` kèm sẵn mỗi bài.
+    #[test]
+    fn hong_ho_so_van_con_ten_that_tu_author() {
+        let posts = vec![DouyinPost {
+            id: "1".into(),
+            url: "https://www.douyin.com/video/1".into(),
+            title: "x".into(),
+            thumbnail: "https://p3-pc-sign.douyinpic.com/COVER.jpeg".into(),
+            is_photo: false,
+            create_time: None,
+            like_count: None,
+            author_name: Some("大雄探片".into()),
+            author_avatar: Some(
+                "https://p3-pc.douyinpic.com/aweme/100x100/aweme-avatar/a.jpeg".into(),
+            ),
+        }];
+        let info = build_channel_info("https://www.douyin.com/user/u", "u".into(), None, &posts, None);
+        assert_eq!(info.title, "大雄探片");
+        assert!(info.thumbnail.unwrap().contains("aweme-avatar"));
+    }
+
+    /// Hồ sơ ưu tiên hơn `author.*`, và ảnh phải chọn bản TO nhất có.
+    #[test]
+    fn ho_so_uu_tien_hon_author_va_chon_anh_to_nhat() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"user":{"nickname":"TÊN HỒ SƠ","aweme_count":250,
+                 "avatar_larger":{"url_list":["https://cdn/large.jpeg"]},
+                 "avatar_thumb":{"url_list":["https://cdn/thumb.jpeg"]}}}"#,
+        )
+        .unwrap();
+        let p = parse_profile(&v);
+        assert_eq!(p.nickname.as_deref(), Some("TÊN HỒ SƠ"));
+        assert_eq!(p.avatar.as_deref(), Some("https://cdn/large.jpeg"), "phải lấy bản TO");
+        assert_eq!(p.aweme_count, Some(250));
+
+        let posts = vec![DouyinPost {
+            id: "1".into(),
+            url: "u".into(),
+            title: "x".into(),
+            thumbnail: String::new(),
+            is_photo: false,
+            create_time: None,
+            like_count: None,
+            author_name: Some("TÊN TỪ BÀI".into()),
+            author_avatar: Some("https://cdn/from-post.jpeg".into()),
+        }];
+        let info = build_channel_info("u", "s".into(), Some(&p), &posts, None);
+        assert_eq!(info.title, "TÊN HỒ SƠ");
+        assert_eq!(info.thumbnail.as_deref(), Some("https://cdn/large.jpeg"));
+        assert_eq!(info.video_count, Some(250));
+    }
+
+    /// Hồ sơ RỖNG (Douyin đổi khoá / bị chặn) không được coi là hợp lệ.
+    #[test]
+    fn ho_so_rong_thi_coi_nhu_khong_co() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"status_code":0}"#).unwrap();
+        assert!(parse_profile(&v).is_empty(), "thiếu khối `user` -> rỗng");
+        let v2: serde_json::Value =
+            serde_json::from_str(r#"{"user":{"nickname":"   ","avatar_larger":{"url_list":[]}}}"#)
+                .unwrap();
+        let p = parse_profile(&v2);
+        assert!(p.is_empty(), "tên toàn khoảng trắng + mảng ảnh rỗng -> rỗng");
+    }
+
+    /// Bóc `author` từ JSON THẬT của Douyin — khoá phải đúng tên.
+    #[test]
+    fn boc_duoc_ten_kenh_tu_goi_danh_sach() {
+        let raw = r#"{"status_code":0,"aweme_list":[
+            {"aweme_id":"9","desc":"x","images":null,
+             "author":{"nickname":"大雄探片",
+                       "avatar_thumb":{"url_list":["https://cdn/av.jpeg"]}}}
+        ]}"#;
+        let r: PostResp = serde_json::from_str(raw).unwrap();
+        let posts = awemes_to_posts(r.aweme_list);
+        assert_eq!(posts[0].author_name.as_deref(), Some("大雄探片"));
+        assert_eq!(posts[0].author_avatar.as_deref(), Some("https://cdn/av.jpeg"));
     }
 }
 

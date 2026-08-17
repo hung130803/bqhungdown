@@ -20,7 +20,6 @@ import type {
   SubtitleTrack,
   ExtractorInfo,
   ChannelFetchResult,
-  ChannelVideo,
   WatchedChannel,
   PickedVideo,
   Bookmark,
@@ -756,13 +755,18 @@ export async function dismissPending(id: string, videoUrl: string): Promise<Watc
 
 // ── Douyin scraper ──────────────────────────────────────────────────────────
 
-/** Rust trả SẴN `ChannelVideo` (đã có `uploadDate` + `likeCount`). Người gọi
- *  dùng THẲNG mảng này — TUYỆT ĐỐI không dựng lại đối tượng từng trường, vì
- *  đó chính là chỗ 0.3.0 đánh rơi ngày đăng và lượt tim. */
-export async function scrapeDouyinChannel(url: string): Promise<ChannelVideo[]> {
+/** Rust trả SẴN cả `info` (tên kênh + ảnh đại diện THẬT) lẫn `videos` (đã có
+ *  `uploadDate` + `likeCount`). Người gọi dùng THẲNG hai thứ đó — TUYỆT ĐỐI
+ *  không dựng lại đối tượng từng trường.
+ *
+ *  Đã trả giá HAI lần vì phá luật này:
+ *   · 0.3.0 — giao diện tự map post → ChannelVideo, LÀM RƠI ngày đăng + tim.
+ *   · 0.3.1 — giao diện tự ghép `info`, BỊA tên "Kênh Douyin — N video" và
+ *     lấy ảnh bìa bài mới nhất làm ảnh đại diện kênh (anh Hùng báo 17/08). */
+export async function scrapeDouyinChannel(url: string): Promise<ChannelFetchResult> {
   if (IS_WEB) throw new Error("Kênh Douyin chưa hỗ trợ trên web. Dùng app desktop.");
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<ChannelVideo[]>("scrape_douyin_channel", { url });
+  return invoke<ChannelFetchResult>("scrape_douyin_channel", { url });
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

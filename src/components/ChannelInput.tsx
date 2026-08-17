@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "@/ipc/commands";
 import { onDouyinScraperProgress, onDouyinScraperNote } from "@/ipc/events";
-import type { ChannelInfo, ChannelVideo } from "@/types/models";
+// `ChannelInfo` KHÔNG còn được import: giao diện không dựng thông tin kênh nữa,
+// Rust gửi lên nguyên khối. Thấy nó quay lại đây là dấu hiệu ai đó lại ghép tay.
+import type { ChannelVideo } from "@/types/models";
 import { formatDuration } from "@/lib/format";
 import { Thumbnail } from "./Thumbnail";
 import { useChannelStore } from "@/stores/useChannelStore";
@@ -216,21 +218,21 @@ export function ChannelInput({ onSubmit }: Props) {
         // `likeCount` Rust gửi lên bị vứt đi ngay tại đây. Đó là lý do anh
         // Hùng cài đúng 0.3.0 mà vẫn không thấy ngày đăng lẫn lượt tim, dù
         // Rust đúng và cả 2 bộ test đều xanh. ĐỪNG dựng lại đối tượng ở đây.
-        const videos = await cmd.scrapeDouyinChannel(trimmed);
+        const r = await cmd.scrapeDouyinChannel(trimmed);
 
-        if (videos.length === 0) {
+        if (r.videos.length === 0) {
           setError("Không lấy được video nào từ kênh này.");
           return;
         }
 
-        const info: ChannelInfo = {
-          url: trimmed,
-          title: `Kênh Douyin — ${videos.length} video`,
-          thumbnail: videos[0]?.thumbnail ?? null,
-          videoCount: videos.length,
-          extractor: "douyin",
-        };
-        setResult(info, videos);
+        // DÙNG THẲNG `r.info` — 0.3.1 ghép tay ở ĐÚNG CHỖ NÀY:
+        //   title: `Kênh Douyin — ${videos.length} video`   → tên kênh BỊA,
+        //          tên thật ("大雄探片") không bao giờ hiện;
+        //   thumbnail: videos[0]?.thumbnail                 → ẢNH BÌA BÀI MỚI
+        //          NHẤT bị đem làm ảnh đại diện kênh.
+        // Đó là lý do anh Hùng báo "tên kênh ảnh avatar kênh không chuẩn".
+        // Rust nay gửi lên tên + ảnh THẬT; ĐỪNG dựng lại `info` ở đây nữa.
+        setResult(r.info, r.videos);
         return;
       }
 
@@ -650,12 +652,17 @@ export function ChannelInput({ onSubmit }: Props) {
                 </div>
                 <div className="text-xs text-muted truncate flex items-center gap-2">
                   {v.durationSec != null && <span>{formatDuration(v.durationSec)}</span>}
-                  {v.viewCount != null && <span>{formatComma(v.viewCount)} view</span>}
+                  {v.viewCount != null && <span>{formatComma(v.viewCount)} lượt xem</span>}
                   {/* Douyin không có view nhưng có tim — hiện số THẬT đang có
-                      thay vì để dòng trống. */}
+                      thay vì để dòng trống.
+                      NHÃN PHẢI TỰ NÓI RA NÓ LÀ GÌ: chữ "tim" trơ trọi khiến anh
+                      Hùng tưởng app hiện nhầm thứ (17/08/2026). Ghi "lượt tim"
+                      kèm ❤ để không thể lẫn với lượt xem — và KHÔNG giấu lời
+                      giải thích trong tooltip, đã có khung nói rõ ngay trên
+                      danh sách. */}
                   {v.viewCount == null && v.likeCount != null && (
-                    <span title="Lượt thích (tim). Douyin không cho lấy lượt xem.">
-                      {formatComma(v.likeCount)} tim
+                    <span className="whitespace-nowrap">
+                      ❤ {formatComma(v.likeCount)} lượt tim
                     </span>
                   )}
                   {date && <span>{date.toLocaleDateString("vi-VN")}</span>}
@@ -782,7 +789,20 @@ export function ChannelInput({ onSubmit }: Props) {
         <div className="space-y-3 mt-2">
           <div className="flex items-center gap-3 p-3 rounded-xl bg-surface border border-border">
             {info.thumbnail && (
-              <img src={info.thumbnail} alt={info.title} className="w-12 h-12 rounded-full object-cover" />
+              // Qua `Thumbnail` chứ KHÔNG dùng <img src> thẳng: ảnh Douyin /
+              // Instagram / Bilibili được backend tải hộ kèm Referer đúng, và
+              // hỏng thì có ô nền thay vì icon ảnh vỡ. Trước đây riêng ô này
+              // gọi thẳng CDN — lạc khỏi đường chung mà mọi dòng video đều đi.
+              <div
+                data-channel-avatar={info.thumbnail}
+                className="w-12 h-12 rounded-full overflow-hidden shrink-0"
+              >
+                <Thumbnail
+                  src={info.thumbnail}
+                  extractor={info.extractor}
+                  alt={`Ảnh đại diện kênh ${info.title}`}
+                />
+              </div>
             )}
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-fg truncate">{info.title || info.url}</div>
@@ -823,7 +843,7 @@ export function ChannelInput({ onSubmit }: Props) {
             <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} className="px-2 py-1.5 rounded-md bg-surface border border-border">
               <option value="newest">Mới nhất</option>
               <option value="oldest">Cũ nhất</option>
-              <option value="popular">{hasViews ? "Nhiều view nhất" : "Nhiều tim nhất"}</option>
+              <option value="popular">{hasViews ? "Nhiều lượt xem nhất" : "Nhiều lượt tim nhất"}</option>
               <option value="longest">Dài nhất</option>
               <option value="shortest">Ngắn nhất</option>
             </select>
@@ -873,7 +893,7 @@ export function ChannelInput({ onSubmit }: Props) {
                 const n = parseCommaNum(e.target.value);
                 setMinViewsRaw(n != null ? formatComma(n) : "");
               }}
-              placeholder={hasViews ? "View từ" : "Tim từ"}
+              placeholder={hasViews ? "Lượt xem từ" : "Lượt tim từ"}
               className="px-2 py-1.5 rounded-md bg-surface border border-border w-28"
             />
             <span className="text-muted">–</span>
@@ -885,7 +905,7 @@ export function ChannelInput({ onSubmit }: Props) {
                 const n = parseCommaNum(e.target.value);
                 setMaxViewsRaw(n != null ? formatComma(n) : "");
               }}
-              placeholder={hasViews ? "View đến" : "Tim đến"}
+              placeholder={hasViews ? "Lượt xem đến" : "Lượt tim đến"}
               className="px-2 py-1.5 rounded-md bg-surface border border-border w-28"
             />
             <button onClick={toggleAll} className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2">
@@ -930,12 +950,21 @@ export function ChannelInput({ onSubmit }: Props) {
           </div>
 
           {/* NÓI THẲNG vì sao không có cột lượt xem, thay vì im lặng để trống
-              hoặc tệ hơn là hiện 0 như thể là số thật. */}
+              hoặc tệ hơn là hiện 0 như thể là số thật.
+              17/08/2026 — anh Hùng: "sao tool tải nó hiện lượt tim là sao".
+              Câu này TRƯỚC ĐÂY đã có, nhưng là chữ xám cỡ 11px lẫn vào nền nên
+              anh ấy lướt qua. Nay là khung có viền, đặt ngay trên danh sách —
+              đúng chỗ mắt dừng lại trước khi nhìn các con số. */}
           {!hasViews && hasLikes && (
-            <p className="text-[11px] text-muted -mt-1">
-              Douyin không cho lấy <b>lượt xem</b> (API luôn trả 0, kể cả khi đã đăng nhập)
-              — nên lọc/sắp xếp theo <b>lượt tim</b> và <b>ngày đăng</b>, đều là số thật.
-            </p>
+            <div
+              data-metric-note
+              className="px-3 py-2 rounded-md bg-accent/10 border border-accent/40 text-fg text-xs"
+            >
+              <b>❤ Con số ở mỗi dòng là LƯỢT TIM, không phải lượt xem.</b>{" "}
+              Douyin <b>không cho lấy lượt xem</b> — API của họ luôn trả 0, kể cả khi
+              đã nạp cookie đăng nhập (đã đo: 0/21 bài có lượt xem, 21/21 bài có lượt tim).
+              Nên app hiện <b>lượt tim</b>, và ô lọc + sắp xếp bên trên cũng chạy theo lượt tim.
+            </div>
           )}
 
           {/* YouTube: 2 tab (Video dài / Shorts). Khác: 1 list. */}

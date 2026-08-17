@@ -57,7 +57,10 @@ const ĐƯỜNG_FIXTURE = path.resolve(
   THƯ_MỤC_NÀY,
   "../../src-tauri/tests/fixtures/douyin_ui_seam.json",
 );
-const GÓI_RUST_TRẢ_VỀ = JSON.parse(readFileSync(ĐƯỜNG_FIXTURE, "utf8")) as unknown[];
+const GÓI_RUST_TRẢ_VỀ = JSON.parse(readFileSync(ĐƯỜNG_FIXTURE, "utf8")) as {
+  info: { title: string; thumbnail: string | null; videoCount: number | null };
+  videos: unknown[];
+};
 
 const { invokeGiả } = vi.hoisted(() => ({ invokeGiả: vi.fn() }));
 
@@ -116,9 +119,13 @@ afterEach(cleanup);
 describe("Chỗ nối Rust → giao diện: JSON THẬT phải ra dòng CÓ ngày + CÓ tim", () => {
   it("file cổng phải là gói Rust thật, không rỗng", () => {
     expect(
-      Array.isArray(GÓI_RUST_TRẢ_VỀ) && GÓI_RUST_TRẢ_VỀ.length >= 2,
+      Array.isArray(GÓI_RUST_TRẢ_VỀ.videos) && GÓI_RUST_TRẢ_VỀ.videos.length >= 2,
       `Thiếu/hỏng ${ĐƯỜNG_FIXTURE}. Sinh lại bằng: ` +
         "BQD_UPDATE_FIXTURE=1 cargo test khoa_goi_json",
+    ).toBe(true);
+    expect(
+      typeof GÓI_RUST_TRẢ_VỀ.info?.title === "string",
+      "gói Rust PHẢI kèm khối `info` (tên kênh + ảnh đại diện)",
     ).toBe(true);
   });
 
@@ -130,11 +137,11 @@ describe("Chỗ nối Rust → giao diện: JSON THẬT phải ra dòng CÓ ngà
 
     // ── Hai thứ 0.3.0 đánh rơi ────────────────────────────────────────────
     expect(
-      screen.getByText("35,316 tim"),
+      screen.getByText(/35,316 lượt tim/),
       "LƯỢT TIM không ra tới giao diện — đúng lỗi 0.3.0: gói Rust có `likeCount` " +
         "nhưng đường TS làm rơi mất",
     ).toBeInTheDocument();
-    expect(screen.getByText("12,733 tim")).toBeInTheDocument();
+    expect(screen.getByText(/12,733 lượt tim/)).toBeInTheDocument();
 
     expect(
       screen.getByText("28/7/2026"),
@@ -147,8 +154,59 @@ describe("Chỗ nối Rust → giao diện: JSON THẬT phải ra dòng CÓ ngà
   it("mỗi bài trong gói Rust ra đúng MỘT dòng, không rơi bài nào", async () => {
     await bấmLấyDanhSách();
     expect(document.querySelectorAll("[data-vid-url]")).toHaveLength(
-      GÓI_RUST_TRẢ_VỀ.length,
+      GÓI_RUST_TRẢ_VỀ.videos.length,
     );
+  });
+
+  // ══ LỖI ANH HÙNG BÁO 17/08/2026 ═══════════════════════════════════════
+  // "tên kênh ảnh avatar kênh không chuẩn".
+  // 0.3.1 ghép TÊN + ẢNH ngay tại `ChannelInput.tsx`:
+  //   title: `Kênh Douyin — ${videos.length} video`  → tên thật không bao giờ hiện
+  //   thumbnail: videos[0]?.thumbnail                → ẢNH BÌA BÀI làm avatar kênh
+  // Cổng này đi ĐÚNG đường đó: gói Rust thật → invoke → commands.ts → component.
+  it("TÊN KÊNH phải là tên THẬT Rust gửi lên, không phải chuỗi ghép ở giao diện", async () => {
+    await bấmLấyDanhSách();
+
+    expect(
+      screen.getByText(GÓI_RUST_TRẢ_VỀ.info.title),
+      `Tên kênh thật ("${GÓI_RUST_TRẢ_VỀ.info.title}") không ra tới giao diện — ` +
+        "đúng lỗi 0.3.1: gói Rust có `info.title` nhưng giao diện tự ghép tên khác",
+    ).toBeInTheDocument();
+
+    expect(
+      screen.queryByText(/Kênh Douyin — \d+ video/),
+      "vẫn còn tên GHÉP CỨNG ở giao diện — nghĩa là `info.title` Rust gửi lên bị bỏ qua",
+    ).not.toBeInTheDocument();
+  });
+
+  it("ẢNH ĐẠI DIỆN phải là avatar KÊNH, không phải ảnh bìa bài", async () => {
+    await bấmLấyDanhSách();
+
+    const avatar = GÓI_RUST_TRẢ_VỀ.info.thumbnail ?? "";
+    expect(
+      avatar,
+      "gói Rust phải kèm ảnh đại diện kênh (đường dẫn có `aweme-avatar`)",
+    ).toContain("aweme-avatar");
+
+    // Ảnh Douyin đi qua backend tải hộ (đổi thành data URL) nên KHÔNG canh
+    // `<img src>`. Canh ô avatar đang trỏ vào URL nào — đó là thứ giao diện
+    // thật sự chọn để hiện.
+    const ôAvatar = document.querySelector("[data-channel-avatar]");
+    expect(ôAvatar, "phải có ô ảnh đại diện kênh").toBeTruthy();
+    expect(
+      ôAvatar?.getAttribute("data-channel-avatar"),
+      "ô ảnh đại diện đang trỏ vào ảnh KHÁC với avatar Rust gửi lên",
+    ).toBe(avatar);
+
+    // Chốt chặn cho ĐÚNG lỗi 0.3.1: avatar không được trùng ảnh bìa của BẤT KỲ
+    // bài nào. Trả lại `thumbnail: videos[0]?.thumbnail` là dòng này đỏ.
+    const ảnhBìaCácBài = (GÓI_RUST_TRẢ_VỀ.videos as { thumbnail: string | null }[]).map(
+      (v) => v.thumbnail,
+    );
+    expect(
+      ảnhBìaCácBài,
+      "ảnh đại diện kênh đang là ẢNH BÌA MỘT BÀI — đúng lỗi anh Hùng báo",
+    ).not.toContain(ôAvatar?.getAttribute("data-channel-avatar"));
   });
 
   it("KHÔNG bịa '0 view' — Douyin không cho lượt xem thì phải nói thẳng", async () => {
@@ -167,8 +225,34 @@ describe("Chỗ nối Rust → giao diện: JSON THẬT phải ra dòng CÓ ngà
     // khi rơi mất tim thì `hasViews` cũng false nên nhãn vẫn ra "Tim từ" và
     // test này vẫn xanh. Nó chỉ canh riêng chuyện đừng bao giờ hiện "View từ"
     // cho Douyin. Chốt chặn thật cho tim/ngày là test "LỖI ANH HÙNG BÁO" ở trên.
-    expect(screen.getByPlaceholderText("Tim từ")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Tim đến")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Lượt tim từ")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Lượt tim đến")).toBeInTheDocument();
+  });
+
+  // 17/08/2026 — anh Hùng: "sao tool tải nó hiện lượt tim là sao".
+  // Nhãn phải TỰ NÓI RA nó là gì, và lời giải thích phải nằm trong nội dung
+  // trang (đọc được), KHÔNG giấu trong thuộc tính `title` của tooltip.
+  it("nhãn nói rõ 'lượt tim' và giải thích vì sao không có lượt xem", async () => {
+    await bấmLấyDanhSách();
+
+    expect(
+      screen.getByText(/35,316 lượt tim/),
+      "nhãn phải ghi rõ 'lượt tim', chữ 'tim' trơ trọi gây hiểu nhầm",
+    ).toBeInTheDocument();
+
+    const lờiGiải = document.querySelector("[data-metric-note]");
+    expect(lờiGiải, "thiếu lời giải thích ngay trên danh sách").toBeTruthy();
+    const chữ = lờiGiải?.textContent ?? "";
+    expect(chữ, "phải nói rõ con số là LƯỢT TIM").toMatch(/LƯỢT TIM/);
+    expect(chữ, "phải nói thẳng Douyin không cho lấy lượt xem").toMatch(
+      /không cho lấy lượt xem/,
+    );
+
+    // Không được là tooltip: chữ phải nằm trong nội dung đọc được.
+    expect(
+      lờiGiải?.getAttribute("title"),
+      "lời giải thích không được nhét vào tooltip",
+    ).toBeNull();
   });
 
   it("sắp 'Mới nhất' theo NGÀY THẬT trong gói Rust (bài mới lên trên)", async () => {

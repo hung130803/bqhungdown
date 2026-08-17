@@ -196,8 +196,10 @@ describe("Kênh Douyin — hiện ngày đăng + lượt tim, KHÔNG bịa lư�
     nạp(infoDouyin, BÀI_THẬT);
     render(<ChannelInput onSubmit={async () => undefined} />);
 
-    expect(screen.getByText("35,316 tim")).toBeInTheDocument();
-    expect(screen.getByText("12,733 tim")).toBeInTheDocument();
+    // "lượt tim" chứ không phải "tim" trơ trọi — 17/08/2026 anh Hùng nhìn chữ
+    // "tim" mà không hiểu đó là gì ("sao tool tải nó hiện lượt tim là sao").
+    expect(screen.getByText(/35,316 lượt tim/)).toBeInTheDocument();
+    expect(screen.getByText(/12,733 lượt tim/)).toBeInTheDocument();
     // uploadDate 20260728 -> hiện theo kiểu Việt Nam.
     expect(screen.getByText("28/7/2026")).toBeInTheDocument();
     expect(screen.getByText("19/7/2026")).toBeInTheDocument();
@@ -230,14 +232,14 @@ describe("Kênh Douyin — hiện ngày đăng + lượt tim, KHÔNG bịa lư�
     expect(dòng[2].getAttribute("data-vid-url")).toBe(ghimCũ.url); // 18/01
   });
 
-  it("ô lọc đổi nhãn sang 'Tim từ/đến' khi nền tảng không có lượt xem", () => {
+  it("ô lọc đổi nhãn sang 'Lượt tim từ/đến' khi nền tảng không có lượt xem", () => {
     nạp(infoDouyin, BÀI_THẬT);
     render(<ChannelInput onSubmit={async () => undefined} />);
-    expect(screen.getByPlaceholderText("Tim từ")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Tim đến")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Lượt tim từ")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Lượt tim đến")).toBeInTheDocument();
     // Ô sắp xếp là combobox đầu tiên trong thanh lọc.
     const sắp = screen.getAllByRole("combobox")[0];
-    expect(within(sắp).getByText("Nhiều tim nhất")).toBeInTheDocument();
-    expect(within(sắp).queryByText("Nhiều view nhất")).not.toBeInTheDocument();
+    expect(within(sắp).getByText("Nhiều lượt tim nhất")).toBeInTheDocument();
+    expect(within(sắp).queryByText("Nhiều lượt xem nhất")).not.toBeInTheDocument();
   });
 });

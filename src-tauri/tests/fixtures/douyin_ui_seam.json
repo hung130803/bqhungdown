@@ -1,28 +1,40 @@
-[
-  {
-    "url": "https://www.douyin.com/video/7655989781075217704",
-    "title": "2026下半年按这份片单来",
-    "durationSec": null,
-    "viewCount": null,
-    "likeCount": 35316,
-    "uploadDate": "20260728",
-    "thumbnail": "https://p3.douyinpic.com/a.jpeg",
-    "isPhoto": false,
-    "isShort": false,
-    "hashtags": [],
-    "downloaded": false
+{
+  "info": {
+    "url": "https://www.douyin.com/user/MS4wLjABAAAA-che",
+    "title": "大雄探片",
+    "thumbnail": "https://p3-pc.douyinpic.com/aweme/1080x1080/aweme-avatar/tos-cn-avt-0015_x.jpeg?from=2956013662",
+    "videoCount": 250,
+    "extractor": "douyin",
+    "hiddenDownloaded": null,
+    "channelId": "MS4wLjABAAAA-che",
+    "apiNote": null
   },
-  {
-    "url": "https://www.douyin.com/video/7655989781075217705",
-    "title": "用算盘和粉笔",
-    "durationSec": null,
-    "viewCount": null,
-    "likeCount": 12733,
-    "uploadDate": "20260719",
-    "thumbnail": "https://p3.douyinpic.com/b.jpeg",
-    "isPhoto": false,
-    "isShort": false,
-    "hashtags": [],
-    "downloaded": false
-  }
-]
+  "videos": [
+    {
+      "url": "https://www.douyin.com/video/7655989781075217704",
+      "title": "2026下半年按这份片单来",
+      "durationSec": null,
+      "viewCount": null,
+      "likeCount": 35316,
+      "uploadDate": "20260728",
+      "thumbnail": "https://p3.douyinpic.com/a.jpeg",
+      "isPhoto": false,
+      "isShort": false,
+      "hashtags": [],
+      "downloaded": false
+    },
+    {
+      "url": "https://www.douyin.com/video/7655989781075217705",
+      "title": "用算盘和粉笔",
+      "durationSec": null,
+      "viewCount": null,
+      "likeCount": 12733,
+      "uploadDate": "20260719",
+      "thumbnail": "https://p3.douyinpic.com/b.jpeg",
+      "isPhoto": false,
+      "isShort": false,
+      "hashtags": [],
+      "downloaded": false
+    }
+  ]
+}
