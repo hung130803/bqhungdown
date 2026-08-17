@@ -243,3 +243,55 @@ describe("Kênh Douyin — hiện ngày đăng + lượt tim, KHÔNG bịa lư�
     expect(within(sắp).queryByText("Nhiều lượt xem nhất")).not.toBeInTheDocument();
   });
 });
+
+// ═══ MỖI NỀN DÙNG THƯỚC ĐO CỦA NÓ, KHÔNG BẮT DÙNG CHUNG MỘT CỘT ═══════════
+// Đo thật 17/08/2026 bằng chính `yt-dlp` app đang dùng (--flat-playlist -J):
+//   · YouTube (@MrBeast)  : view_count > 0 ở 5/5 bài
+//   · TikTok  (@tiktok)   : view_count > 0 ở 5/5 bài
+//   · Douyin              : play_count > 0 ở 0/21 bài (chỉ có digg_count)
+// Nên nền NÀO CÓ lượt xem thật thì phải hiện LƯỢT XEM, đừng kéo cả 3 nền về
+// cột "lượt tim" chỉ vì Douyin thiếu.
+describe("Nền có lượt xem thật (YouTube/TikTok) phải hiện LƯỢT XEM", () => {
+  const bàiCóView: ChannelVideo[] = [
+    {
+      url: "https://www.youtube.com/watch?v=aaa",
+      title: "Bài có lượt xem",
+      durationSec: 300,
+      viewCount: 79_000_000,
+      likeCount: null,
+      uploadDate: "20260728",
+      thumbnail: null,
+      isShort: false,
+      isPhoto: false,
+      hashtags: [],
+      downloaded: false,
+    },
+  ];
+
+  it("hiện 'lượt xem', KHÔNG hiện 'lượt tim'", () => {
+    nạp(infoYoutube, bàiCóView);
+    render(<ChannelInput onSubmit={async () => undefined} />);
+
+    expect(screen.getByText(/79,000,000 lượt xem/)).toBeInTheDocument();
+    expect(screen.queryByText(/lượt tim/)).not.toBeInTheDocument();
+  });
+
+  it("ô lọc + sắp xếp theo LƯỢT XEM", () => {
+    nạp(infoYoutube, bàiCóView);
+    render(<ChannelInput onSubmit={async () => undefined} />);
+
+    expect(screen.getByPlaceholderText("Lượt xem từ")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Lượt xem đến")).toBeInTheDocument();
+    const sắp = screen.getAllByRole("combobox")[0];
+    expect(within(sắp).getByText("Nhiều lượt xem nhất")).toBeInTheDocument();
+  });
+
+  it("KHÔNG hiện lời giải thích của Douyin cho nền có lượt xem", () => {
+    nạp(infoYoutube, bàiCóView);
+    render(<ChannelInput onSubmit={async () => undefined} />);
+    expect(
+      document.querySelector("[data-metric-note]"),
+      "khung 'Douyin không cho lượt xem' chỉ dành cho nền THIẾU lượt xem",
+    ).toBeNull();
+  });
+});
