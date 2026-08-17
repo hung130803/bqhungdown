@@ -172,11 +172,22 @@ export interface ChannelVideo {
   title: string;
   durationSec?: number | null;
   viewCount?: number | null;
-  /** Lượt THÍCH (tim). Douyin/TikTok trả số này thật, còn `viewCount` thì
-   *  KHÔNG — web API luôn trả `play_count = 0` kể cả khi có cookie đăng nhập
-   *  (đo 16/08/2026: 0/21 bài có view, 21/21 bài có tim). Với Douyin đây là
-   *  thước đo "bài nào hot" DUY NHẤT có thật. */
+  /** Lượt THÍCH (tim). Douyin/TikTok trả số này thật, còn `viewCount` của
+   *  DOUYIN thì KHÔNG — web API luôn trả `play_count = 0` kể cả khi có cookie
+   *  đăng nhập (đo 16/08/2026: 0/21 bài có view, 21/21 bài có tim).
+   *  TikTok thì có ĐỦ CẢ HAI (đo 17/08/2026 bằng chính yt-dlp của app). */
   likeCount?: number | null;
+  /** Lượt BÌNH LUẬN. Douyin `statistics.comment_count`; TikTok `comment_count`;
+   *  YouTube `statistics.commentCount`. Cả ba đều nằm sẵn trong gói app ĐANG
+   *  tải — bóc thêm không tốn lượt gọi mạng / quota nào. */
+  commentCount?: number | null;
+  /** Lượt CHIA SẺ. Douyin `statistics.share_count`; TikTok `repost_count`.
+   *  YouTube KHÔNG công bố ở API công khai nên luôn null ở đó.
+   *
+   *  Với Douyin (không có lượt xem), đây là thước "hot" tốt nhất lấy được
+   *  MIỄN PHÍ: bài nổi thường có chia sẻ CAO HƠN bình luận (đo kênh anh Hùng:
+   *  12.272 vs 908 · 1.593 vs 325). */
+  shareCount?: number | null;
   /** `YYYYMMDD` when extractor exposes it. */
   uploadDate?: string | null;
   thumbnail?: string | null;

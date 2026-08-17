@@ -220,6 +220,8 @@ async fn fetch_page(
                 duration_sec: duration,
                 view_count: view,
                 like_count: None,
+                comment_count: None,
+                share_count: None,
                 upload_date,
                 thumbnail: if pic.is_empty() { None } else { Some(pic) },
                 is_photo: false,

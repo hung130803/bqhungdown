@@ -163,6 +163,22 @@ pub struct ChannelVideo {
     /// (`channel_cache/*.json`), thiếu nó là file cũ parse hỏng → mất cache.
     #[serde(default)]
     pub like_count: Option<u64>,
+    /// Lượt BÌNH LUẬN. Douyin: `statistics.comment_count`. TikTok (yt-dlp
+    /// `--flat-playlist`): `comment_count`. CẢ HAI đều đã nằm sẵn trong gói app
+    /// ĐANG TẢI — bóc thêm không tốn một lượt gọi mạng nào.
+    ///
+    /// `#[serde(default)]` BẮT BUỘC (xem `like_count`): đây là struct lưu đĩa.
+    #[serde(default)]
+    pub comment_count: Option<u64>,
+    /// Lượt CHIA SẺ. Douyin: `statistics.share_count`. TikTok: `repost_count`
+    /// (tên yt-dlp đặt cho `stats.shareCount`).
+    ///
+    /// Theo tài liệu vận hành Douyin, bài nổi thường có chia sẻ CAO HƠN bình
+    /// luận — đo trên kênh anh Hùng đúng vậy (12.272 vs 908; 1.593 vs 325).
+    /// Nên đây là thước "hot" tốt nhất lấy được MIỄN PHÍ cho Douyin, nơi
+    /// `play_count` luôn về 0.
+    #[serde(default)]
+    pub share_count: Option<u64>,
     /// Upload date in `YYYYMMDD` form when available — left as opaque string
     /// because not every extractor sets it.
     pub upload_date: Option<String>,

@@ -175,6 +175,8 @@ async fn fetch_bilibili_tv_series(
                 duration_sec: None,
                 view_count: None,
                 like_count: None,
+                comment_count: None,
+                share_count: None,
                 upload_date,
                 thumbnail,
                 is_photo: false,
@@ -802,12 +804,19 @@ fn parse_tikwm_entry(v: &serde_json::Value) -> Option<ChannelVideo> {
         .and_then(|x| x.as_array())
         .map(|a| !a.is_empty())
         .unwrap_or(false);
+    // tikwm để ba số này ở NGAY tầng gốc mỗi video (không lồng trong
+    // `statistics` như API douyin.com). Nối cho đồng bộ với đường chính.
+    let like_count = v.get("digg_count").and_then(|x| x.as_u64());
+    let comment_count = v.get("comment_count").and_then(|x| x.as_u64());
+    let share_count = v.get("share_count").and_then(|x| x.as_u64());
     Some(ChannelVideo {
         url,
         title,
         duration_sec,
         view_count,
-        like_count: None,
+        like_count,
+        comment_count,
+        share_count,
         upload_date,
         thumbnail,
         is_short: false,
@@ -1355,6 +1364,27 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
         .get("view_count")
         .and_then(|v| v.as_u64())
         .or_else(|| e.get("approximate_view_count").and_then(|v| v.as_u64()));
+    // ── TIM · BÌNH LUẬN · CHIA SẺ ────────────────────────────────────────
+    // yt-dlp `--flat-playlist` cho TikTok trả SẴN cả ba, trong CÙNG gói đã
+    // dùng để lấy `view_count` — bóc thêm KHÔNG tốn lượt gọi mạng nào.
+    //
+    // ĐO THẬT 17/08/2026 bằng chính binary của app trên @khaby.lame
+    // (`--flat-playlist --dump-single-json --playlist-end 5`); khoá CÓ trong
+    // entry: view_count · like_count · comment_count · repost_count · save_count.
+    //   view 41.100.000 | tim 2.100.000 | bl 34.000 | chia sẻ 150.600
+    //   view  7.900.000 | tim   799.700 | bl 10.700 | chia sẻ  10.800
+    //   view  9.100.000 | tim   746.700 | bl  6.654 | chia sẻ   7.896
+    // Trước bản này dòng dựng ChannelVideo bên dưới đặt CỨNG `like_count:
+    // None`, nên số tim THẬT yt-dlp đã trả về bị vứt ngay tại đây.
+    //
+    // `repost_count` là tên yt-dlp đặt cho `stats.shareCount` của TikTok —
+    // đúng nghĩa LƯỢT CHIA SẺ, không phải "đăng lại" kiểu Twitter.
+    let like_count = e.get("like_count").and_then(|v| v.as_u64());
+    let comment_count = e.get("comment_count").and_then(|v| v.as_u64());
+    let share_count = e
+        .get("repost_count")
+        .and_then(|v| v.as_u64())
+        .or_else(|| e.get("share_count").and_then(|v| v.as_u64()));
     // upload_date — yt-dlp `--flat-playlist` thường KHÔNG trả `upload_date`
     // trực tiếp, mà chỉ có `timestamp` (Unix epoch). Convert sang YYYYMMDD
     // để frontend hiển thị/filter đồng nhất.
@@ -1389,7 +1419,9 @@ fn parse_entry(e: &Value) -> Option<ChannelVideo> {
         title,
         duration_sec,
         view_count,
-        like_count: None,
+        like_count,
+        comment_count,
+        share_count,
         upload_date,
         thumbnail,
         is_short: false,
@@ -1406,7 +1438,8 @@ mod tests {
     fn v(url: &str, title: &str, dur: Option<u64>, tags: &[&str]) -> ChannelVideo {
         ChannelVideo {
             url: url.into(), title: title.into(), duration_sec: dur,
-            view_count: None, like_count: None, upload_date: None, thumbnail: None,
+            view_count: None, like_count: None, comment_count: None, share_count: None,
+            upload_date: None, thumbnail: None,
             is_photo: false, is_short: false,
             hashtags: tags.iter().map(|s| s.to_string()).collect(),
             downloaded: false,
@@ -1440,6 +1473,79 @@ mod tests {
         // live/upcoming lên trên cùng nên đây là ca dễ sai nhất.
         assert!(videos[0].duration_sec.unwrap() > 0,
                 "video mới nhất phải là video THẬT");
+    }
+
+    /// TIKTOK PHẢI CÓ LƯỢT TIM · BÌNH LUẬN · CHIA SẺ — chạy ĐƯỜNG THẬT.
+    ///
+    /// LỖI ĐANG SỬA: `parse_entry` đặt CỨNG `like_count: None`, nên dù yt-dlp
+    /// trả về số tim thật thì app vẫn vứt đi ngay tại đây — y hệt lớp bệnh
+    /// 0.3.0 (dữ liệu về tới nơi rồi bị bỏ ở chặng cuối).
+    ///
+    /// QUY TẮC SẮT: test bằng THÀNH PHẦN THẬT. Mẫu dưới là ĐẦU RA NGUYÊN VĂN
+    /// của chính binary yt-dlp app đang dùng, chạy 17/08/2026:
+    ///   yt-dlp --flat-playlist --dump-single-json --playlist-end 5
+    ///          https://www.tiktok.com/@khaby.lame
+    /// (đã lược `formats`/`http_headers`/`subtitles` vì chứa token, và cắt
+    /// chuỗi truy vấn có chữ ký khỏi URL ảnh — KHÔNG đụng tới các số).
+    ///
+    /// TỰ KIỂM: đặt lại `like_count: None` trong `parse_entry` → test này ĐỎ.
+    #[test]
+    fn tiktok_co_tim_binh_luan_chia_se_du_lieu_that_tu_ytdlp() {
+        let raw = include_str!("../tests/fixtures/tiktok_flat_entries.json");
+        let v: Value = serde_json::from_str(raw).expect("mẫu JSON thật phải parse được");
+        let entries = v["entries"].as_array().expect("mẫu phải có `entries`");
+        assert_eq!(entries.len(), 5, "mẫu phải còn nguyên 5 entry");
+
+        // Đi qua ĐÚNG hàm production, không có đường tay thứ hai.
+        let videos: Vec<ChannelVideo> = entries.iter().filter_map(parse_entry).collect();
+        assert_eq!(videos.len(), 5, "không được rơi entry nào");
+
+        // Số ĐO ĐƯỢC, theo đúng thứ tự yt-dlp trả về.
+        let mong_doi: [(u64, u64, u64, u64); 5] = [
+            (41_100_000, 2_100_000, 34_000, 150_600),
+            (7_900_000, 799_700, 10_700, 10_800),
+            (9_100_000, 746_700, 6_654, 7_896),
+            (5_900_000, 539_200, 7_844, 6_091),
+            (31_600_000, 3_200_000, 40_200, 66_500),
+        ];
+        for (i, (xem, tim, bl, chia_se)) in mong_doi.iter().enumerate() {
+            let x = &videos[i];
+            assert_eq!(x.view_count, Some(*xem), "bài {i}: lượt xem");
+            assert_eq!(
+                x.like_count,
+                Some(*tim),
+                "bài {i}: LƯỢT TIM bị vứt — yt-dlp có trả `like_count` nhưng \
+                 parse_entry không nối vào (đúng lỗi đang sửa)"
+            );
+            assert_eq!(x.comment_count, Some(*bl), "bài {i}: lượt bình luận");
+            assert_eq!(
+                x.share_count,
+                Some(*chia_se),
+                "bài {i}: lượt chia sẻ — yt-dlp đặt tên là `repost_count`"
+            );
+        }
+
+        // TikTok có CẢ lượt xem lẫn lượt tim → giao diện hiện cả hai, không rối.
+        assert!(
+            videos.iter().all(|x| x.view_count.is_some() && x.like_count.is_some()),
+            "TikTok phải có đủ cả lượt xem lẫn lượt tim"
+        );
+    }
+
+    /// KHÔNG có thì phải để TRỐNG, tuyệt đối không hoá thành 0.
+    ///
+    /// Entry của YouTube qua `--flat-playlist` KHÔNG kèm tim/bình luận/chia sẻ.
+    /// Nếu ai đó "vá cho gọn" bằng `.unwrap_or(0)` thì anh Hùng sẽ lọc/sắp xếp
+    /// trên số BỊA mà không hề biết.
+    #[test]
+    fn thieu_so_thi_de_trong_chu_khong_bia_0() {
+        let e = serde_json::json!({
+            "url": "https://www.youtube.com/watch?v=abc",
+            "title": "khong co thong ke", "duration": 300});
+        let x = parse_entry(&e).expect("entry hợp lệ");
+        assert_eq!(x.like_count, None, "thiếu tim -> None, KHÔNG phải Some(0)");
+        assert_eq!(x.comment_count, None, "thiếu bình luận -> None");
+        assert_eq!(x.share_count, None, "thiếu chia sẻ -> None");
     }
 
     #[test]

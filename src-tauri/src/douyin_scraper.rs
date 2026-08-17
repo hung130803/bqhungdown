@@ -59,6 +59,15 @@ pub struct DouyinPost {
     /// như thể là thật thì tệ hơn là không hiện.
     #[serde(default)]
     pub like_count: Option<u64>,
+    /// Lượt BÌNH LUẬN (`statistics.comment_count`) — số THẬT, cùng gói, 0 lượt
+    /// gọi thêm.
+    #[serde(default)]
+    pub comment_count: Option<u64>,
+    /// Lượt CHIA SẺ (`statistics.share_count`) — số THẬT, cùng gói, 0 lượt gọi
+    /// thêm. Douyin không cho lượt xem nên đây + lượt tim là hai thước "hot"
+    /// tốt nhất lấy được miễn phí.
+    #[serde(default)]
+    pub share_count: Option<u64>,
     /// TÊN HIỂN THỊ của kênh (`author.nickname`) — có sẵn trong CHÍNH gói
     /// danh sách, không tốn thêm lượt gọi nào. Đo 17/08/2026: 55 khoá trong
     /// `author`, `nickname` = "大雄探片".
@@ -152,6 +161,17 @@ struct TikwmStats {
     /// Lượt thích — SỐ THẬT.
     #[serde(default)]
     digg_count: Option<u64>,
+    /// Lượt bình luận — SỐ THẬT (đo kênh anh Hùng: 908 · 325).
+    #[serde(default)]
+    comment_count: Option<u64>,
+    /// Lượt chia sẻ — SỐ THẬT (đo kênh anh Hùng: 12.272 · 1.593).
+    ///
+    /// Ba số này nằm CÙNG một khối `statistics` của CÙNG một gói mà app đã
+    /// tải về để lấy `digg_count`. Trước bản này struct chỉ khai đúng
+    /// `digg_count` nên serde vứt thẳng hai số kia — mất trắng dữ liệu đã
+    /// trả tiền băng thông để lấy.
+    #[serde(default)]
+    share_count: Option<u64>,
 }
 
 /// Đổi dấu thời gian Unix của Douyin sang `YYYYMMDD` — đúng định dạng
@@ -464,6 +484,8 @@ fn awemes_to_posts(list: Vec<TikwmAweme>) -> Vec<DouyinPost> {
                 is_photo: !aweme.images.is_empty(),
                 create_time: aweme.create_time.filter(|t| *t > 0),
                 like_count: aweme.statistics.as_ref().and_then(|s| s.digg_count),
+                comment_count: aweme.statistics.as_ref().and_then(|s| s.comment_count),
+                share_count: aweme.statistics.as_ref().and_then(|s| s.share_count),
                 author_name,
                 author_avatar,
             })
@@ -914,8 +936,12 @@ fn posts_to_channel_videos(posts: Vec<DouyinPost>) -> Vec<crate::models::Channel
             // đây thì UI hiện "0 view" trông như thật → anh Hùng lọc theo số
             // đó là lọc trên số BỊA. Không có thì hiện KHÔNG CÓ.
             view_count: None,
-            // Lượt thích là thước đo "bài nào hot" DUY NHẤT có thật ở Douyin.
+            // Lượt tim / bình luận / chia sẻ là ba thước đo "bài nào hot" có
+            // THẬT ở Douyin. Cả ba đến từ CÙNG khối `statistics` của CÙNG gói
+            // đã tải — thêm hai số sau không tốn lượt gọi mạng nào.
             like_count: p.like_count,
+            comment_count: p.comment_count,
+            share_count: p.share_count,
             upload_date: unix_to_yyyymmdd(p.create_time),
             thumbnail: if p.thumbnail.is_empty() {
                 None
@@ -1027,6 +1053,8 @@ async fn try_tikwm_endpoint(
                 is_photo: !aweme.images.is_empty(),
                 create_time: aweme.create_time.filter(|t| *t > 0),
                 like_count: aweme.statistics.as_ref().and_then(|s| s.digg_count),
+                comment_count: aweme.statistics.as_ref().and_then(|s| s.comment_count),
+                share_count: aweme.statistics.as_ref().and_then(|s| s.share_count),
                 author_name,
                 author_avatar,
             })
@@ -1384,6 +1412,20 @@ mod tests_null_list {
         assert_eq!(posts[1].create_time, Some(1784464747));
         assert_eq!(posts[1].like_count, Some(12733));
 
+        // ── BÌNH LUẬN + CHIA SẺ (thêm ở 0.4.0) ───────────────────────────
+        // Hai số này nằm CÙNG khối `statistics` của CÙNG gói đã tải để lấy
+        // `digg_count`. Trước 0.4.0 `TikwmStats` chỉ khai đúng `digg_count`
+        // nên serde vứt thẳng chúng đi — mất trắng dữ liệu đã tải về.
+        assert_eq!(posts[0].comment_count, Some(908), "comment_count là SỐ THẬT");
+        assert_eq!(posts[0].share_count, Some(12272), "share_count là SỐ THẬT");
+        assert_eq!(posts[1].comment_count, Some(325));
+        assert_eq!(posts[1].share_count, Some(1593));
+        // Tài liệu vận hành Douyin: bài nổi thường CHIA SẺ > BÌNH LUẬN — dữ
+        // liệu thật của kênh anh Hùng đúng vậy. Douyin không cho lượt xem nên
+        // chia sẻ là thước "hot" tốt nhất lấy được MIỄN PHÍ.
+        assert!(posts[0].share_count > posts[0].comment_count);
+        assert!(posts[1].share_count > posts[1].comment_count);
+
         // Ngày phải ra đúng YYYYMMDD — định dạng bộ lọc ngày của UI đang đọc.
         assert_eq!(unix_to_yyyymmdd(posts[0].create_time).as_deref(), Some("20260728"));
         assert_eq!(unix_to_yyyymmdd(posts[1].create_time).as_deref(), Some("20260719"));
@@ -1403,6 +1445,12 @@ mod tests_null_list {
         assert_eq!(posts[0].like_count, None);
         assert_eq!(posts[1].create_time, None, "create_time=0 -> None, KHÔNG phải 1970");
         assert_eq!(posts[1].like_count, None, "statistics rỗng -> None chứ không phải Some(0)");
+        // Ba số cùng một luật: KHÔNG có thì để TRỐNG. Nhét 0 vào là anh Hùng
+        // lọc/sắp xếp trên số bịa mà không biết.
+        assert_eq!(posts[0].comment_count, None, "thiếu hẳn statistics -> None");
+        assert_eq!(posts[0].share_count, None);
+        assert_eq!(posts[1].comment_count, None, "statistics rỗng -> None chứ không phải Some(0)");
+        assert_eq!(posts[1].share_count, None);
         assert_eq!(unix_to_yyyymmdd(None), None);
         assert_eq!(unix_to_yyyymmdd(Some(0)), None, "mốc 0 KHÔNG được ra 19700101");
     }
@@ -1458,13 +1506,15 @@ mod tests_null_list {
                 {"aweme_id":"7655989781075217704","desc":"2026下半年按这份片单来",
                  "create_time":1785239590, "images": null,
                  "video":{"cover":{"url_list":["https://p3.douyinpic.com/a.jpeg"]}},
-                 "statistics":{"play_count":0,"digg_count":35316},
+                 "statistics":{"play_count":0,"digg_count":35316,
+                               "comment_count":908,"share_count":12272},
                  "author":{"nickname":"大雄探片","avatar_thumb":{"url_list":[
                    "https://p3-pc.douyinpic.com/aweme/100x100/aweme-avatar/tos-cn-avt-0015_x.jpeg"]}}},
                 {"aweme_id":"7655989781075217705","desc":"用算盘和粉笔",
                  "create_time":1784464747, "images": null,
                  "video":{"cover":{"url_list":["https://p3.douyinpic.com/b.jpeg"]}},
-                 "statistics":{"play_count":0,"digg_count":12733},
+                 "statistics":{"play_count":0,"digg_count":12733,
+                               "comment_count":325,"share_count":1593},
                  "author":{"nickname":"大雄探片","avatar_thumb":{"url_list":[
                    "https://p3-pc.douyinpic.com/aweme/100x100/aweme-avatar/tos-cn-avt-0015_x.jpeg"]}}}
             ]
@@ -1510,11 +1560,16 @@ mod tests_null_list {
         // Khẳng định TÊN KHOÁ thật đi qua dây — đây là thứ 0.3.0 đánh rơi.
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let obj = v["videos"][0].as_object().expect("phần tử phải là object");
-        for k in ["url", "title", "uploadDate", "likeCount", "viewCount", "isPhoto"] {
+        for k in [
+            "url", "title", "uploadDate", "likeCount", "commentCount", "shareCount",
+            "viewCount", "isPhoto",
+        ] {
             assert!(obj.contains_key(k), "gói gửi lên giao diện PHẢI có khoá `{k}` — có: {:?}", obj.keys().collect::<Vec<_>>());
         }
         assert_eq!(obj["uploadDate"], "20260728", "ngày đăng phải là số THẬT");
         assert_eq!(obj["likeCount"], 35316, "lượt tim phải là số THẬT");
+        assert_eq!(obj["commentCount"], 908, "lượt bình luận phải là số THẬT");
+        assert_eq!(obj["shareCount"], 12272, "lượt chia sẻ phải là số THẬT");
         assert!(obj["viewCount"].is_null(), "view phải RỖNG — hiện 0 view là BỊA");
 
         // ── TÊN KÊNH + ẢNH ĐẠI DIỆN (lỗi anh Hùng báo 17/08/2026) ─────────
@@ -1568,6 +1623,8 @@ mod tests_null_list {
             is_photo: false,
             create_time: Some(1785239590),
             like_count: Some(1),
+            comment_count: None,
+            share_count: None,
             author_name: None,
             author_avatar: None,
         }];
@@ -1590,6 +1647,8 @@ mod tests_null_list {
             is_photo: false,
             create_time: None,
             like_count: None,
+            comment_count: None,
+            share_count: None,
             author_name: Some("大雄探片".into()),
             author_avatar: Some(
                 "https://p3-pc.douyinpic.com/aweme/100x100/aweme-avatar/a.jpeg".into(),
@@ -1622,6 +1681,8 @@ mod tests_null_list {
             is_photo: false,
             create_time: None,
             like_count: None,
+            comment_count: None,
+            share_count: None,
             author_name: Some("TÊN TỪ BÀI".into()),
             author_avatar: Some("https://cdn/from-post.jpeg".into()),
         }];

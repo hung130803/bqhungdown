@@ -262,4 +262,108 @@ describe("Chỗ nối Rust → giao diện: JSON THẬT phải ra dòng CÓ ngà
     expect(dòng[0].getAttribute("data-vid-url")).toContain("7655989781075217704");
     expect(dòng[1].getAttribute("data-vid-url")).toContain("7655989781075217705");
   });
+
+  // ══ 0.4.0 — LƯỢT BÌNH LUẬN + LƯỢT CHIA SẺ ═════════════════════════════
+  // Hai số này đã nằm SẴN trong gói app tải về để lấy lượt tim (cùng khối
+  // `statistics`), nên bóc thêm KHÔNG tốn một lượt gọi mạng nào. Douyin
+  // không cho lượt xem, mà bài nổi thường CHIA SẺ > BÌNH LUẬN — nên chia sẻ
+  // là thước "hot" tốt nhất lấy được miễn phí.
+  //
+  // Vì sao phải canh ở ĐÂY chứ không chỉ ở Rust: lớp bệnh "giao diện đánh
+  // rơi / tự chế trường" đã ship HAI lần (0.3.0 rơi, 0.3.1 bịa). Cổng Rust
+  // chỉ chứng minh số ra tới mép JSON; đoạn còn lại tới mắt anh Hùng là
+  // đường TS, và đúng đoạn đó đã hỏng hai lần.
+  it("LƯỢT BÌNH LUẬN + LƯỢT CHIA SẺ phải ra tới giao diện, không rơi ở đường TS", async () => {
+    await bấmLấyDanhSách();
+
+    // Số THẬT trong gói Rust: bài …704 → 908 bình luận / 12.272 chia sẻ.
+    expect(
+      screen.getByText(/908 bình luận/),
+      "LƯỢT BÌNH LUẬN không ra tới giao diện — gói Rust có `commentCount` " +
+        "nhưng đường TS làm rơi mất (đúng lớp bệnh 0.3.0)",
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/12,272 chia sẻ/),
+      "LƯỢT CHIA SẺ không ra tới giao diện — gói Rust có `shareCount` nhưng " +
+        "đường TS làm rơi mất",
+    ).toBeInTheDocument();
+
+    // Bài thứ hai cũng phải có, không phải chỉ dòng đầu ăn may.
+    expect(screen.getByText(/325 bình luận/)).toBeInTheDocument();
+    expect(screen.getByText(/1,593 chia sẻ/)).toBeInTheDocument();
+
+    // Lượt tim vẫn còn nguyên — thêm hai cột không được đè mất cột cũ.
+    expect(screen.getByText(/35,316 lượt tim/)).toBeInTheDocument();
+
+    // Ba số phải TỰ NÓI RA nó là gì. Anh Hùng đã hỏi "sao tool hiện lượt
+    // tim là sao" khi con số đứng trơ trọi — đừng lặp lại với ba con số.
+    for (const chữ of [/908 bình luận/, /12,272 chia sẻ/, /35,316 lượt tim/]) {
+      expect(screen.getByText(chữ).textContent ?? "").toMatch(
+        /bình luận|chia sẻ|lượt tim/,
+      );
+    }
+  });
+
+  it("ô chọn thước đo chỉ liệt kê số CÓ THẬT — Douyin không được có 'lượt xem'", async () => {
+    await bấmLấyDanhSách();
+
+    const ôChọn = document.querySelector("[data-metric-picker]") as HTMLSelectElement | null;
+    expect(
+      ôChọn,
+      "thiếu ô chọn thước đo — có 3 số thật (tim/bình luận/chia sẻ) thì phải " +
+        "cho anh Hùng chọn sắp xếp/lọc theo số nào",
+    ).toBeTruthy();
+
+    const cácLựaChọn = Array.from(ôChọn!.options).map((o) => o.textContent ?? "");
+    expect(cácLựaChọn.join(" | ")).toMatch(/lượt tim/);
+    expect(cácLựaChọn.join(" | ")).toMatch(/lượt bình luận/);
+    expect(cácLựaChọn.join(" | ")).toMatch(/lượt chia sẻ/);
+    // Gói Rust có `viewCount: null` → tuyệt đối không được mời chọn lượt xem,
+    // vì lọc theo nó là lọc trên số RỖNG mà cứ tưởng là thật.
+    expect(
+      cácLựaChọn.join(" | "),
+      "Douyin KHÔNG có lượt xem mà ô chọn vẫn mời chọn — lọc theo nó là lọc " +
+        "trên số rỗng",
+    ).not.toMatch(/lượt xem/);
+  });
+
+  // CỔNG MẠNH NHẤT của nhóm này: chứng minh ô chọn thật sự ĐIỀU KHIỂN bộ lọc,
+  // chứ không phải cái nhãn trang trí. Dựa trên khác biệt THẬT trong fixture:
+  //   bài …704: tim 35.316 · chia sẻ 12.272
+  //   bài …705: tim 12.733 · chia sẻ  1.593
+  // Ngưỡng 2.000 → theo TIM giữ cả hai, theo CHIA SẺ chỉ giữ một.
+  it("đổi sang 'Theo lượt chia sẻ' thì lọc chạy theo CHIA SẺ, không phải tim", async () => {
+    await bấmLấyDanhSách();
+
+    // Mặc định là lượt tim (số sát người xem nhất mà Douyin có).
+    fireEvent.change(screen.getByPlaceholderText("Lượt tim từ"), {
+      target: { value: "2000" },
+    });
+    expect(
+      document.querySelectorAll("[data-vid-url]"),
+      "lọc theo TIM ở ngưỡng 2.000: cả hai bài (35.316 và 12.733) phải còn",
+    ).toHaveLength(2);
+
+    // Đổi thước đo — KHÔNG đụng gì tới ô ngưỡng.
+    fireEvent.change(document.querySelector("[data-metric-picker]")!, {
+      target: { value: "shares" },
+    });
+
+    // Nhãn ô ngưỡng phải đổi theo, nếu không anh Hùng sẽ tưởng vẫn đang lọc tim.
+    expect(
+      screen.getByPlaceholderText("Lượt chia sẻ từ"),
+      "đổi thước đo mà nhãn ô lọc không đổi — anh Hùng sẽ lọc nhầm số",
+    ).toBeInTheDocument();
+
+    const dòng = document.querySelectorAll("[data-vid-url]");
+    expect(
+      dòng,
+      "lọc theo CHIA SẺ ở ngưỡng 2.000 phải loại bài …705 (1.593 chia sẻ). " +
+        "Vẫn còn 2 dòng nghĩa là ô chọn chỉ đổi cái nhãn, bộ lọc vẫn chạy theo tim",
+    ).toHaveLength(1);
+    expect(dòng[0].getAttribute("data-vid-url")).toContain("7655989781075217704");
+
+    // Mục "Nhiều … nhất" cũng phải nói đúng số đang dùng.
+    expect(screen.getByText("Nhiều lượt chia sẻ nhất")).toBeInTheDocument();
+  });
 });

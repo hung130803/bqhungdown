@@ -17,7 +17,12 @@ use std::path::PathBuf;
 /// v8: video Douyin nay CO ngay dang (`upload_date`) + luot tim (`like_count`).
 /// Kho luu boi ban <= v7 khong co hai truong nay, giu lai thi anh Hung cap
 /// nhat xong mo kenh ra VAN thay trong tron va tuong chua sua gi.
-const CACHE_SCHEMA_VERSION: u32 = 8;
+/// v9: THEM luot binh luan (`comment_count`) + luot chia se (`share_count`) cho
+/// ca Douyin lan TikTok; TikTok nay co luot tim THAT (truoc dat cung None).
+/// Kho luu boi ban <= v8 thieu ba truong do — nho `#[serde(default)]` file cu
+/// VAN DOC DUOC (khong mat cache), nhung moi dong se trong tron o ba cot moi.
+/// Tang so nay de coi nhu MISS va tu lay lai MOT lan cho du so.
+const CACHE_SCHEMA_VERSION: u32 = 9;
 
 #[derive(Serialize, Deserialize)]
 struct CachedChannel {
@@ -147,6 +152,8 @@ mod tests {
             duration_sec: Some(100),
             view_count: Some(1),
             like_count: None,
+            comment_count: None,
+            share_count: None,
             upload_date: Some("20240101".into()),
             thumbnail: None,
             is_photo: false,

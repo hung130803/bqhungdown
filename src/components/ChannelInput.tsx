@@ -19,6 +19,41 @@ type SortKey = "newest" | "oldest" | "popular" | "longest" | "shortest";
 type LengthFilter = "all" | "short" | "medium" | "long";
 type DateFilter = "all" | "7d" | "30d" | "90d" | "1y" | "custom" | "year" | "month";
 
+/** THƯỚC ĐO "bài nào hot". Mỗi nền tảng cho một bộ số khác nhau, nên thay vì
+ *  đoán, app hỏi thẳng dữ liệu xem có gì rồi chỉ cho chọn thứ CÓ THẬT.
+ *   · YouTube  → xem · tim · bình luận            (API không cho chia sẻ)
+ *   · TikTok   → xem · tim · bình luận · chia sẻ  (đủ cả 4)
+ *   · Douyin   → tim · bình luận · chia sẻ        (KHÔNG bao giờ có lượt xem)
+ */
+type Metric = "views" | "likes" | "comments" | "shares";
+
+/** Thứ tự ưu tiên khi tự chọn thước đo mặc định: cái nào "sát người xem" nhất
+ *  mà dữ liệu CÓ THẬT thì lấy. Douyin không có view nên rơi xuống tim — giữ
+ *  đúng hành vi 0.3.1 mà anh Hùng đã quen. */
+const THỨ_TỰ_ƯU_TIÊN: Metric[] = ["views", "likes", "shares", "comments"];
+
+const NHÃN_THƯỚC_ĐO: Record<Metric, string> = {
+  views: "lượt xem",
+  likes: "lượt tim",
+  comments: "lượt bình luận",
+  shares: "lượt chia sẻ",
+};
+
+/** Ký hiệu đứng trước con số trên mỗi dòng — để không thể lẫn ba số với nhau. */
+const KÝ_HIỆU: Record<Metric, string> = {
+  views: "",
+  likes: "❤",
+  comments: "💬",
+  shares: "↗",
+};
+
+function sốCủa(v: ChannelVideo, m: Metric): number | null {
+  if (m === "views") return v.viewCount ?? null;
+  if (m === "likes") return v.likeCount ?? null;
+  if (m === "comments") return v.commentCount ?? null;
+  return v.shareCount ?? null;
+}
+
 const RUBBER_THRESHOLD = 5;
 const SHORTS_THRESHOLD_SEC = 60;
 
@@ -262,13 +297,23 @@ export function ChannelInput({ onSubmit }: Props) {
   };
 
   // ── THƯỚC ĐO "BÀI NÀO HOT" ────────────────────────────────────────────
-  // YouTube trả lượt XEM. Douyin/TikTok thì KHÔNG (play_count luôn 0, kể cả
-  // có cookie đăng nhập) nhưng trả lượt TIM thật. Nên chọn thước đo theo
-  // dữ liệu THỰC SỰ có, rồi sort/lọc/hiện đều dùng chung nó.
-  const hasViews = useMemo(() => videos.some((v) => v.viewCount != null), [videos]);
-  const hasLikes = useMemo(() => videos.some((v) => v.likeCount != null), [videos]);
-  const metricOf = (v: ChannelVideo): number | null =>
-    (hasViews ? v.viewCount : hasLikes ? v.likeCount : null) ?? null;
+  // YouTube trả lượt XEM. DOUYIN thì KHÔNG (play_count luôn 0, kể cả có cookie
+  // đăng nhập) nhưng trả lượt TIM / BÌNH LUẬN / CHIA SẺ thật. TikTok có đủ cả
+  // bốn. Nên KHÔNG đoán theo tên nền tảng: hỏi thẳng dữ liệu xem có số nào,
+  // rồi sort/lọc/hiện đều dùng chung đúng số anh Hùng đang chọn.
+  const thướcĐoCóThật = useMemo<Metric[]>(
+    () => THỨ_TỰ_ƯU_TIÊN.filter((m) => videos.some((v) => sốCủa(v, m) != null)),
+    [videos],
+  );
+  // Thước đo anh Hùng tự chọn. `null` = chưa chọn → dùng cái đầu tiên có thật.
+  const [thướcĐoChọn, setThướcĐoChọn] = useState<Metric | null>(null);
+  const thướcĐo: Metric =
+    thướcĐoChọn && thướcĐoCóThật.includes(thướcĐoChọn)
+      ? thướcĐoChọn
+      : (thướcĐoCóThật[0] ?? "views");
+  const nhãnThướcĐo = NHÃN_THƯỚC_ĐO[thướcĐo];
+  const hasViews = thướcĐoCóThật.includes("views");
+  const metricOf = (v: ChannelVideo): number | null => sốCủa(v, thướcĐo);
 
   /** Chung 1 hàm lọc: nhận list nguồn → áp toàn bộ filter / sort. Dùng riêng
    *  cho long & shorts để bộ lọc apply trên cả 2 cột. */
@@ -353,18 +398,18 @@ export function ChannelInput({ onSubmit }: Props) {
   const longList = useMemo(
     () => (isYoutube ? applyFilter(videos.filter((v) => !isShortVideo(v))) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [videos, sortKey, lengthFilter, dateFilter, customFromDate, customToDate, filterYear, filterMonth, minViewsRaw, maxViewsRaw, isYoutube],
+    [videos, sortKey, thướcĐo, lengthFilter, dateFilter, customFromDate, customToDate, filterYear, filterMonth, minViewsRaw, maxViewsRaw, isYoutube],
   );
   const shortList = useMemo(
     () => (isYoutube ? applyFilter(videos.filter(isShortVideo)) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [videos, sortKey, lengthFilter, dateFilter, customFromDate, customToDate, filterYear, filterMonth, minViewsRaw, maxViewsRaw, isYoutube],
+    [videos, sortKey, thướcĐo, lengthFilter, dateFilter, customFromDate, customToDate, filterYear, filterMonth, minViewsRaw, maxViewsRaw, isYoutube],
   );
   /** Cho non-YouTube: mọi entry chung 1 list. */
   const allList = useMemo(
     () => (isYoutube ? [] : applyFilter(videos)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [videos, sortKey, lengthFilter, dateFilter, customFromDate, customToDate, filterYear, filterMonth, minViewsRaw, maxViewsRaw, isYoutube],
+    [videos, sortKey, thướcĐo, lengthFilter, dateFilter, customFromDate, customToDate, filterYear, filterMonth, minViewsRaw, maxViewsRaw, isYoutube],
   );
   /** Items thuộc tab đang hiện. Cho non-YouTube → luôn dùng allList. */
   const visible = isYoutube ? (resultTab === "long" ? longList : shortList) : allList;
@@ -660,9 +705,23 @@ export function ChannelInput({ onSubmit }: Props) {
                       kèm ❤ để không thể lẫn với lượt xem — và KHÔNG giấu lời
                       giải thích trong tooltip, đã có khung nói rõ ngay trên
                       danh sách. */}
-                  {v.viewCount == null && v.likeCount != null && (
+                  {v.likeCount != null && (
                     <span className="whitespace-nowrap">
                       ❤ {formatComma(v.likeCount)} lượt tim
+                    </span>
+                  )}
+                  {/* BÌNH LUẬN + CHIA SẺ — 0 lượt gọi mạng thêm, số đã nằm sẵn
+                      trong CHÍNH gói app tải về để lấy lượt tim. Douyin không
+                      cho lượt xem nên CHIA SẺ là thước "hot" tốt nhất còn lại:
+                      bài nổi thường chia sẻ > bình luận. */}
+                  {v.commentCount != null && (
+                    <span className="whitespace-nowrap">
+                      💬 {formatComma(v.commentCount)} bình luận
+                    </span>
+                  )}
+                  {v.shareCount != null && (
+                    <span className="whitespace-nowrap">
+                      ↗ {formatComma(v.shareCount)} chia sẻ
                     </span>
                   )}
                   {date && <span>{date.toLocaleDateString("vi-VN")}</span>}
@@ -843,10 +902,30 @@ export function ChannelInput({ onSubmit }: Props) {
             <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} className="px-2 py-1.5 rounded-md bg-surface border border-border">
               <option value="newest">Mới nhất</option>
               <option value="oldest">Cũ nhất</option>
-              <option value="popular">{hasViews ? "Nhiều lượt xem nhất" : "Nhiều lượt tim nhất"}</option>
+              <option value="popular">Nhiều {nhãnThướcĐo} nhất</option>
               <option value="longest">Dài nhất</option>
               <option value="shortest">Ngắn nhất</option>
             </select>
+            {/* CHỌN THƯỚC ĐO — chỉ hiện khi thật sự có nhiều hơn một số để
+                chọn. Ô này điều khiển CẢ "Nhiều … nhất" LẪN hai ô lọc từ–đến
+                bên dưới, nên không bao giờ lệch nhau. Danh sách dựng từ dữ
+                liệu THẬT: nền tảng không trả số nào thì số đó không xuất hiện,
+                thay vì hiện ra rồi lọc trên số rỗng. */}
+            {thướcĐoCóThật.length > 1 && (
+              <select
+                data-metric-picker
+                value={thướcĐo}
+                onChange={(e) => setThướcĐoChọn(e.target.value as Metric)}
+                className="px-2 py-1.5 rounded-md bg-surface border border-border"
+                title="Sắp xếp và lọc theo số nào"
+              >
+                {thướcĐoCóThật.map((m) => (
+                  <option key={m} value={m}>
+                    {`${KÝ_HIỆU[m]} Theo ${NHÃN_THƯỚC_ĐO[m]}`.trim()}
+                  </option>
+                ))}
+              </select>
+            )}
             <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as DateFilter)} className="px-2 py-1.5 rounded-md bg-surface border border-border">
               <option value="all">Mọi thời gian</option>
               <option value="7d">7 ngày qua</option>
@@ -893,7 +972,7 @@ export function ChannelInput({ onSubmit }: Props) {
                 const n = parseCommaNum(e.target.value);
                 setMinViewsRaw(n != null ? formatComma(n) : "");
               }}
-              placeholder={hasViews ? "Lượt xem từ" : "Lượt tim từ"}
+              placeholder={`${nhãnThướcĐo.charAt(0).toUpperCase()}${nhãnThướcĐo.slice(1)} từ`}
               className="px-2 py-1.5 rounded-md bg-surface border border-border w-28"
             />
             <span className="text-muted">–</span>
@@ -905,7 +984,7 @@ export function ChannelInput({ onSubmit }: Props) {
                 const n = parseCommaNum(e.target.value);
                 setMaxViewsRaw(n != null ? formatComma(n) : "");
               }}
-              placeholder={hasViews ? "Lượt xem đến" : "Lượt tim đến"}
+              placeholder={`${nhãnThướcĐo.charAt(0).toUpperCase()}${nhãnThướcĐo.slice(1)} đến`}
               className="px-2 py-1.5 rounded-md bg-surface border border-border w-28"
             />
             <button onClick={toggleAll} className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2">
@@ -955,7 +1034,7 @@ export function ChannelInput({ onSubmit }: Props) {
               Câu này TRƯỚC ĐÂY đã có, nhưng là chữ xám cỡ 11px lẫn vào nền nên
               anh ấy lướt qua. Nay là khung có viền, đặt ngay trên danh sách —
               đúng chỗ mắt dừng lại trước khi nhìn các con số. */}
-          {!hasViews && hasLikes && (
+          {!hasViews && thướcĐoCóThật.length > 0 && (
             <div
               data-metric-note
               className="px-3 py-2 rounded-md bg-accent/10 border border-accent/40 text-fg text-xs"
@@ -963,7 +1042,12 @@ export function ChannelInput({ onSubmit }: Props) {
               <b>❤ Con số ở mỗi dòng là LƯỢT TIM, không phải lượt xem.</b>{" "}
               Douyin <b>không cho lấy lượt xem</b> — API của họ luôn trả 0, kể cả khi
               đã nạp cookie đăng nhập (đã đo: 0/21 bài có lượt xem, 21/21 bài có lượt tim).
-              Nên app hiện <b>lượt tim</b>, và ô lọc + sắp xếp bên trên cũng chạy theo lượt tim.
+              Nên app hiện <b>lượt tim</b>, kèm <b>💬 bình luận</b> và <b>↗ chia sẻ</b> —
+              cả ba đều là số THẬT, lấy từ chính gói dữ liệu app đã tải, không tốn
+              thêm giây nào. Bài nổi trên Douyin thường có <b>chia sẻ cao hơn bình
+              luận</b>, nên chọn <b>Theo lượt chia sẻ</b> ở ô bên trên là cách tìm
+              bài hot tốt nhất. Ô lọc từ–đến và mục &quot;Nhiều … nhất&quot; đều chạy
+              theo đúng số đang chọn.
             </div>
           )}
 

@@ -577,6 +577,18 @@ fn parse_video_item(it: &Value) -> Option<(String, ChannelVideo)> {
         .pointer("/statistics/viewCount")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<u64>().ok());
+    // CÙNG khối `statistics` đã tải sẵn (`part=snippet,statistics,...`) — bóc
+    // thêm KHÔNG tốn thêm một đơn vị quota nào. YouTube trả các số này dạng
+    // CHUỖI. `likeCount` vắng khi chủ kênh ẩn lượt thích → None, KHÔNG bịa 0.
+    // YouTube không công bố lượt chia sẻ ở API công khai nên để trống.
+    let like_count = it
+        .pointer("/statistics/likeCount")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<u64>().ok());
+    let comment_count = it
+        .pointer("/statistics/commentCount")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<u64>().ok());
     let duration_sec = it
         .pointer("/contentDetails/duration")
         .and_then(|v| v.as_str())
@@ -598,7 +610,10 @@ fn parse_video_item(it: &Value) -> Option<(String, ChannelVideo)> {
             title,
             duration_sec,
             view_count,
-            like_count: None,
+            like_count,
+            comment_count,
+            // YouTube không công bố lượt chia sẻ — để TRỐNG, không nhét 0.
+            share_count: None,
             upload_date,
             thumbnail,
             is_photo: false,
@@ -965,6 +980,8 @@ mod tests {
             duration_sec: Some(10),
             view_count: Some(1),
             like_count: None,
+            comment_count: None,
+            share_count: None,
             upload_date: Some("20240101".into()),
             thumbnail: None,
             is_photo: false,
