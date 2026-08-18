@@ -1025,3 +1025,105 @@ mod tests_cookie_moi_trang {
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+// ---------------------------------------------------------------------------
+//  CỔNG QUÉT MÃ TĨNH: MỌI cửa spawn yt-dlp phải đi qua resolve_cookies_for
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests_khong_cua_nao_duoc_sot_cookie {
+    /// Những hàm spawn yt-dlp mà KHÔNG cần cookie — phải liệt kê tường minh ở
+    /// đây, kèm lý do. Thêm tên vào danh sách này là một quyết định có ý thức,
+    /// không phải quên.
+    const MIEN_TRU: &[(&str, &str)] = &[(
+        "run_update",
+        "tự cập nhật BINARY yt-dlp (--update-to nightly) — không đụng tài khoản nào",
+    )];
+
+    /// Các file có thể chứa cửa spawn.
+    const FILES: &[&str] = &[
+        "src/ytdlp_runner.rs",
+        "src/channel_fetcher.rs",
+        "src/ytdlp_update.rs",
+        "src/commands.rs",
+        "src/queue.rs",
+        "src/douyin_scraper.rs",
+        "src/watcher.rs",
+        "src/youtube_api.rs",
+        "src/url_resolver.rs",
+    ];
+
+    /// Tên hàm chứa dòng thứ `idx` (đếm ngược tới khai báo `fn` gần nhất).
+    fn ham_chua(lines: &[&str], idx: usize) -> (String, usize) {
+        for i in (0..=idx).rev() {
+            let t = lines[i].trim_start();
+            let t = t.strip_prefix("pub(crate) ").or_else(|| t.strip_prefix("pub ")).unwrap_or(t);
+            let t = t.strip_prefix("async ").unwrap_or(t);
+            if let Some(rest) = t.strip_prefix("fn ") {
+                let ten: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                return (ten, i);
+            }
+        }
+        ("<khong-ro>".into(), 0)
+    }
+
+    /// BÀI HỌC ĐÃ TRẢ GIÁ: yt-dlp GHI ĐÈ file `--cookies` lúc thoát. Cửa nào
+    /// đưa thẳng file GỐC của anh Hùng cho yt-dlp là cookie trang đó chết oan,
+    /// và anh Hùng phải xuất cookie mới liên tục mà không hiểu vì sao. Đã từng
+    /// sót đúng cửa "quét kênh".
+    ///
+    /// Từ bản mỗi-trang-một-ô, việc CHỌN Ô và việc LÀM BẢN SAO TẠM gộp chung
+    /// trong `resolve_cookies_for`. Nên cổng này canh luôn cả hai: cửa nào
+    /// quên gọi nó thì vừa dùng sai ô, vừa mất bản sao tạm.
+    ///
+    /// Cổng QUÉT MÃ, không chạy app — nên nó bắt được cửa MỚI ai đó thêm vào
+    /// mai sau, kể cả khi chưa có test nào chạy qua cửa đó.
+    #[test]
+    fn moi_cua_spawn_ytdlp_deu_qua_resolve_cookies_for() {
+        let goc = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut so_cua = 0;
+        let mut thieu: Vec<String> = Vec::new();
+
+        for f in FILES {
+            let duong = goc.join(f);
+            let noi_dung = match std::fs::read_to_string(&duong) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let lines: Vec<&str> = noi_dung.lines().collect();
+            for (i, l) in lines.iter().enumerate() {
+                // Chỉ tính DÒNG LỆNH thật, bỏ qua chú thích/tài liệu.
+                let t = l.trim_start();
+                if t.starts_with("//") || t.starts_with("///") {
+                    continue;
+                }
+                if !l.contains(r#"sidecar("yt-dlp")"#) {
+                    continue;
+                }
+                so_cua += 1;
+                let (ten, dau_ham) = ham_chua(&lines, i);
+                if MIEN_TRU.iter().any(|(m, _)| *m == ten) {
+                    continue;
+                }
+                let than = lines[dau_ham..=i].join("
+");
+                if !than.contains("resolve_cookies_for") {
+                    thieu.push(format!("{f}:{} (hàm `{ten}`)", i + 1));
+                }
+            }
+        }
+
+        assert!(
+            so_cua >= 4,
+            "chỉ thấy {so_cua} cửa spawn yt-dlp — cổng đang quét hụt, sửa danh sách FILES"
+        );
+        assert!(
+            thieu.is_empty(),
+            "CÓ CỬA SPAWN yt-dlp KHÔNG QUA `resolve_cookies_for` → cookie gốc của              anh Hùng bị yt-dlp ghi đè, hoặc dùng sai ô cookie của trang.
+             Cửa thiếu: {thieu:#?}
+             Sửa: thêm `let (settings_copy, _g) = resolve_cookies_for(settings, url);`              rồi dùng `settings_copy.as_ref().unwrap_or(settings)`.              Nếu cửa đó THẬT SỰ không cần cookie thì khai vào MIEN_TRU kèm lý do."
+        );
+    }
+}
