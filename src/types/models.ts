@@ -115,6 +115,12 @@ export interface DownloadItem {
   speedBps: number | null;
   etaSec: number | null;
   attempt: number;
+  /**
+   * Số lần đã thử lại vì bị chặn bot / giới hạn tần suất (đếm riêng với
+   * `attempt`, vì loại này nghỉ lâu rồi tự chạy lại tới 30 lượt).
+   * Rust VẪN LUÔN gửi trường này — khai ở đây để TS bắt được lỗi gõ sai tên.
+   */
+  botRetries?: number;
   errorMessage: string | null;
   outputPath: string | null;
   /** ISO-8601 timestamp. */
