@@ -186,12 +186,71 @@ pub fn settings_have_cookies(s: &Settings) -> bool {
 }
 
 /// Clone settings with all cookie sources cleared — used to retry a call after
-/// a cookie-decryption failure (DPAPI).
+/// a cookie-decryption failure (DPAPI). Xoá luôn CẢ bảng ô theo trang, nếu
+/// không thì lượt thử lại "không cookie" vẫn kèm cookie của ô riêng.
 pub fn settings_without_cookies(s: &Settings) -> Settings {
     let mut c = s.clone();
     c.cookies_file = None;
     c.cookies_browser = None;
+    c.site_cookies.clear();
     c
+}
+
+/// Khoá ô cookie của một link = tên extractor (`youtube`, `tiktok`, `douyin`…).
+/// `None` khi link hỏng hoặc tên miền không nằm trong bảng extractor — lúc đó
+/// dùng ô chung.
+pub fn cookie_site_key(url: &str) -> Option<&'static str> {
+    crate::url_validator::resolve_extractor(url)
+}
+
+/// Tên trang để HIỆN cho người dùng khi cookie trang đó hỏng. Có tên riêng thì
+/// dùng, không thì viết hoa chữ đầu của khoá.
+pub fn cookie_site_label(key: &str) -> String {
+    match key {
+        "youtube" => "YouTube".into(),
+        "tiktok" => "TikTok".into(),
+        "douyin" => "Douyin".into(),
+        "facebook" => "Facebook".into(),
+        "instagram" => "Instagram".into(),
+        "bilibili" => "Bilibili".into(),
+        "twitter" => "X (Twitter)".into(),
+        "twitch" => "Twitch".into(),
+        other => {
+            let mut c = other.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        }
+    }
+}
+
+/// CHỌN ĐÚNG Ô COOKIE THEO LINK.
+///
+/// Trả về bản `Settings` mà `cookies_file`/`cookies_browser` đã được thay bằng
+/// ô riêng của trang chứa `url`. Trang chưa có ô riêng (hoặc ô rỗng) thì giữ
+/// nguyên ô chung — nên cấu hình cũ chạy y hệt trước đây.
+///
+/// Trả `None` khi không phải thay gì cả, để chỗ gọi khỏi phải clone vô ích.
+///
+/// LƯU Ý: hàm này CHỈ chọn ô. Việc làm BẢN SAO TẠM (bắt buộc, vì yt-dlp ghi đè
+/// file `--cookies` lúc thoát) nằm ở `ytdlp_runner::resolve_cookies_for` —
+/// mọi cửa spawn phải đi qua đó.
+pub fn settings_for_url(s: &Settings, url: &str) -> Option<Settings> {
+    if s.site_cookies.is_empty() {
+        return None;
+    }
+    let key = cookie_site_key(url)?;
+    let slot = s.site_cookies.get(key)?;
+    if slot.is_empty() {
+        return None;
+    }
+    let mut c = s.clone();
+    // Ô riêng thay THẲNG cả hai nguồn: đặt file cho trang này thì không được
+    // để browser của ô chung lọt vào làm nguồn dự phòng bất ngờ.
+    c.cookies_file = slot.file.clone().filter(|f| !f.is_empty());
+    c.cookies_browser = slot.browser.clone().filter(|b| !b.is_empty());
+    Some(c)
 }
 
 /// Mode hint cho fetch_metadata vs run_download.

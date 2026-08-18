@@ -900,26 +900,14 @@ async fn run_flat_fetch_attempt(
         args.push("--playlist-end".into());
         args.push(limit.to_string());
     }
-    // BẢN SAO cookie RIÊNG cho lượt quét này (bug anh Hùng 28/07): ▶ Chạy
-    // nhóm quét 3 kênh SONG SONG (CHECK_CONCURRENCY), mỗi yt-dlp thoát ra là
-    // GHI ĐÈ file --cookies. 48 kênh = hàng chục lượt ghi đè file cookie GỐC
-    // chồng nhau → file nát/giá trị cũ → YouTube báo cookie chết → user phải
-    // xuất cookie mới liên tục. Bản sao riêng thì file gốc KHÔNG AI đụng.
-    let _ck_guard;
-    let settings_copy;
-    let settings: &Settings = match settings.cookies_file.as_deref() {
-        Some(f) if !f.is_empty() => match crate::ytdlp_runner::copy_cookies(f) {
-            Some(tmp) => {
-                let mut s = settings.clone();
-                s.cookies_file = Some(tmp.to_string_lossy().into_owned());
-                _ck_guard = crate::ytdlp_runner::TempCookieCopy(Some(tmp));
-                settings_copy = s;
-                &settings_copy
-            }
-            None => settings,
-        },
-        _ => settings,
-    };
+    // Ô cookie đúng trang của kênh này + BẢN SAO RIÊNG cho lượt quét (bug anh
+    // Hùng 28/07): ▶ Chạy nhóm quét 3 kênh SONG SONG (CHECK_CONCURRENCY), mỗi
+    // yt-dlp thoát ra là GHI ĐÈ file --cookies. 48 kênh = hàng chục lượt ghi
+    // đè file cookie GỐC chồng nhau → file nát/giá trị cũ → YouTube báo cookie
+    // chết → user phải xuất cookie mới liên tục. Bản sao riêng thì file gốc
+    // KHÔNG AI đụng. Xem ytdlp_runner::resolve_cookies_for.
+    let (settings_copy, _ck_guard) = crate::ytdlp_runner::resolve_cookies_for(settings, resolved);
+    let settings: &Settings = settings_copy.as_ref().unwrap_or(settings);
     crate::args_builder::push_cookie_args(&mut args, settings);
     crate::args_builder::push_proxy_args(&mut args, settings);
     crate::args_builder::push_bilibili_headers(&mut args, resolved);
@@ -1177,23 +1165,15 @@ async fn probe_batch_attempt(
         "--print".into(),
         print_tpl.into(),
     ];
-    // Per-probe cookies copy — 4 probes run concurrently and yt-dlp rewrites the
-    // cookies file on exit; sharing one file corrupts/locks it. See copy_cookies.
-    let _ck_guard;
-    let settings_copy;
-    let settings: &Settings = match settings.cookies_file.as_deref() {
-        Some(f) if !f.is_empty() => match crate::ytdlp_runner::copy_cookies(f) {
-            Some(tmp) => {
-                let mut s = settings.clone();
-                s.cookies_file = Some(tmp.to_string_lossy().into_owned());
-                _ck_guard = crate::ytdlp_runner::TempCookieCopy(Some(tmp));
-                settings_copy = s;
-                &settings_copy
-            }
-            None => settings,
-        },
-        _ => settings,
-    };
+    // Ô cookie đúng trang + bản sao riêng cho lượt probe này — 4 probe chạy
+    // song song, yt-dlp ghi đè file cookie lúc thoát; dùng chung một file là
+    // nát/khoá file. Cả batch cùng một trang nên lấy URL đầu làm đại diện.
+    // Xem ytdlp_runner::resolve_cookies_for.
+    let (settings_copy, _ck_guard) = crate::ytdlp_runner::resolve_cookies_for(
+        settings,
+        urls.first().map(String::as_str).unwrap_or(""),
+    );
+    let settings: &Settings = settings_copy.as_ref().unwrap_or(settings);
     crate::args_builder::push_cookie_args(&mut args, settings);
     crate::args_builder::push_proxy_args(&mut args, settings);
     // Bilibili 412 fix — probe chi tiết cũng cần Origin/Referer. Dùng URL đầu

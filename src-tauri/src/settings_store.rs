@@ -179,6 +179,27 @@ impl SettingsStore {
             if let Some(opt) = patch.cookies_file {
                 s.cookies_file = opt;
             }
+            // Ô cookie theo trang: nhận CẢ BẢNG. Lọc bỏ ô rỗng và tên browser
+            // không hợp lệ ngay tại đây — settings.json không chứa rác, và ô
+            // rỗng phải biến mất để link rơi đúng về ô chung.
+            if let Some(map) = patch.site_cookies {
+                let mut clean = std::collections::BTreeMap::new();
+                for (site, mut sc) in map {
+                    if let Some(b) = sc.browser.take() {
+                        let b = b.to_lowercase();
+                        if crate::models::cookies_browser_is_valid(&b) {
+                            sc.browser = Some(b);
+                        }
+                    }
+                    if sc.file.as_deref().map(str::is_empty).unwrap_or(false) {
+                        sc.file = None;
+                    }
+                    if !sc.is_empty() {
+                        clean.insert(site.to_lowercase(), sc);
+                    }
+                }
+                s.site_cookies = clean;
+            }
             if let Some(v) = patch.skip_downloaded {
                 s.skip_downloaded = v;
             }
@@ -624,5 +645,59 @@ mod tests {
         assert_eq!(store.get(), before);
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+//  CỔNG: file settings.json ĐỜI CŨ phải đọc được nguyên vẹn (bẫy serde default)
+// ───────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests_settings_cu_van_doc_duoc {
+    use crate::models::Settings;
+
+    /// File settings.json của anh Hùng ghi TRƯỚC bản mỗi-trang-một-ô hoàn toàn
+    /// KHÔNG có khoá `siteCookies`. Thiếu `#[serde(default)]` là parse hỏng →
+    /// app load rỗng → MẤT SẠCH cài đặt (thư mục lưu, cookie, proxy, API key).
+    /// Cổng này giữ đúng cái bẫy đó.
+    #[test]
+    fn settings_cu_khong_co_sitecookies_van_parse_du_truong() {
+        // Gói JSON tối thiểu đúng kiểu bản cũ: có ô cookie CHUNG, không có ô riêng.
+        let cu = r#"{
+            "defaultFolder": "D:/Video",
+            "maxConcurrency": 3,
+            "theme": "dark",
+            "language": "vi",
+            "clipboardWatcher": true,
+            "notifications": true,
+            "aria2cEnabled": false,
+            "cookiesFile": "D:/cookies.txt",
+            "cookiesBrowser": null
+        }"#;
+        let s: Settings = serde_json::from_str(cu).expect("file settings ĐỜI CŨ phải parse được");
+        // Dữ liệu cũ còn nguyên — không bị nuốt mất.
+        assert_eq!(s.default_folder.to_string_lossy(), "D:/Video");
+        assert_eq!(s.max_concurrency, 3);
+        assert_eq!(s.cookies_file.as_deref(), Some("D:/cookies.txt"));
+        // Trường mới vắng mặt thì về mặc định rỗng, KHÔNG làm hỏng cả file.
+        assert!(s.site_cookies.is_empty(), "trường mới phải mặc định rỗng");
+    }
+
+    /// Chiều ngược lại: ghi ra rồi đọc lại phải giữ nguyên các ô riêng.
+    #[test]
+    fn ghi_roi_doc_lai_giu_nguyen_o_tung_trang() {
+        let mut s = Settings::default();
+        s.site_cookies.insert(
+            "youtube".into(),
+            crate::models::SiteCookie { file: Some("D:/yt.txt".into()), browser: None },
+        );
+        s.site_cookies.insert(
+            "douyin".into(),
+            crate::models::SiteCookie { file: None, browser: Some("firefox".into()) },
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        let lai: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(lai.site_cookies.len(), 2);
+        assert_eq!(lai.site_cookies["youtube"].file.as_deref(), Some("D:/yt.txt"));
+        assert_eq!(lai.site_cookies["douyin"].browser.as_deref(), Some("firefox"));
     }
 }

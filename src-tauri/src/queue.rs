@@ -1179,7 +1179,12 @@ impl QueueManager {
         let is_stall = reason.contains("[watchdog] no activity");
         // Thông báo user-facing: tiếng Việt rõ ràng + hướng dẫn làm gì tiếp
         // (raw reason giữ lại ở dòng "Chi tiết kỹ thuật" để chẩn đoán).
-        let friendly = crate::error::friendly_reason(&reason);
+        // Lỗi cookie phải nói ĐÚNG TRANG nào cần nạp lại (mỗi trang một ô).
+        let failed_url = {
+            let map = self.items.read().unwrap();
+            map.get(&id).map(|it| it.request.url.clone()).unwrap_or_default()
+        };
+        let friendly = crate::error::friendly_reason_for(&reason, &failed_url);
         if is_bot {
             // YouTube vá kiểu chặn mới ở yt-dlp nightly trong vài giờ-vài ngày
             // → ép check update ngay (throttle 1h) để lần retry chạy binary mới.

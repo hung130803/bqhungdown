@@ -82,6 +82,49 @@ pub(crate) fn copy_cookies(src: &str) -> Option<std::path::PathBuf> {
     std::fs::copy(src, &dst).ok().map(|_| dst)
 }
 
+/// CỬA DUY NHẤT để một lượt yt-dlp lấy cookie. Làm ĐÚNG HAI việc, theo thứ tự:
+///
+/// 1. CHỌN Ô: link thuộc trang nào thì lấy ô cookie của trang đó
+///    (`args_builder::settings_for_url`); trang chưa có ô riêng thì dùng ô chung.
+/// 2. BẢN SAO TẠM: file vừa chọn được copy ra `%TEMP%`, và yt-dlp chỉ được
+///    thấy bản sao. BẮT BUỘC — yt-dlp GHI ĐÈ file `--cookies` lúc thoát, nhiều
+///    tiến trình chạy song song cùng ghi file GỐC của user thì file nát/cũ →
+///    trang báo cookie chết → user phải xuất cookie mới liên tục.
+///
+/// Vì gộp cả hai việc vào MỘT hàm, THÊM Ô COOKIE MỚI KHÔNG THỂ SÓT BẢN SAO
+/// TẠM: mọi cửa spawn đều gọi hàm này, không cửa nào tự đọc `cookies_file` nữa.
+///
+/// Cách dùng ở chỗ gọi:
+/// ```ignore
+/// let (picked, _ck_guard) = resolve_cookies_for(settings, url);
+/// let settings: &Settings = picked.as_ref().unwrap_or(settings);
+/// ```
+/// Giữ `_ck_guard` sống tới khi yt-dlp chạy xong; guard rơi là bản sao bị xoá.
+pub(crate) fn resolve_cookies_for(
+    settings: &Settings,
+    url: &str,
+) -> (Option<Settings>, TempCookieCopy) {
+    // Bước 1 — chọn ô theo trang.
+    let picked = crate::args_builder::settings_for_url(settings, url);
+    let base: &Settings = picked.as_ref().unwrap_or(settings);
+
+    // Bước 2 — bản sao tạm của file đã chọn.
+    let file = match base.cookies_file.as_deref() {
+        Some(f) if !f.is_empty() => f.to_string(),
+        // Không có file (dùng browser, hoặc không cookie): chẳng có gì để sao.
+        _ => return (picked, TempCookieCopy(None)),
+    };
+    match copy_cookies(&file) {
+        Some(tmp) => {
+            let mut s = base.clone();
+            s.cookies_file = Some(tmp.to_string_lossy().into_owned());
+            (Some(s), TempCookieCopy(Some(tmp)))
+        }
+        // Copy hỏng (đĩa đầy/quyền): thà chạy với file gốc còn hơn mất cookie.
+        None => (picked, TempCookieCopy(None)),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum RunOutcome {
     Completed {
@@ -192,27 +235,13 @@ impl YtDlpRunner {
         // YouTube age-gated. File cookies.txt ưu tiên hơn browser (AppBound
         // encryption issue). Caller retries without cookies on DPAPI failure.
         //
-        // BẢN SAO RIÊNG cho lượt này (bug anh Hùng 28/07: "mới thêm cookie
-        // xong chạy lại đòi cookie"): fetch_metadata chạy SONG SONG với các
-        // lượt tải/quét khác, mà yt-dlp thoát ra là GHI ĐÈ file --cookies.
-        // Nhiều tiến trình cùng ghi file cookie GỐC của user → file nát/cũ →
-        // YouTube coi cookie chết → đòi cookie mới liên tục. run_once và
-        // probe_views đã có bản sao riêng từ trước — đây là cửa bị sót.
-        let _ck_guard;
-        let settings_copy;
-        let settings: &Settings = match settings.cookies_file.as_deref() {
-            Some(f) if !f.is_empty() => match copy_cookies(f) {
-                Some(tmp) => {
-                    let mut s = settings.clone();
-                    s.cookies_file = Some(tmp.to_string_lossy().into_owned());
-                    _ck_guard = TempCookieCopy(Some(tmp));
-                    settings_copy = s;
-                    &settings_copy
-                }
-                None => settings,
-            },
-            _ => settings,
-        };
+        // Ô cookie ĐÚNG TRANG của link này + BẢN SAO RIÊNG cho lượt này (bug
+        // anh Hùng 28/07: "mới thêm cookie xong chạy lại đòi cookie"):
+        // fetch_metadata chạy SONG SONG với các lượt tải/quét khác, mà yt-dlp
+        // thoát ra là GHI ĐÈ file --cookies. Cả hai việc nằm trong
+        // resolve_cookies_for — xem chú thích ở đó.
+        let (settings_copy, _ck_guard) = resolve_cookies_for(settings, url);
+        let settings: &Settings = settings_copy.as_ref().unwrap_or(settings);
         args_builder::push_cookie_args(&mut args, settings);
         args_builder::push_proxy_args(&mut args, settings);
         args_builder::push_bilibili_headers(&mut args, url);
@@ -392,24 +421,11 @@ impl YtDlpRunner {
         meta_tx: mpsc::Sender<MetaEvent>,
         output_stem: Option<String>,
     ) -> AppResult<RunOutcome> {
-        // Give this download its own cookies copy so concurrent downloads don't
-        // race on the shared cookies file (yt-dlp rewrites it on exit). The
-        // guard deletes the copy when run_once returns.
-        let _cookie_guard;
-        let settings_copy;
-        let settings: &Settings = match settings.cookies_file.as_deref() {
-            Some(f) if !f.is_empty() => match copy_cookies(f) {
-                Some(tmp) => {
-                    let mut s = settings.clone();
-                    s.cookies_file = Some(tmp.to_string_lossy().into_owned());
-                    _cookie_guard = TempCookieCopy(Some(tmp));
-                    settings_copy = s;
-                    &settings_copy
-                }
-                None => settings,
-            },
-            _ => settings,
-        };
+        // Ô cookie đúng trang của link này + bản sao riêng cho lượt tải này,
+        // để các lượt chạy song song không giành nhau file cookie gốc (yt-dlp
+        // ghi đè nó lúc thoát). Guard xoá bản sao khi run_once trả về.
+        let (settings_copy, _cookie_guard) = resolve_cookies_for(settings, &item.request.url);
+        let settings: &Settings = settings_copy.as_ref().unwrap_or(settings);
 
         // safe_retry (= force_clients): args_builder thêm player client dự
         // phòng cho YouTube + hạ -N, bỏ aria2c — combo chống 403.
@@ -840,4 +856,172 @@ fn parse_playlist(value: &Value) -> (Option<Vec<PlaylistEntry>>, Option<u32>) {
         let total = value.get("playlist_count").and_then(|v| v.as_u64()).map(|x| x as u32).or_else(|| Some(parsed.len() as u32));
         (Some(parsed), total)
     } else { (None, None) }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+//  CỔNG: cookie mỗi trang một ô — và MỌI ô đều phải đi qua bản sao tạm
+// ───────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests_cookie_moi_trang {
+    use super::*;
+    use crate::models::SiteCookie;
+
+    /// Tạo file cookie thật trong thư mục tạm riêng của test. Trả (đường dẫn,
+    /// thư mục cha) — gọi `fs::remove_dir_all` ở cuối test để không để rác
+    /// trên máy anh Hùng.
+    fn cookie_that(ten: &str, noi_dung: &str) -> (String, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "bqh_test_ck_{}_{}",
+            std::process::id(),
+            COOKIE_COPY_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(ten);
+        std::fs::write(&p, noi_dung).unwrap();
+        (p.to_string_lossy().into_owned(), dir)
+    }
+
+    fn settings_voi_o(o: &[(&str, &str)], o_chung: Option<&str>) -> Settings {
+        let mut s = Settings::default();
+        for (site, file) in o {
+            s.site_cookies.insert(
+                (*site).to_string(),
+                SiteCookie { file: Some((*file).to_string()), browser: None },
+            );
+        }
+        s.cookies_file = o_chung.map(String::from);
+        s
+    }
+
+    /// Link trang nào thì lấy ĐÚNG ô cookie của trang đó — không dùng nhầm ô
+    /// của trang khác, không dùng ô chung khi đã có ô riêng.
+    #[test]
+    fn chon_dung_o_cookie_theo_link() {
+        let (yt, d1) = cookie_that("yt.txt", "# youtube\n");
+        let (tk, d2) = cookie_that("tk.txt", "# tiktok\n");
+        let (chung, d3) = cookie_that("chung.txt", "# chung\n");
+        let s = settings_voi_o(&[("youtube", &yt), ("tiktok", &tk)], Some(&chung));
+
+        // Mỗi link phải rơi vào ĐÚNG ô. So bằng NỘI DUNG vì đường dẫn đưa cho
+        // yt-dlp là bản sao tạm (tên khác file gốc) — xem cổng dưới.
+        let cases = [
+            ("https://www.youtube.com/watch?v=abc", "# youtube\n"),
+            ("https://youtu.be/abc", "# youtube\n"),
+            ("https://www.tiktok.com/@a/video/1", "# tiktok\n"),
+            // facebook CHƯA có ô riêng → phải rơi về ô chung
+            ("https://www.facebook.com/watch?v=1", "# chung\n"),
+        ];
+        for (url, mong_doi) in cases {
+            let (picked, _g) = resolve_cookies_for(&s, url);
+            let duong = picked
+                .as_ref()
+                .and_then(|p| p.cookies_file.clone())
+                .expect("phải có file cookie");
+            let doc = std::fs::read_to_string(&duong).unwrap();
+            assert_eq!(doc, mong_doi, "link {url} lấy nhầm ô cookie");
+        }
+        for d in [d1, d2, d3] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    /// CỔNG XƯƠNG SỐNG: yt-dlp GHI ĐÈ file `--cookies` lúc thoát. Nên với MỌI
+    /// ô — ô riêng từng trang lẫn ô chung — đường đưa cho yt-dlp phải là BẢN
+    /// SAO TẠM, KHÔNG BAO GIỜ là file gốc của anh Hùng. Sót một ô là cookie
+    /// trang đó chết oan.
+    #[test]
+    fn moi_o_cookie_deu_dua_ban_sao_tam_cho_ytdlp() {
+        let (yt, d1) = cookie_that("yt.txt", "# youtube\n");
+        let (tk, d2) = cookie_that("tk.txt", "# tiktok\n");
+        let (dy, d3) = cookie_that("dy.txt", "# douyin\n");
+        let (chung, d4) = cookie_that("chung.txt", "# chung\n");
+        let s = settings_voi_o(
+            &[("youtube", &yt), ("tiktok", &tk), ("douyin", &dy)],
+            Some(&chung),
+        );
+
+        let goc = [&yt, &tk, &dy, &chung];
+        let links = [
+            "https://www.youtube.com/watch?v=abc",
+            "https://www.tiktok.com/@a/video/1",
+            "https://www.douyin.com/video/123",
+            "https://www.facebook.com/watch?v=1", // rơi về ô chung
+        ];
+        for url in links {
+            let (picked, guard) = resolve_cookies_for(&s, url);
+            let duong = picked
+                .as_ref()
+                .and_then(|p| p.cookies_file.clone())
+                .expect("phải có file cookie");
+            for g in goc {
+                assert_ne!(
+                    &duong, g,
+                    "link {url}: ĐƯA THẲNG FILE GỐC cho yt-dlp — yt-dlp ghi đè là cookie chết"
+                );
+            }
+            assert!(
+                std::path::Path::new(&duong)
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .map(|f| f.starts_with("bqh_cookies_"))
+                    .unwrap_or(false),
+                "link {url}: đường {duong} không phải bản sao tạm"
+            );
+            assert!(std::path::Path::new(&duong).is_file(), "bản sao phải tồn tại lúc chạy");
+            // Guard rơi là bản sao bị xoá — không để rác %TEMP%.
+            drop(guard);
+            assert!(
+                !std::path::Path::new(&duong).is_file(),
+                "link {url}: bản sao tạm không được dọn sau khi chạy xong"
+            );
+        }
+        for d in [d1, d2, d3, d4] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    /// Cấu hình CŨ (chưa có ô riêng nào) phải chạy y hệt trước đây: mọi link
+    /// dùng ô chung, và vẫn qua bản sao tạm.
+    #[test]
+    fn cau_hinh_cu_chi_co_o_chung_van_chay_nhu_truoc() {
+        let (chung, d) = cookie_that("chung.txt", "# chung\n");
+        let mut s = Settings::default();
+        s.cookies_file = Some(chung.clone());
+        assert!(s.site_cookies.is_empty(), "cấu hình cũ không có ô riêng");
+
+        for url in [
+            "https://www.youtube.com/watch?v=abc",
+            "https://www.tiktok.com/@a/video/1",
+            "https://www.douyin.com/video/123",
+        ] {
+            let (picked, _g) = resolve_cookies_for(&s, url);
+            let duong = picked.as_ref().and_then(|p| p.cookies_file.clone()).unwrap();
+            assert_ne!(duong, chung, "vẫn phải là bản sao tạm");
+            assert_eq!(std::fs::read_to_string(&duong).unwrap(), "# chung\n");
+        }
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// Ô riêng đặt browser thì KHÔNG được để file của ô chung lọt vào làm
+    /// nguồn bất ngờ — đã chọn ô nào là dùng trọn ô đó.
+    #[test]
+    fn o_rieng_dung_browser_thi_khong_lay_file_o_chung() {
+        let (chung, d) = cookie_that("chung.txt", "# chung\n");
+        let mut s = Settings::default();
+        s.cookies_file = Some(chung.clone());
+        s.site_cookies.insert(
+            "youtube".into(),
+            SiteCookie { file: None, browser: Some("firefox".into()) },
+        );
+
+        let (picked, _g) = resolve_cookies_for(&s, "https://www.youtube.com/watch?v=abc");
+        let p = picked.expect("ô riêng phải thắng ô chung");
+        assert_eq!(p.cookies_browser.as_deref(), Some("firefox"));
+        assert!(
+            p.cookies_file.is_none(),
+            "ô youtube dùng browser mà file ô chung vẫn lọt vào: {:?}",
+            p.cookies_file
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
 }

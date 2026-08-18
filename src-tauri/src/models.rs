@@ -499,6 +499,30 @@ pub struct HistoryEntry {
 // Settings
 // ---------------------------------------------------------------------------
 
+/// Một Ô COOKIE của MỘT trang. Cùng luật ưu tiên với ô chung: có `file` thì
+/// dùng file (`--cookies`), không thì mới tới `browser`
+/// (`--cookies-from-browser`). Cả hai rỗng = ô này coi như chưa đặt, link của
+/// trang đó rơi về ô chung.
+///
+/// Mọi trường đều `#[serde(default)]` — thêm trường mới sau này không làm
+/// hỏng file settings.json cũ.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SiteCookie {
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub browser: Option<String>,
+}
+
+impl SiteCookie {
+    /// Ô rỗng = chưa đặt gì → phải rơi về ô chung.
+    pub fn is_empty(&self) -> bool {
+        self.file.as_deref().map(str::is_empty).unwrap_or(true)
+            && self.browser.as_deref().map(str::is_empty).unwrap_or(true)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -545,8 +569,22 @@ pub struct Settings {
     /// Đường dẫn tới file cookies.txt (định dạng Netscape) — alternative cho
     /// `cookies_browser` khi browser cookies bị mã hoá AppBound (Edge/Chrome
     /// trên Windows mới). Khi cả 2 cùng set, file ưu tiên hơn browser.
+    ///
+    /// Đây là ô CHUNG (dự phòng): dùng cho trang nào chưa có ô riêng trong
+    /// `site_cookies`. Xem `args_builder::settings_for_url`.
     #[serde(default)]
     pub cookies_file: Option<String>,
+    /// MỖI TRANG MỘT Ô COOKIE. Khoá = tên extractor (`youtube`, `tiktok`,
+    /// `douyin`, `facebook`, `bilibili`…) đúng như `extractors::match_host`
+    /// trả về. Trước đây cả app dùng CHUNG một file cookies.txt, nên muốn tải
+    /// nhiều nền tảng thì phải tự gộp tay nhiều tên miền vào một file — trang
+    /// nào hết hạn là phải gộp lại từ đầu. Giờ mỗi trang giữ ô riêng, app tự
+    /// chọn đúng ô theo link, và báo lỗi đúng tên trang khi cookie hỏng.
+    ///
+    /// Trang không có khoá trong bảng này thì rơi về ô chung ở trên, nên cấu
+    /// hình cũ của user chạy y như trước — KHÔNG cần migration, KHÔNG mất dữ liệu.
+    #[serde(default)]
+    pub site_cookies: std::collections::BTreeMap<String, SiteCookie>,
     /// Khi true, yt-dlp chạy với `--download-archive <file>` → tự bỏ qua video
     /// đã tải xong trước đó (so theo extractor+id). Cực hữu ích cho reup: tải
     /// lại 1 kênh sẽ không tải trùng video cũ. File archive nằm ở app_data_dir.
@@ -655,6 +693,7 @@ impl Default for Settings {
             aria2c_speed_final: true,
             cookies_browser: None,
             cookies_file: None,
+            site_cookies: std::collections::BTreeMap::new(),
             skip_downloaded: true,
             watch_interval_min: 60,
             proxies: Vec::new(),
@@ -690,6 +729,11 @@ pub struct SettingsPatch {
     /// Same Option<Option<String>> trick for the cookies.txt file path.
     #[serde(default, deserialize_with = "deserialize_optional_optional_string")]
     pub cookies_file: Option<Option<String>>,
+    /// Bảng ô cookie theo trang. Gửi CẢ BẢNG (không patch từng khoá) — bảng
+    /// nhỏ, và như vậy xoá một ô chỉ là gửi bảng thiếu khoá đó.
+    /// `None` = không đụng tới.
+    #[serde(default)]
+    pub site_cookies: Option<std::collections::BTreeMap<String, SiteCookie>>,
     pub skip_downloaded: Option<bool>,
     pub watch_interval_min: Option<u32>,
     pub proxies: Option<Vec<String>>,

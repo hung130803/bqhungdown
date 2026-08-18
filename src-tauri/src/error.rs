@@ -285,6 +285,39 @@ pub fn friendly_reason(raw: &str) -> String {
     format!("{hint}\n(Chi tiết kỹ thuật: {detail})")
 }
 
+/// True khi thông báo đang nói về cookie — dùng để biết có nên chỉ đích danh
+/// TRANG nào hay không.
+fn mentions_cookie(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    l.contains("cookie")
+}
+
+/// Như `friendly_reason`, nhưng CHỈ ĐÍCH DANH TRANG khi lỗi liên quan cookie.
+///
+/// Từ bản mỗi-trang-một-ô, câu "vào Cài đặt → Cookie" là chưa đủ: anh Hùng có
+/// 200-300 kênh nhiều nền tảng, phải biết ô CỦA TRANG NÀO vừa hỏng để đi nạp
+/// lại đúng chỗ, thay vì gộp tay cả file rồi đoán.
+pub fn friendly_reason_for(raw: &str, url: &str) -> String {
+    let base = friendly_reason(raw);
+    if !mentions_cookie(&base) {
+        return base;
+    }
+    let Some(site) = crate::args_builder::cookie_site_key(url) else {
+        return base;
+    };
+    let label = crate::args_builder::cookie_site_label(site);
+    // Chèn ngay sau dòng hướng dẫn, TRƯỚC dòng chi tiết kỹ thuật.
+    match base.split_once("\n(Chi tiết kỹ thuật:") {
+        Some((hint, rest)) => format!(
+            "{hint}\n👉 Cookie cần nạp lại là của trang {label} — mở Cài đặt → Cookie → ô \"{label}\".\
+             \n(Chi tiết kỹ thuật:{rest}"
+        ),
+        None => format!(
+            "{base}\n👉 Cookie cần nạp lại là của trang {label} — mở Cài đặt → Cookie → ô \"{label}\"."
+        ),
+    }
+}
+
 impl From<std::io::Error> for AppError {
     fn from(err: std::io::Error) -> Self { AppError::Io(err.to_string()) }
 }
@@ -522,4 +555,43 @@ impl From<anyhow::Error> for AppError {
 }
 impl From<tauri::Error> for AppError {
     fn from(err: tauri::Error) -> Self { AppError::Other(format!("Tauri: {err}")) }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+//  CỔNG: lỗi cookie phải chỉ ĐÍCH DANH trang nào cần nạp lại
+// ───────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests_bao_dung_trang_cookie {
+    use super::*;
+
+    /// Anh Hùng có 200-300 kênh nhiều nền tảng. Câu "vào Cài đặt → Cookie"
+    /// chung chung là bắt mò. Lỗi cookie phải nói ô CỦA TRANG NÀO vừa hỏng.
+    #[test]
+    fn loi_cookie_chi_dich_danh_trang() {
+        let raw = "ERROR: [youtube] abc: Sign in to confirm you're not a bot";
+        let m = friendly_reason_for(raw, "https://www.youtube.com/watch?v=abc");
+        assert!(m.contains("YouTube"), "phải gọi tên trang YouTube: {m}");
+
+        let raw_tt = "ERROR: [TikTok] 123: This video is private. Use --cookies";
+        let m2 = friendly_reason_for(raw_tt, "https://www.tiktok.com/@a/video/1");
+        assert!(m2.contains("TikTok"), "phải gọi tên trang TikTok: {m2}");
+        assert!(!m2.contains("YouTube"), "không được gọi nhầm trang khác: {m2}");
+    }
+
+    /// Lỗi KHÔNG liên quan cookie thì đừng nhét tên trang vào cho rối.
+    #[test]
+    fn loi_khong_phai_cookie_thi_khong_noi_ve_o_cookie() {
+        let raw = "ERROR: No space left on device";
+        let m = friendly_reason_for(raw, "https://www.youtube.com/watch?v=abc");
+        assert!(!m.contains("ô \"YouTube\""), "lỗi ổ đĩa mà lại bảo nạp cookie: {m}");
+    }
+
+    /// Link lạ (không thuộc trang nào trong bảng) thì giữ nguyên câu cũ, không
+    /// bịa tên trang.
+    #[test]
+    fn link_la_thi_khong_bia_ten_trang() {
+        let raw = "ERROR: Sign in to confirm you're not a bot";
+        let m = friendly_reason_for(raw, "https://trang-la-hoac-tu-che.example/v/1");
+        assert_eq!(m, friendly_reason(raw), "link lạ phải giữ nguyên câu gốc");
+    }
 }

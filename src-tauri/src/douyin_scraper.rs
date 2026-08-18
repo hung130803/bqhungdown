@@ -260,8 +260,18 @@ fn cookie_has_login(header: &str) -> bool {
 
 /// Lấy cookie Douyin từ cài đặt của user (file Netscape). Trả None nếu user
 /// chưa cấu hình file cookie hoặc file không có dòng nào cho douyin.com.
+///
+/// Ô RIÊNG TRƯỚC, Ô CHUNG SAU: có ô cookie riêng cho trang `douyin` thì dùng
+/// file của ô đó; chưa đặt thì mới rơi về ô chung `cookies_file`. Đây là đường
+/// HTTP của app (không phải yt-dlp) nên CHỈ ĐỌC file — không cần bản sao tạm,
+/// và tuyệt đối không đưa đường dẫn này cho tiến trình con.
 fn douyin_cookie_header(settings: &Settings) -> Option<String> {
-    let path = settings.cookies_file.as_deref()?;
+    let path = settings
+        .site_cookies
+        .get("douyin")
+        .and_then(|sc| sc.file.as_deref())
+        .filter(|p| !p.is_empty())
+        .or(settings.cookies_file.as_deref())?;
     if path.is_empty() {
         return None;
     }
