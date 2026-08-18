@@ -297,6 +297,16 @@ fn mentions_cookie(msg: &str) -> bool {
 /// Từ bản mỗi-trang-một-ô, câu "vào Cài đặt → Cookie" là chưa đủ: anh Hùng có
 /// 200-300 kênh nhiều nền tảng, phải biết ô CỦA TRANG NÀO vừa hỏng để đi nạp
 /// lại đúng chỗ, thay vì gộp tay cả file rồi đoán.
+/// True khi chuỗi lỗi thật ra là "người dùng bấm Huỷ", không phải hỏng.
+///
+/// Giao diện nhận biết lượt bị huỷ bằng cách dò chữ này rồi IM LẶNG (không
+/// hiện lỗi đỏ). Nên chỗ nào dịch lỗi sang câu thân thiện cũng phải CHỪA nó
+/// ra — dịch "Đã huỷ" thành "⚠️ Tải thất bại…" là user bấm Huỷ lại tưởng app
+/// hỏng.
+pub fn is_cancel_message(msg: &str) -> bool {
+    msg.contains("Đã huỷ") || msg.to_lowercase().contains("cancel")
+}
+
 pub fn friendly_reason_for(raw: &str, url: &str) -> String {
     let base = friendly_reason(raw);
     let Some(site) = crate::args_builder::cookie_site_key(url) else {
@@ -626,5 +636,18 @@ mod tests_bao_dung_trang_cookie {
             "kênh Douyin mà thông báo lại nhắc YouTube — chỉ sai trang: {m2}"
         );
     }
+    /// "Đã huỷ" PHẢI được nhận ra là HUỶ, không phải lỗi. Giao diện dò chữ
+    /// này rồi im lặng; nếu `is_cancel_message` sai thì câu huỷ bị đem đi dịch
+    /// thành "⚠️ Tải thất bại…" và user bấm Huỷ lại tưởng app hỏng.
+    #[test]
+    fn nhan_ra_dung_cau_nguoi_dung_bam_huy() {
+        assert!(is_cancel_message("Đã huỷ"));
+        assert!(is_cancel_message("yt-dlp thất bại: Đã huỷ"));
+        assert!(is_cancel_message("Operation was cancelled"));
+        // Lỗi THẬT thì không được coi là huỷ, nếu không sẽ bị nuốt im lặng.
+        assert!(!is_cancel_message(
+            "ERROR: [youtube] abc: Sign in to confirm you're not a bot"
+        ));
+        assert!(!is_cancel_message("ERROR: No space left on device"));
+    }
 }
-

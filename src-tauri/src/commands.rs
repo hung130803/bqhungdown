@@ -162,7 +162,21 @@ pub async fn fetch_channel_videos(
 
     let (info, videos) = crate::channel_fetcher::fetch_channel(
         &app, &url, cap, det, &tab_s, &s, force,
-    ).await?;
+    )
+    .await
+    // Dịch sang tiếng Việt + CHỈ ĐÍCH DANH TRANG khi lỗi liên quan cookie.
+    // Giao diện trước đây hiện NGUYÊN VĂN chuỗi `YtDlpFailed` — user thấy một
+    // dòng tiếng Anh của yt-dlp và không biết phải nạp cookie vào ô nào.
+    //
+    // CHỪA "Đã huỷ": giao diện nhận biết lượt bị huỷ bằng cách dò chữ này
+    // (ChannelInput bỏ qua, không hiện lỗi đỏ). Dịch luôn cả nó là user bấm
+    // Huỷ lại thấy báo "Tải thất bại".
+    .map_err(|e| match e {
+        AppError::YtDlpFailed(msg) if !crate::error::is_cancel_message(&msg) => {
+            AppError::YtDlpFailed(crate::error::friendly_reason_for(&msg, &url))
+        }
+        other => other,
+    })?;
     if let Some(cache) = &full_cache {
         if !videos.is_empty() {
             cache.save(&key, &videos);
