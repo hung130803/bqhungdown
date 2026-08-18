@@ -354,6 +354,19 @@ pub struct PickedVideo {
     pub view_count: Option<u64>,
     #[serde(default)]
     pub thumbnail: Option<String>,
+    /// Ngày đăng `YYYYMMDD` — tab Theo dõi kênh hiện "đăng 3 ngày trước".
+    ///
+    /// BẮT BUỘC `#[serde(default)]`: đây là struct LƯU ĐĨA (nằm trong
+    /// `WatchedChannel.picked` của `watchlist.json`). File watchlist đời cũ
+    /// KHÔNG có khoá này; thiếu `default` là serde parse hỏng cả phần tử →
+    /// hàng chờ của anh Hùng biến mất sạch.
+    #[serde(default)]
+    pub upload_date: Option<String>,
+    /// Lượt tim. Douyin/TikTok trả số này thật; YouTube ở chế độ quét nhanh
+    /// không có nên để trống — KHÔNG nhét 0 vào như thể là thật.
+    /// Cũng BẮT BUỘC `#[serde(default)]`, lý do y như trên.
+    #[serde(default)]
+    pub like_count: Option<u64>,
 }
 
 /// A saved channel/video the user wants to come back to (download or watch

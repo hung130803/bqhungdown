@@ -297,6 +297,13 @@ export interface PickedVideo {
   title: string;
   viewCount?: number | null;
   thumbnail?: string | null;
+  /** Ngày đăng `YYYYMMDD` — hàng chờ hiện "đăng 3 ngày trước". */
+  uploadDate?: string | null;
+  /**
+   * Lượt tim. Douyin/TikTok trả số này thật; YouTube quét nhanh không có nên
+   * để trống — KHÔNG nhét 0 vào như thể là thật.
+   */
+  likeCount?: number | null;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

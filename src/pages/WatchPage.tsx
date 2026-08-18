@@ -345,6 +345,24 @@ export function WatchPage() {
   };
 
   // ── Hàng chờ làm: dialog kho video kênh nguồn, tích chọn video sẽ tự tải dần ──
+
+  /**
+   * Đổi một video của kênh thành mục hàng chờ. CHỖ DUY NHẤT làm việc này —
+   * gom về một hàm vì đây đúng là chỗ bug 0.3.0 xảy ra: Rust gửi đủ trường,
+   * giao diện tự viết vòng `.map()` chép thiếu, và TypeScript không kêu vì
+   * thừa trường thì không phải lỗi. Thêm trường mới cho `PickedVideo` thì
+   * thêm ở ĐÂY, không rải ra nhiều chỗ.
+   */
+  const toPicked = (v: ChannelVideo): PickedVideo => ({
+    id: videoIdOf(v.url),
+    url: v.url,
+    title: v.title,
+    viewCount: v.viewCount ?? null,
+    thumbnail: v.thumbnail ?? null,
+    uploadDate: v.uploadDate ?? null,
+    likeCount: v.likeCount ?? null,
+  });
+
   const [pickerFor, setPickerFor] = useState<WatchedChannel | null>(null);
   const [pickerVideos, setPickerVideos] = useState<ChannelVideo[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
@@ -455,13 +473,7 @@ export function WatchPage() {
           // bỏ video đã làm + video FILE còn trên đĩa (đã tải, chỉ thiếu sổ)
           return !have.has(id) && !isPickerDone(id) && !isOnDisk(v.title);
         })
-        .map((v) => ({
-          id: videoIdOf(v.url),
-          url: v.url,
-          title: v.title,
-          viewCount: v.viewCount ?? null,
-          thumbnail: v.thumbnail ?? null,
-        }));
+        .map(toPicked);
       return [...sel, ...add];
     });
   };
@@ -478,7 +490,7 @@ export function WatchPage() {
     setPickerSel((sel) => {
       const has = sel.some((p) => p.id === id);
       if (on && !has) {
-        return [...sel, { id, url: v.url, title: v.title, viewCount: v.viewCount ?? null, thumbnail: v.thumbnail ?? null }];
+        return [...sel, toPicked(v)];
       }
       if (!on && has) return sel.filter((p) => p.id !== id);
       return sel;
@@ -2399,6 +2411,9 @@ export function WatchPage() {
                       <div className="truncate text-fg" title={v.title}>{v.title || v.url}</div>
                       <div className="text-xs text-muted">
                         {v.viewCount != null && <>👁 {formatViews(v.viewCount)} · </>}
+                        {/* Lượt tim: Douyin/TikTok trả số THẬT. Thiếu thì để
+                            trống, KHÔNG hiện 0 như thể là thật. */}
+                        {v.likeCount != null && <>❤ {formatViews(v.likeCount)} · </>}
                         {v.durationSec != null && v.durationSec > 0 && <>⏱ {fmtDur(v.durationSec)} · </>}
                         {v.uploadDate && <>{timeAgo(v.uploadDate)} · </>}
                         {skipped ? (

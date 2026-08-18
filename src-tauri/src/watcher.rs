@@ -806,6 +806,10 @@ fn pick_auto_candidates(
             title: v.title.clone(),
             view_count: v.view_count,
             thumbnail: v.thumbnail.clone(),
+            // Giữ NGUYÊN ngày đăng + tim của video gốc — hàng chờ hiện được
+            // "đăng 3 ngày trước / 35,3N tim" mà không phải quét lại kênh.
+            upload_date: v.upload_date.clone(),
+            like_count: v.like_count,
         })
         .collect()
 }
@@ -921,10 +925,12 @@ fn picked_to_channel_video(p: &PickedVideo) -> ChannelVideo {
         title: p.title.clone(),
         duration_sec: None,
         view_count: p.view_count,
-        like_count: None,
+        // Chuyển TIẾP ngày đăng + lượt tim, đừng ghi cứng None: chính kiểu
+        // "đánh rơi trường ngay tại chỗ đổi kiểu" đã làm 0.3.0 mất ngày + tim.
+        like_count: p.like_count,
         comment_count: None,
         share_count: None,
-        upload_date: None,
+        upload_date: p.upload_date.clone(),
         thumbnail: p.thumbnail.clone(),
         is_photo: false,
         is_short: false,
@@ -1310,6 +1316,8 @@ mod tests {
             title: id.into(),
             view_count: Some(1000),
             thumbnail: None,
+            upload_date: None,
+            like_count: None,
         }
     }
 
@@ -1837,5 +1845,82 @@ mod tests_tu_chua_bo_dem {
         let mut c = ch_dem(Some(NAY), 2, vec!["ok", "hong"]);
         ap_dung(&mut c, NAY, &["ok"], &[]);
         assert_eq!(c.drip_count, 1, "2 - 1 lỗi = 1, và cái xong vẫn được đếm");
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  CỔNG: hàng chờ phải GIỮ ngày đăng + lượt tim qua mọi chỗ đổi kiểu
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests_hang_cho_giu_ngay_va_tim {
+    use super::*;
+    use crate::models::ChannelVideo;
+
+    fn cv(url: &str, ngay: Option<&str>, tim: Option<u64>, view: Option<u64>) -> ChannelVideo {
+        ChannelVideo {
+            url: url.into(),
+            title: "bai".into(),
+            duration_sec: Some(30),
+            view_count: view,
+            like_count: tim,
+            comment_count: None,
+            share_count: None,
+            upload_date: ngay.map(String::from),
+            thumbnail: None,
+            is_short: false,
+            is_photo: false,
+            hashtags: Vec::new(),
+            downloaded: false,
+        }
+    }
+
+    /// Vòng TRÒN đầy đủ: video kênh → hàng chờ (`PickedVideo`, lưu đĩa) → quay
+    /// lại `ChannelVideo` để hiện/tải. Ngày đăng + lượt tim phải sống sót CẢ
+    /// HAI chặng.
+    ///
+    /// Đây đúng lớp bệnh đã cắn 0.3.0: Rust có đủ số, nhưng một hàm đổi kiểu
+    /// ở giữa ghi cứng `None` nên trường bốc hơi mà không test nào đỏ.
+    #[test]
+    fn ngay_dang_va_tim_song_sot_ca_vong_tron() {
+        let goc = cv("https://www.douyin.com/video/x1", Some("20260728"), Some(35316), None);
+        // ĐÚNG hàm app dùng để tự vét — không có đường tay thứ hai.
+        let picks = pick_auto_candidates(&[goc.clone()], &[], 1, "all");
+        assert_eq!(picks.len(), 1, "phải chọn được 1 video");
+        assert_eq!(
+            picks[0].upload_date.as_deref(),
+            Some("20260728"),
+            "NGÀY ĐĂNG bị vứt ngay lúc đưa vào hàng chờ"
+        );
+        assert_eq!(
+            picks[0].like_count,
+            Some(35316),
+            "LƯỢT TIM bị vứt ngay lúc đưa vào hàng chờ"
+        );
+
+        // Chặng về: hàng chờ → ChannelVideo (dùng để hiện + để tải).
+        let ve = picked_to_channel_video(&picks[0]);
+        assert_eq!(
+            ve.upload_date.as_deref(),
+            Some("20260728"),
+            "NGÀY ĐĂNG bị vứt lúc đổi hàng chờ về ChannelVideo"
+        );
+        assert_eq!(
+            ve.like_count,
+            Some(35316),
+            "LƯỢT TIM bị vứt lúc đổi hàng chờ về ChannelVideo"
+        );
+    }
+
+    /// Thiếu số thì để TRỐNG, tuyệt đối không bịa 0 — Douyin không cho lượt
+    /// xem, hiện "0 view" là nói dối anh Hùng.
+    #[test]
+    fn thieu_so_thi_de_trong_chu_khong_bia_0() {
+        let goc = cv("https://www.douyin.com/video/x2", None, None, None);
+        let picks = pick_auto_candidates(&[goc], &[], 1, "all");
+        assert_eq!(picks[0].upload_date, None, "thiếu ngày thì để trống");
+        assert_eq!(picks[0].like_count, None, "thiếu tim thì để trống, không bịa 0");
+        let ve = picked_to_channel_video(&picks[0]);
+        assert_eq!(ve.like_count, None);
+        assert_eq!(ve.upload_date, None);
     }
 }

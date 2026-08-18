@@ -220,3 +220,90 @@ mod tests {
         let _ = fs::remove_file(backup_path(&p, "bak"));
     }
 }
+
+// ---------------------------------------------------------------------------
+//  CỔNG: watchlist.json ĐỜI CŨ phải đọc được — bẫy #[serde(default)]
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests_watchlist_cu_van_doc_duoc {
+    use crate::models::{PickedVideo, WatchedChannel};
+
+    /// `PickedVideo` là struct LƯU ĐĨA, nằm trong `WatchedChannel.picked` của
+    /// `watchlist.json`. Bản trước KHÔNG có `uploadDate`/`likeCount`.
+    ///
+    /// ĐO ĐƯỢC (18/08/2026), KHÁC với điều hay được nhắc: với trường kiểu
+    /// `Option<T>`, serde ngầm coi khoá vắng mặt là `None` — bỏ
+    /// `#[serde(default)]` thì file cũ VẪN parse được (đã thử: cổng vẫn xanh).
+    /// Chỗ CHẾT THẬT là trường KHÔNG phải Option (`Vec`, `bool`, `String`,
+    /// `BTreeMap`): thiếu `default` là serde báo `missing field` → hỏng CẢ
+    /// struct. Đã thử trên `Settings.site_cookies` (BTreeMap): bỏ `default`
+    /// thì `settings.json` đời cũ parse hỏng → app khôi phục mặc định → MẤT
+    /// SẠCH cài đặt. Cổng ở `settings_store` bắt đúng ca đó (mã thoát 101).
+    ///
+    /// Cổng này vẫn cần: nó bắt đổi tên trường / bỏ `rename_all` / đổi kiểu —
+    /// những thứ vẫn làm hàng chờ của anh Hùng bay mất.
+    #[test]
+    fn hang_cho_doi_cu_thieu_ngay_va_tim_van_parse_du() {
+        // Đúng những khoá bản cũ ghi ra — KHÔNG có uploadDate/likeCount.
+        let cu = r#"[{
+            "id": "abc123",
+            "url": "https://www.youtube.com/watch?v=abc123",
+            "title": "Video cu cua anh Hung",
+            "viewCount": 12345,
+            "thumbnail": "https://i.ytimg.com/vi/abc123/hq.jpg"
+        }]"#;
+        let list: Vec<PickedVideo> =
+            serde_json::from_str(cu).expect("hàng chờ ĐỜI CŨ phải parse được");
+        assert_eq!(list.len(), 1, "mất phần tử = mất hàng chờ của anh Hùng");
+        assert_eq!(list[0].id, "abc123");
+        assert_eq!(list[0].title, "Video cu cua anh Hung");
+        assert_eq!(list[0].view_count, Some(12345), "dữ liệu cũ phải còn nguyên");
+        // Trường MỚI vắng mặt thì để trống, không làm hỏng cả phần tử.
+        assert_eq!(list[0].upload_date, None);
+        assert_eq!(list[0].like_count, None);
+    }
+
+    /// Cả một `WatchedChannel` đời cũ (hàng chờ nằm bên trong) cũng phải nguyên vẹn.
+    #[test]
+    fn ca_kenh_theo_doi_doi_cu_van_giu_nguyen_hang_cho() {
+        let cu = r#"[{
+            "id": "kenh-1",
+            "url": "https://www.youtube.com/@mrbeast",
+            "title": "MrBeast",
+            "picked": [
+                {"id":"v1","url":"https://youtu.be/v1","title":"mot","viewCount":10},
+                {"id":"v2","url":"https://youtu.be/v2","title":"hai","viewCount":20}
+            ]
+        }]"#;
+        let list: Vec<WatchedChannel> =
+            serde_json::from_str(cu).expect("watchlist ĐỜI CŨ phải parse được");
+        assert_eq!(list.len(), 1);
+        assert_eq!(
+            list[0].picked.len(),
+            2,
+            "hàng chờ 2 video đời cũ bị nuốt mất — đúng kiểu mất dữ liệu cần chặn"
+        );
+        assert_eq!(list[0].picked[0].upload_date, None);
+    }
+
+    /// Chiều xuôi: ghi ra rồi đọc lại phải GIỮ được ngày đăng + lượt tim.
+    #[test]
+    fn ghi_roi_doc_lai_giu_duoc_ngay_dang_va_luot_tim() {
+        let p = PickedVideo {
+            id: "x1".into(),
+            url: "https://www.douyin.com/video/x1".into(),
+            title: "bai douyin".into(),
+            view_count: None,
+            thumbnail: None,
+            upload_date: Some("20260728".into()),
+            like_count: Some(35316),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        // Tên khoá gửi lên giao diện phải là camelCase.
+        assert!(json.contains("uploadDate"), "phải là camelCase: {json}");
+        assert!(json.contains("likeCount"), "phải là camelCase: {json}");
+        let lai: PickedVideo = serde_json::from_str(&json).unwrap();
+        assert_eq!(lai.upload_date.as_deref(), Some("20260728"));
+        assert_eq!(lai.like_count, Some(35316));
+    }
+}
