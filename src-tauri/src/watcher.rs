@@ -261,7 +261,12 @@ pub async fn check_channel(
             apply(app, store, queue, settings_store, history, &channel, fetched, info.channel_id, title, id).await
         }
         Err(e) => {
-            let msg = format!("{e}");
+            // Dịch sang tiếng Việt + CHỈ ĐÍCH DANH TRANG khi lỗi liên quan
+            // cookie. Anh Hùng theo dõi 200-300 kênh nhiều nền tảng; từ bản
+            // mỗi-trang-một-ô, báo "cookie hỏng" mà không nói trang nào thì
+            // không biết nạp lại vào ô nào. Trước đây chỗ này lưu NGUYÊN VĂN
+            // lỗi tiếng Anh của yt-dlp.
+            let msg = crate::error::friendly_reason_for(&format!("{e}"), &channel.url);
             let _ = store.update(id, |c| {
                 c.last_checked = Some(Utc::now());
                 c.last_error = Some(msg.clone());

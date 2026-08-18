@@ -299,13 +299,24 @@ fn mentions_cookie(msg: &str) -> bool {
 /// lại đúng chỗ, thay vì gộp tay cả file rồi đoán.
 pub fn friendly_reason_for(raw: &str, url: &str) -> String {
     let base = friendly_reason(raw);
-    if !mentions_cookie(&base) {
-        return base;
-    }
     let Some(site) = crate::args_builder::cookie_site_key(url) else {
         return base;
     };
     let label = crate::args_builder::cookie_site_label(site);
+
+    // Câu "chặn bot" ghi cứng tên YouTube (hồi đó app chỉ lo YouTube). Kênh
+    // Douyin/TikTok bị chặn mà báo "YouTube đang chặn tải" là nói sai trang,
+    // user đi sửa nhầm chỗ. Biết trang thật thì thay đúng tên.
+    const CHAN_YT: &str = "🚫 YouTube đang chặn tải";
+    let base = if site != "youtube" && base.contains(CHAN_YT) {
+        base.replace(CHAN_YT, &format!("🚫 {label} đang chặn tải"))
+    } else {
+        base
+    };
+
+    if !mentions_cookie(&base) {
+        return base;
+    }
     // Chèn ngay sau dòng hướng dẫn, TRƯỚC dòng chi tiết kỹ thuật.
     match base.split_once("\n(Chi tiết kỹ thuật:") {
         Some((hint, rest)) => format!(
@@ -594,4 +605,26 @@ mod tests_bao_dung_trang_cookie {
         let m = friendly_reason_for(raw, "https://trang-la-hoac-tu-che.example/v/1");
         assert_eq!(m, friendly_reason(raw), "link lạ phải giữ nguyên câu gốc");
     }
+
+    /// Quét kênh hỏng vì cookie cũng phải nói ĐÚNG TRANG. Anh Hùng theo dõi
+    /// 200-300 kênh nhiều nền tảng — trước đây chỗ này lưu nguyên văn lỗi
+    /// tiếng Anh của yt-dlp, nhìn vào không biết nạp lại cookie ở đâu.
+    #[test]
+    fn loi_quet_kenh_cung_chi_dich_danh_trang() {
+        let raw = "ERROR: [youtube:tab] @kenh: Sign in to confirm you're not a bot";
+        let m = friendly_reason_for(raw, "https://www.youtube.com/@kenh");
+        assert!(m.contains("YouTube"), "quét kênh YouTube hỏng phải gọi tên YouTube: {m}");
+        assert!(!m.starts_with("ERROR:"), "phải dịch, không để nguyên văn tiếng Anh: {m}");
+
+        let raw_dy = "ERROR: [Douyin] 123: Sign in to confirm you're not a bot";
+        let m2 = friendly_reason_for(raw_dy, "https://www.douyin.com/user/MS4wLjABAAAA");
+        assert!(m2.contains("Douyin"), "quét kênh Douyin hỏng phải gọi tên Douyin: {m2}");
+        // Câu "chặn bot" từng ghi cứng tên YouTube — kênh Douyin bị chặn mà
+        // báo "YouTube đang chặn tải" là chỉ sai chỗ cho user đi sửa.
+        assert!(
+            !m2.contains("YouTube"),
+            "kênh Douyin mà thông báo lại nhắc YouTube — chỉ sai trang: {m2}"
+        );
+    }
 }
+
