@@ -1026,7 +1026,19 @@ async fn try_tikwm_endpoint(
     let data = json.data
         .ok_or_else(|| AppError::Other("API không trả dữ liệu. Kênh có thể không công khai.".into()))?;
 
-    let posts: Vec<DouyinPost> = data.aweme_list
+    let has_more = data.has_more;
+    let posts = tikwm_posts_from_data(data);
+    Ok((posts, has_more))
+}
+
+/// Bóc danh sách bài từ khối `data` của tikwm. TÁCH RIÊNG khỏi
+/// `try_tikwm_endpoint` để CÓ THỂ CANH ĐƯỢC bằng test — hàm kia phải ra mạng.
+///
+/// VÌ SAO PHẢI TÁCH: đây là phao dự phòng cuối cùng cho Douyin, và nó bóc
+/// tim/bình luận/chia sẻ y như đường chính. Trước bản này KHÔNG CÓ CỔNG NÀO
+/// canh — sửa hỏng nó cũng không test nào đỏ. Xem `tests_tikwm_giu_du_so`.
+fn tikwm_posts_from_data(data: TikwmData) -> Vec<DouyinPost> {
+    data.aweme_list
         .into_iter()
         .filter_map(|aweme| {
             let id = aweme.aweme_id?;
@@ -1069,9 +1081,7 @@ async fn try_tikwm_endpoint(
                 author_avatar,
             })
         })
-        .collect();
-
-    Ok((posts, data.has_more))
+        .collect()
 }
 
 /// Thử tất cả endpoints cho đến khi 1 cái thành công.
@@ -1953,5 +1963,114 @@ www.douyin.com\tFALSE\t/\tFALSE\t1799999999\ts_v_web_id\tGIA_TRI_WEBID
         let ban = format!("{FILE_MAU}.douyin.com\tTRUE\tthieu_cot\n\n\t\t\n");
         let h = netscape_to_cookie_header(&ban, "douyin.com").expect("vẫn phải bóc được");
         assert!(h.contains("sessionid=GIA_TRI_PHIEN"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  CỔNG: phao dự phòng tikwm phải GIỮ ĐỦ tim / bình luận / chia sẻ
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests_tikwm_giu_du_so {
+    use super::*;
+
+    /// VÌ SAO CÓ CỔNG NÀY: tikwm là phao dự phòng cuối cho Douyin, bóc
+    /// tim/bình luận/chia sẻ y như đường chính — mà trước bản này KHÔNG CÓ
+    /// CỔNG NÀO canh. Lượt trước đã có người sửa hỏng đường tikwm mà không
+    /// test nào đỏ (thật ra họ sửa nhầm vào bản sao CHẾT trong
+    /// `channel_fetcher.rs`, nay đã gỡ hẳn — xem ghi chú ở đó).
+    ///
+    /// Thân JSON dưới đây theo ĐÚNG hình dạng tikwm trả (`statistics` lồng
+    /// trong từng bài, `images` rỗng, `author` đi kèm sẵn).
+    #[test]
+    fn tikwm_giu_du_tim_binh_luan_chia_se() {
+        let raw = r#"{
+            "code": 0, "msg": "success",
+            "data": {
+                "has_more": true,
+                "aweme_list": [
+                    {"aweme_id":"7655989781075217704","desc":"bai mot",
+                     "create_time":1785239590,"images":null,
+                     "video":{"cover":{"url_list":["https://p3.douyinpic.com/a.jpeg"]}},
+                     "statistics":{"play_count":0,"digg_count":35316,
+                                   "comment_count":908,"share_count":12272},
+                     "author":{"nickname":"大雄探片","avatar_thumb":{"url_list":[
+                       "https://p3-pc.douyinpic.com/aweme-avatar/x.jpeg"]}}},
+                    {"aweme_id":"7655989781075217705","desc":"bai hai",
+                     "create_time":1784464747,"images":null,
+                     "video":{"cover":{"url_list":["https://p3.douyinpic.com/b.jpeg"]}},
+                     "statistics":{"play_count":0,"digg_count":12733,
+                                   "comment_count":325,"share_count":1593},
+                     "author":{"nickname":"大雄探片","avatar_thumb":{"url_list":[
+                       "https://p3-pc.douyinpic.com/aweme-avatar/x.jpeg"]}}}
+                ]
+            }
+        }"#;
+        let r: TikwmResponse = serde_json::from_str(raw).expect("thân tikwm phải parse được");
+        let data = r.data.expect("phải có khối data");
+        assert!(data.has_more, "cờ has_more bị đánh rơi");
+        // ĐÚNG hàm app dùng — không có đường tay thứ hai.
+        let posts = tikwm_posts_from_data(data);
+
+        assert_eq!(posts.len(), 2, "mất bài khi bóc");
+        assert_eq!(posts[0].id, "7655989781075217704");
+        assert_eq!(posts[0].like_count, Some(35316), "LƯỢT TIM bị đánh rơi");
+        assert_eq!(posts[0].comment_count, Some(908), "LƯỢT BÌNH LUẬN bị đánh rơi");
+        assert_eq!(posts[0].share_count, Some(12272), "LƯỢT CHIA SẺ bị đánh rơi");
+        assert_eq!(posts[1].like_count, Some(12733));
+        assert_eq!(posts[1].comment_count, Some(325));
+        assert_eq!(posts[1].share_count, Some(1593));
+        // Ngày đăng + tên kênh + ảnh đại diện cũng phải sống (bug 0.3.1).
+        assert_eq!(posts[0].create_time, Some(1785239590), "NGÀY ĐĂNG bị đánh rơi");
+        assert_eq!(posts[0].author_name.as_deref(), Some("大雄探片"));
+        assert!(posts[0].author_avatar.as_deref().unwrap_or("").contains("aweme-avatar"));
+        assert!(posts[0].url.contains("douyin.com/video/"), "URL phải là link xem douyin");
+    }
+
+    /// Douyin KHÔNG cho lượt xem (`play_count` = 0 kể cả đã đăng nhập — đã tra
+    /// tận cùng). Thiếu số thì để TRỐNG, tuyệt đối không nhét 0 vào như thể là
+    /// số thật.
+    #[test]
+    fn thieu_so_thi_de_trong_chu_khong_bia_0() {
+        let raw = r#"{
+            "code": 0, "msg": "success",
+            "data": {"has_more": false, "aweme_list": [
+                {"aweme_id":"111","desc":"khong co statistics","images":null}
+            ]}
+        }"#;
+        let r: TikwmResponse = serde_json::from_str(raw).unwrap();
+        let posts = tikwm_posts_from_data(r.data.unwrap());
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].like_count, None, "thiếu tim phải để trống, KHÔNG bịa 0");
+        assert_eq!(posts[0].comment_count, None, "thiếu bình luận phải để trống");
+        assert_eq!(posts[0].share_count, None, "thiếu chia sẻ phải để trống");
+        assert_eq!(posts[0].create_time, None, "thiếu ngày phải để trống");
+    }
+
+    /// tikwm hay trả `aweme_list: null` thay vì `[]` khi kênh rỗng / bị chặn —
+    /// phải ra danh sách rỗng chứ không được nổ.
+    #[test]
+    fn aweme_list_null_thi_ra_rong_chu_khong_no() {
+        let raw = r#"{"code":0,"msg":"success","data":{"has_more":false,"aweme_list":null}}"#;
+        let r: TikwmResponse = serde_json::from_str(raw).expect("null phải parse được");
+        let posts = tikwm_posts_from_data(r.data.unwrap());
+        assert!(posts.is_empty());
+    }
+
+    /// Bài ảnh (`images` không rỗng) phải được đánh dấu đúng — tải bài ảnh
+    /// bằng đường video là hỏng.
+    #[test]
+    fn bai_anh_duoc_danh_dau_dung() {
+        let raw = r#"{
+            "code": 0, "msg": "ok",
+            "data": {"has_more": false, "aweme_list": [
+                {"aweme_id":"222","desc":"bai anh",
+                 "images":["https://p3.douyinpic.com/1.jpeg"],
+                 "statistics":{"digg_count":5}}
+            ]}
+        }"#;
+        let r: TikwmResponse = serde_json::from_str(raw).unwrap();
+        let posts = tikwm_posts_from_data(r.data.unwrap());
+        assert!(posts[0].is_photo, "bài ảnh bị coi là video");
+        assert_eq!(posts[0].like_count, Some(5));
     }
 }

@@ -626,205 +626,25 @@ fn finalize_listing(
     Ok((info, videos))
 }
 
-/// Fetch a Douyin user's video listing via tikwm. Pages are 30 entries each;
-/// we keep requesting with `cursor` until we hit `limit` or `hasMore=false`.
-/// `limit = 0` means "all pages".
-#[allow(dead_code)] // tikwm /user/posts is Cloudflare-protected; kept as
-                    // reference for if we get a working endpoint later.
-async fn fetch_douyin_channel(
-    url: &str,
-    limit: u32,
-    my_gen: u64,
-) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
-    use serde_json::Value;
-
-    let sec_uid = match url.split("/user/").nth(1) {
-        Some(rest) => rest
-            .split(|c| c == '?' || c == '&' || c == '#')
-            .next()
-            .unwrap_or("")
-            .to_string(),
-        None => return Err(AppError::YtDlpFailed("Không nhận diện được Douyin user".into())),
-    };
-    if sec_uid.is_empty() {
-        return Err(AppError::YtDlpFailed("Douyin URL không có sec_uid".into()));
-    }
-
-    let endpoints = [
-        "https://www.tikwm.com/api/user/posts",
-        "https://tikwm.com/api/user/posts",
-        "https://api.tikwm.com/api/user/posts",
-    ];
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-             (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-        )
-        .build()
-        .map_err(|e| AppError::YtDlpFailed(e.to_string()))?;
-
-    let mut info = ChannelInfo {
-        url: url.to_string(),
-        title: String::new(),
-        thumbnail: None,
-        video_count: None,
-        extractor: "douyin".into(),
-        hidden_downloaded: None,
-        channel_id: None,
-        api_note: None,
-    };
-    let mut videos: Vec<ChannelVideo> = Vec::new();
-    let mut cursor: i64 = 0;
-    let cap = if limit == 0 { u32::MAX } else { limit };
-
-    'pages: loop {
-        if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
-            return Err(AppError::YtDlpFailed("Đã huỷ".into()));
-        }
-        let mut page_ok = false;
-        for endpoint in endpoints {
-            let resp = client
-                .get(endpoint)
-                .query(&[
-                    ("unique_id", sec_uid.as_str()),
-                    ("count", "30"),
-                    ("cursor", &cursor.to_string()),
-                ])
-                .send()
-                .await;
-            let resp = match resp {
-                Ok(r) if r.status().is_success() => r,
-                _ => continue,
-            };
-            let json: Value = match resp.json().await {
-                Ok(j) => j,
-                Err(_) => continue,
-            };
-            if json.get("code").and_then(|v| v.as_i64()) != Some(0) {
-                continue;
-            }
-            let data = match json.get("data") {
-                Some(d) => d,
-                None => continue,
-            };
-            // First page: pull profile info.
-            if videos.is_empty() {
-                if let Some(author) = data.get("author") {
-                    info.title = author
-                        .get("nickname")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    info.thumbnail = author
-                        .get("avatar")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                }
-            }
-            if let Some(arr) = data.get("videos").and_then(|v| v.as_array()) {
-                for v in arr {
-                    if let Some(cv) = parse_tikwm_entry(v) {
-                        videos.push(cv);
-                        if videos.len() as u32 >= cap {
-                            break 'pages;
-                        }
-                    }
-                }
-            }
-            // tikwm uses `cursor` for next page; some endpoints return
-            // hasMore=false at end.
-            let has_more = data
-                .get("hasMore")
-                .and_then(|v| v.as_bool())
-                .or_else(|| {
-                    data.get("has_more").and_then(|v| match v {
-                        Value::Bool(b) => Some(*b),
-                        Value::Number(n) => n.as_i64().map(|i| i != 0),
-                        _ => None,
-                    })
-                })
-                .unwrap_or(false);
-            cursor = data
-                .get("cursor")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(cursor + 30);
-            page_ok = true;
-            if !has_more {
-                break 'pages;
-            }
-            break; // success — go to next page (don't try other endpoints)
-        }
-        if !page_ok {
-            // All endpoints failed for this cursor — bail with whatever we have.
-            if videos.is_empty() {
-                return Err(AppError::YtDlpFailed(
-                    "TikWM không phản hồi (Cloudflare chặn / mạng)".into(),
-                ));
-            }
-            break;
-        }
-    }
-
-    info.video_count = Some(videos.len() as u32);
-    Ok((info, videos))
-}
-
-#[allow(dead_code)]
-fn parse_tikwm_entry(v: &serde_json::Value) -> Option<ChannelVideo> {
-    let id = v.get("video_id").and_then(|x| x.as_str()).map(String::from)
-        .or_else(|| v.get("aweme_id").and_then(|x| x.as_str()).map(String::from))?;
-    // tikwm return play link sometimes — but for queueing we want the canonical
-    // douyin watch URL so url_resolver can re-fetch the latest CDN link later.
-    let url = format!("https://www.douyin.com/video/{id}");
-    let title = v
-        .get("title")
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string();
-    let duration_sec = v.get("duration").and_then(|x| x.as_u64());
-    let view_count = v
-        .get("play_count")
-        .and_then(|x| x.as_u64())
-        .or_else(|| v.get("playCount").and_then(|x| x.as_u64()));
-    let upload_date = v
-        .get("create_time")
-        .and_then(|x| x.as_i64())
-        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
-        .map(|dt| dt.format("%Y%m%d").to_string());
-    let thumbnail = v
-        .get("cover")
-        .and_then(|x| x.as_str())
-        .map(String::from)
-        .or_else(|| v.get("origin_cover").and_then(|x| x.as_str()).map(String::from));
-    // Douyin photo posts: `images: [...]` instead of video.
-    let is_photo = v
-        .get("images")
-        .and_then(|x| x.as_array())
-        .map(|a| !a.is_empty())
-        .unwrap_or(false);
-    // tikwm để ba số này ở NGAY tầng gốc mỗi video (không lồng trong
-    // `statistics` như API douyin.com). Nối cho đồng bộ với đường chính.
-    let like_count = v.get("digg_count").and_then(|x| x.as_u64());
-    let comment_count = v.get("comment_count").and_then(|x| x.as_u64());
-    let share_count = v.get("share_count").and_then(|x| x.as_u64());
-    Some(ChannelVideo {
-        url,
-        title,
-        duration_sec,
-        view_count,
-        like_count,
-        comment_count,
-        share_count,
-        upload_date,
-        thumbnail,
-        is_short: false,
-        is_photo,
-        hashtags: Vec::new(),
-        downloaded: false,
-    })
-}
+// ĐÃ GỠ (18/08/2026): `fetch_douyin_channel` + `parse_tikwm_entry` — đường
+// quét kênh Douyin qua tikwm /user/posts.
+//
+// VÌ SAO GỠ, ĐO RỒI MỚI GỠ:
+//  1. KHÔNG AI GỌI. Cả hai hàm chỉ gọi lẫn nhau, `fetch_douyin_channel` mang
+//     `#[allow(dead_code)]` — tức app không bao giờ chạy tới đây. Nhưng chính
+//     `#[allow]` đó lại giấu cảnh báo, nên đoạn này trông như còn dùng.
+//  2. ĐIỂM CUỐI ĐÃ CHẾT. Đo 18/08/2026, cả 3 tên miền đều là tường Cloudflare:
+//       www.tikwm.com/api/user/posts  -> HTTP 403, thân 5846 byte HTML
+//       tikwm.com/api/user/posts      -> HTTP 403, thân 5842 byte HTML
+//       api.tikwm.com/api/user/posts  -> không nối được
+//     Thân trả về là trang "Just a moment..." chứ không phải JSON.
+//  3. NGUY HIỂM KHI ĐỂ LẠI: không cổng nào canh, mà nó lại GIỐNG HỆT đường
+//     tikwm CÒN SỐNG ở `douyin_scraper::try_tikwm_endpoint`. Lượt trước đã có
+//     người sửa nhầm vào đây rồi tưởng đã vá — sửa hỏng mà không test nào đỏ.
+//
+// Đường tikwm CÒN SỐNG (phao dự phòng thật) nằm ở `douyin_scraper.rs`:
+// `try_tikwm_endpoint` + `tikwm_posts_from_data`, và ĐÃ CÓ CỔNG canh
+// tim/bình luận/chia sẻ — xem `tests_tikwm_giu_du_so`.
 
 
 /// Fetch a channel's flat listing, retrying without cookies if the first
