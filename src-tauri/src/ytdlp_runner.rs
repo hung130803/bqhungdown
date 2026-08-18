@@ -867,10 +867,21 @@ mod tests_cookie_moi_trang {
     use super::*;
     use crate::models::SiteCookie;
 
-    /// Tạo file cookie thật trong thư mục tạm riêng của test. Trả (đường dẫn,
-    /// thư mục cha) — gọi `fs::remove_dir_all` ở cuối test để không để rác
-    /// trên máy anh Hùng.
-    fn cookie_that(ten: &str, noi_dung: &str) -> (String, std::path::PathBuf) {
+    /// Thư mục tạm của test, TỰ XOÁ khi rơi khỏi phạm vi.
+    ///
+    /// ĐO ĐƯỢC: bản đầu dọn bằng `fs::remove_dir_all` ở DÒNG CUỐI test. Lượt
+    /// test ĐỎ thì panic nhảy qua dòng đó → rác nằm lại `%TEMP%` máy anh Hùng
+    /// (đếm thật: 12 thư mục sau mấy lượt phá-thử). `Drop` chạy cả khi panic.
+    struct ThuMucTest(std::path::PathBuf);
+    impl Drop for ThuMucTest {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Tạo file cookie thật trong thư mục tạm riêng của test. Giữ giá trị trả
+    /// về sống tới hết test — thả ra là thư mục bị xoá.
+    fn cookie_that(ten: &str, noi_dung: &str) -> (String, ThuMucTest) {
         let dir = std::env::temp_dir().join(format!(
             "bqh_test_ck_{}_{}",
             std::process::id(),
@@ -879,7 +890,7 @@ mod tests_cookie_moi_trang {
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(ten);
         std::fs::write(&p, noi_dung).unwrap();
-        (p.to_string_lossy().into_owned(), dir)
+        (p.to_string_lossy().into_owned(), ThuMucTest(dir))
     }
 
     fn settings_voi_o(o: &[(&str, &str)], o_chung: Option<&str>) -> Settings {
@@ -898,9 +909,9 @@ mod tests_cookie_moi_trang {
     /// của trang khác, không dùng ô chung khi đã có ô riêng.
     #[test]
     fn chon_dung_o_cookie_theo_link() {
-        let (yt, d1) = cookie_that("yt.txt", "# youtube\n");
-        let (tk, d2) = cookie_that("tk.txt", "# tiktok\n");
-        let (chung, d3) = cookie_that("chung.txt", "# chung\n");
+        let (yt, _d1) = cookie_that("yt.txt", "# youtube\n");
+        let (tk, _d2) = cookie_that("tk.txt", "# tiktok\n");
+        let (chung, _d3) = cookie_that("chung.txt", "# chung\n");
         let s = settings_voi_o(&[("youtube", &yt), ("tiktok", &tk)], Some(&chung));
 
         // Mỗi link phải rơi vào ĐÚNG ô. So bằng NỘI DUNG vì đường dẫn đưa cho
@@ -921,9 +932,6 @@ mod tests_cookie_moi_trang {
             let doc = std::fs::read_to_string(&duong).unwrap();
             assert_eq!(doc, mong_doi, "link {url} lấy nhầm ô cookie");
         }
-        for d in [d1, d2, d3] {
-            let _ = std::fs::remove_dir_all(d);
-        }
     }
 
     /// CỔNG XƯƠNG SỐNG: yt-dlp GHI ĐÈ file `--cookies` lúc thoát. Nên với MỌI
@@ -932,10 +940,10 @@ mod tests_cookie_moi_trang {
     /// trang đó chết oan.
     #[test]
     fn moi_o_cookie_deu_dua_ban_sao_tam_cho_ytdlp() {
-        let (yt, d1) = cookie_that("yt.txt", "# youtube\n");
-        let (tk, d2) = cookie_that("tk.txt", "# tiktok\n");
-        let (dy, d3) = cookie_that("dy.txt", "# douyin\n");
-        let (chung, d4) = cookie_that("chung.txt", "# chung\n");
+        let (yt, _d1) = cookie_that("yt.txt", "# youtube\n");
+        let (tk, _d2) = cookie_that("tk.txt", "# tiktok\n");
+        let (dy, _d3) = cookie_that("dy.txt", "# douyin\n");
+        let (chung, _d4) = cookie_that("chung.txt", "# chung\n");
         let s = settings_voi_o(
             &[("youtube", &yt), ("tiktok", &tk), ("douyin", &dy)],
             Some(&chung),
@@ -976,16 +984,13 @@ mod tests_cookie_moi_trang {
                 "link {url}: bản sao tạm không được dọn sau khi chạy xong"
             );
         }
-        for d in [d1, d2, d3, d4] {
-            let _ = std::fs::remove_dir_all(d);
-        }
     }
 
     /// Cấu hình CŨ (chưa có ô riêng nào) phải chạy y hệt trước đây: mọi link
     /// dùng ô chung, và vẫn qua bản sao tạm.
     #[test]
     fn cau_hinh_cu_chi_co_o_chung_van_chay_nhu_truoc() {
-        let (chung, d) = cookie_that("chung.txt", "# chung\n");
+        let (chung, _d) = cookie_that("chung.txt", "# chung\n");
         let mut s = Settings::default();
         s.cookies_file = Some(chung.clone());
         assert!(s.site_cookies.is_empty(), "cấu hình cũ không có ô riêng");
@@ -1000,14 +1005,13 @@ mod tests_cookie_moi_trang {
             assert_ne!(duong, chung, "vẫn phải là bản sao tạm");
             assert_eq!(std::fs::read_to_string(&duong).unwrap(), "# chung\n");
         }
-        let _ = std::fs::remove_dir_all(d);
     }
 
     /// Ô riêng đặt browser thì KHÔNG được để file của ô chung lọt vào làm
     /// nguồn bất ngờ — đã chọn ô nào là dùng trọn ô đó.
     #[test]
     fn o_rieng_dung_browser_thi_khong_lay_file_o_chung() {
-        let (chung, d) = cookie_that("chung.txt", "# chung\n");
+        let (chung, _d) = cookie_that("chung.txt", "# chung\n");
         let mut s = Settings::default();
         s.cookies_file = Some(chung.clone());
         s.site_cookies.insert(
@@ -1023,7 +1027,6 @@ mod tests_cookie_moi_trang {
             "ô youtube dùng browser mà file ô chung vẫn lọt vào: {:?}",
             p.cookies_file
         );
-        let _ = std::fs::remove_dir_all(d);
     }
 
     /// LỖI THẬT tìm ra khi rà lại việc 1: các đường TỰ PHỤC HỒI ("cookie trình
