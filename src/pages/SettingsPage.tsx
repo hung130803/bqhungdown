@@ -343,6 +343,11 @@ export function SettingsPage() {
         </div>
       </Field>
       <p className="text-xs text-muted -mt-3">{t("settings.cookiesFileHint")}</p>
+      <p className="text-xs text-muted -mt-2">
+        Đây là ô <b>chung</b>: dùng cho trang nào chưa nạp cookie riêng ở bên dưới.
+        Tải nhiều nền tảng thì nên nạp riêng từng trang — khỏi phải gộp tay nhiều
+        tên miền vào một file, và trang nào hết hạn chỉ cần nạp lại đúng trang đó.
+      </p>
 
       {/* ── Mỗi trang một ô cookie ────────────────────────────────────────
           Trước đây cả app dùng chung 1 file, muốn tải nhiều nền tảng thì phải
