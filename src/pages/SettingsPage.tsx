@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import * as cmd from "@/ipc/commands";
-import type { Settings, Theme, Language } from "@/types/models";
+import type { Settings, Theme, Language, SiteCookie } from "@/types/models";
 import { setLanguage } from "@/i18n";
 import { UpdateSection } from "@/components/UpdateSection";
 
@@ -344,6 +344,35 @@ export function SettingsPage() {
       </Field>
       <p className="text-xs text-muted -mt-3">{t("settings.cookiesFileHint")}</p>
 
+      {/* ── Mỗi trang một ô cookie ────────────────────────────────────────
+          Trước đây cả app dùng chung 1 file, muốn tải nhiều nền tảng thì phải
+          tự gộp tay nhiều tên miền vào một file — trang nào hết hạn là phải
+          gộp lại từ đầu. Giờ nạp riêng từng trang; trang nào để trống thì tự
+          dùng ô chung ở trên. */}
+      <div className="mt-4 rounded-md border border-border p-3">
+        <div className="font-medium text-fg">Cookie riêng từng trang</div>
+        <p className="text-xs text-muted mt-1 mb-3">
+          Nạp cookie riêng cho từng nền tảng — app tự chọn đúng ô theo link, và khi
+          cookie hỏng thì báo đúng tên trang. Trang nào để trống sẽ dùng ô chung ở trên.
+        </p>
+        <div className="flex flex-col gap-2">
+          {SITE_COOKIE_SLOTS.map(s => (
+            <SiteCookieRow
+              key={s.key}
+              siteKey={s.key}
+              label={s.label}
+              slot={settings.siteCookies?.[s.key]}
+              onChange={next => {
+                const map = { ...(settings.siteCookies ?? {}) };
+                if (next) map[s.key] = next;
+                else delete map[s.key];
+                void update({ siteCookies: map });
+              }}
+            />
+          ))}
+        </div>
+      </div>
+
       <Field label="Proxy (chống chặn khi tải số lượng lớn)">
         <textarea
           rows={4}
@@ -527,6 +556,90 @@ export function SettingsPage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Các trang có ô cookie riêng. `key` phải khớp ĐÚNG tên extractor mà Rust trả
+ * về (`extractors::match_host`) — sai một chữ là app không tìm thấy ô, link
+ * lặng lẽ rơi về ô chung.
+ */
+const SITE_COOKIE_SLOTS: { key: string; label: string }[] = [
+  { key: "youtube", label: "YouTube" },
+  { key: "tiktok", label: "TikTok" },
+  { key: "douyin", label: "Douyin" },
+  { key: "facebook", label: "Facebook" },
+  { key: "instagram", label: "Instagram" },
+  { key: "bilibili", label: "Bilibili" },
+  { key: "twitter", label: "X (Twitter)" },
+];
+
+const COOKIE_BROWSERS = ["edge", "chrome", "firefox", "brave", "chromium", "vivaldi", "opera"];
+
+/** Một dòng = một trang: chọn file cookies.txt riêng, hoặc lấy từ trình duyệt. */
+function SiteCookieRow({
+  siteKey,
+  label,
+  slot,
+  onChange,
+}: {
+  siteKey: string;
+  label: string;
+  slot?: SiteCookie;
+  onChange: (next: SiteCookie | null) => void;
+}) {
+  const file = slot?.file ?? "";
+  const browser = slot?.browser ?? "";
+  const isSet = !!file || !!browser;
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-fg w-24 shrink-0" title={siteKey}>
+        {label}
+      </span>
+      <input
+        readOnly
+        value={file}
+        placeholder={browser ? `(trình duyệt: ${browser})` : "dùng ô chung"}
+        className="flex-1 min-w-0 px-2 py-1.5 text-xs rounded-md bg-surface border border-border text-fg placeholder:text-muted"
+      />
+      <button
+        onClick={async () => {
+          const f = await cmd.pickFile();
+          // Chọn file thì bỏ luôn lựa chọn trình duyệt — một ô một nguồn,
+          // tránh cảnh "đặt file rồi mà vẫn đi lấy cookie trình duyệt".
+          if (f) onChange({ file: f, browser: null });
+        }}
+        className="px-2 py-1.5 text-xs rounded-md bg-surface-2 border border-border text-fg shrink-0"
+      >
+        Chọn file
+      </button>
+      <select
+        value={browser}
+        disabled={!!file}
+        onChange={e => {
+          const v = e.target.value;
+          if (!v) onChange(file ? { file, browser: null } : null);
+          else onChange({ file: null, browser: v });
+        }}
+        className="px-2 py-1.5 text-xs rounded-md bg-surface border border-border text-fg shrink-0 disabled:opacity-50"
+        title={file ? "Đang dùng file — bỏ file để chọn trình duyệt" : "Lấy cookie từ trình duyệt"}
+      >
+        <option value="">— trình duyệt —</option>
+        {COOKIE_BROWSERS.map(b => (
+          <option key={b} value={b}>
+            {b}
+          </option>
+        ))}
+      </select>
+      <button
+        onClick={() => onChange(null)}
+        disabled={!isSet}
+        className="px-2 py-1.5 text-xs rounded-md border border-border text-fg shrink-0 disabled:opacity-30"
+        title={`Xoá ô ${label} — link ${label} sẽ dùng lại ô chung`}
+      >
+        ✕
+      </button>
     </div>
   );
 }

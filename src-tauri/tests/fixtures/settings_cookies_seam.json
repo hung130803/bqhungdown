@@ -1,0 +1,46 @@
+{
+  "defaultFolder": "C:\\Users\\Admin\\Downloads\\BQHungDown",
+  "maxConcurrency": 3,
+  "theme": "system",
+  "language": "vi",
+  "clipboardWatcher": true,
+  "notifications": true,
+  "aria2cEnabled": false,
+  "aria2cMigrated": true,
+  "aria2cReverted": true,
+  "aria2cSpeedRestored": true,
+  "aria2cDefaultNative": true,
+  "aria2cSpeedMeasured": true,
+  "aria2cUserNative": true,
+  "aria2cSpeedFinal": true,
+  "cookiesBrowser": null,
+  "cookiesFile": "D:/cookie-chung.txt",
+  "siteCookies": {
+    "douyin": {
+      "file": "D:/cookie-douyin.txt",
+      "browser": null
+    },
+    "tiktok": {
+      "file": null,
+      "browser": "firefox"
+    },
+    "youtube": {
+      "file": "D:/cookie-youtube.txt",
+      "browser": null
+    }
+  },
+  "skipDownloaded": true,
+  "watchIntervalMin": 60,
+  "proxies": [],
+  "poTokenEnabled": true,
+  "poTokenMigrated": true,
+  "rateLimitCooldownMin": 10,
+  "channelSubfolder": true,
+  "minimizeToTray": true,
+  "youtubeApiKey": null,
+  "youtubeApiKeys": [],
+  "watchGroups": [],
+  "watchAutoEnabled": false,
+  "watchRoot": null,
+  "maxHeight": 1080
+}

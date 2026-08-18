@@ -163,6 +163,12 @@ export interface ChannelInfo {
   extractor: string;
   /** Số video bị ẩn vì đã tải trước đó (khi bật "Bỏ qua video đã tải"). */
   hiddenDownloaded?: number | null;
+  /**
+   * YouTube channel id (`UC...`) — Rust dùng cho RSS feed kiểm tra nhanh.
+   * Rust VẪN LUÔN gửi trường này; thiếu khai ở đây thì TS không bắt lỗi được
+   * khi ai đó gõ sai tên (interface chỉ tồn tại lúc biên dịch).
+   */
+  channelId?: string | null;
   /** Ghi chú khi lấy qua YouTube API có nhảy key (key hết quota → đổi key). */
   apiNote?: string | null;
 }
@@ -297,6 +303,16 @@ export interface PickedVideo {
 // Settings
 // ──────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Một Ô COOKIE của MỘT trang. Cùng luật ưu tiên với ô chung: có `file` thì
+ * dùng file, không thì mới tới `browser`. Cả hai rỗng = ô chưa đặt, link của
+ * trang đó rơi về ô chung.
+ */
+export interface SiteCookie {
+  file?: string | null;
+  browser?: string | null;
+}
+
 export interface Settings {
   defaultFolder: string;
   maxConcurrency: number;
@@ -314,8 +330,19 @@ export interface Settings {
   /**
    * Đường dẫn tới file cookies.txt (Netscape format). Ưu tiên hơn `cookiesBrowser`
    * vì Edge/Chrome trên Windows mới mã hoá AppBound khiến browser-based fail.
+   *
+   * Đây là ô CHUNG (dự phòng): dùng cho trang nào chưa có ô riêng trong
+   * `siteCookies`.
    */
   cookiesFile?: string | null;
+  /**
+   * MỖI TRANG MỘT Ô COOKIE. Khoá = tên extractor Rust trả về
+   * (`youtube`, `tiktok`, `douyin`, `facebook`, `bilibili`…). App tự chọn đúng
+   * ô theo link, và báo lỗi đúng tên trang khi cookie trang đó hỏng.
+   *
+   * Trang không có khoá ở đây thì rơi về ô chung `cookiesFile`/`cookiesBrowser`.
+   */
+  siteCookies?: Record<string, SiteCookie>;
   /**
    * Bỏ qua video đã tải xong trước đó (yt-dlp `--download-archive`). Hữu ích
    * khi tải lại 1 kênh: không tải trùng. Mặc định bật.

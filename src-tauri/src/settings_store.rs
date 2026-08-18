@@ -682,6 +682,76 @@ mod tests_settings_cu_van_doc_duoc {
         assert!(s.site_cookies.is_empty(), "trường mới phải mặc định rỗng");
     }
 
+
+    /// CỔNG CHỖ NỐI — khoá GÓI JSON THẬT của `Settings` (kèm ô cookie từng
+    /// trang) mà lệnh `get_settings` gửi lên giao diện, để cổng phía TS nạp
+    /// đúng file đó.
+    ///
+    /// VÌ SAO PHẢI CÓ: lớp bệnh "giao diện tự chế dữ liệu" đã gặp 2 lần
+    /// (0.3.0 làm RƠI trường, 0.3.1 BỊA trường). Cổng tự gõ tên khoá ở phía TS
+    /// là cổng vô dụng — nó chỉ kiểm giao diện với chính nó. File này do CHÍNH
+    /// Rust sinh ra, nên đổi `rename_all` hay đổi tên trường ở Rust là file
+    /// đổi theo và cổng TS đỏ ngay.
+    ///
+    /// Sinh lại khi CỐ Ý đổi gói: `BQD_UPDATE_FIXTURE=1 cargo test khoa_goi_settings`
+    #[test]
+    fn khoa_goi_settings_that_gui_len_giao_dien() {
+        let mut s = Settings::default();
+        s.cookies_file = Some("D:/cookie-chung.txt".into());
+        s.site_cookies.insert(
+            "youtube".into(),
+            crate::models::SiteCookie {
+                file: Some("D:/cookie-youtube.txt".into()),
+                browser: None,
+            },
+        );
+        s.site_cookies.insert(
+            "douyin".into(),
+            crate::models::SiteCookie {
+                file: Some("D:/cookie-douyin.txt".into()),
+                browser: None,
+            },
+        );
+        s.site_cookies.insert(
+            "tiktok".into(),
+            crate::models::SiteCookie { file: None, browser: Some("firefox".into()) },
+        );
+        let json = serde_json::to_string_pretty(&s).unwrap() + "
+";
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/settings_cookies_seam.json"
+        );
+        if std::env::var("BQD_UPDATE_FIXTURE").is_ok() {
+            std::fs::write(path, &json).expect("ghi fixture");
+        }
+
+        // Khẳng định TÊN KHOÁ thật đi qua dây — camelCase, không snake_case.
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            v.get("siteCookies").is_some(),
+            "gói gửi lên giao diện PHẢI có khoá `siteCookies` — có: {:?}",
+            v.as_object().map(|o| o.keys().collect::<Vec<_>>())
+        );
+        let sc = v["siteCookies"].as_object().expect("siteCookies phải là object");
+        assert_eq!(sc["youtube"]["file"], "D:/cookie-youtube.txt");
+        assert_eq!(sc["douyin"]["file"], "D:/cookie-douyin.txt");
+        assert_eq!(sc["tiktok"]["browser"], "firefox");
+        assert_eq!(v["cookiesFile"], "D:/cookie-chung.txt", "ô chung phải còn nguyên");
+
+        // File trên đĩa phải KHỚP với gói vừa sinh — ai đổi Rust mà quên sinh
+        // lại fixture thì đỏ ở đây, trước khi cổng TS đỏ.
+        let tren_dia = std::fs::read_to_string(path).unwrap_or_default();
+        assert_eq!(
+            tren_dia.replace("
+", "
+"),
+            json,
+            "fixture cũ. Sinh lại: BQD_UPDATE_FIXTURE=1 cargo test khoa_goi_settings"
+        );
+    }
+
     /// Chiều ngược lại: ghi ra rồi đọc lại phải giữ nguyên các ô riêng.
     #[test]
     fn ghi_roi_doc_lai_giu_nguyen_o_tung_trang() {
