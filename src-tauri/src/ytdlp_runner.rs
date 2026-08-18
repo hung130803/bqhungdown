@@ -183,8 +183,9 @@ impl YtDlpRunner {
         match self.fetch_metadata_inner(url_for_dlp, force_generic_first, false, settings).await {
             Ok(md) => Ok(md),
             // Browser cookies couldn't be decrypted (DPAPI) — retry without them.
+            // `_for`: tính cả ô cookie RIÊNG của trang này, không chỉ ô chung.
             Err(AppError::YtDlpFailed(ref msg))
-                if args_builder::settings_have_cookies(settings)
+                if args_builder::settings_have_cookies_for(settings, url_for_dlp)
                     && crate::error::is_cookie_decrypt_error(msg) =>
             {
                 let no_cookies = args_builder::settings_without_cookies(settings);
@@ -347,7 +348,7 @@ impl YtDlpRunner {
             }
             // Browser cookies couldn't be decrypted (DPAPI) — retry without them.
             // Public videos don't need cookies, so this recovers transparently.
-            if args_builder::settings_have_cookies(settings)
+            if args_builder::settings_have_cookies_for(settings, &item.request.url)
                 && crate::error::is_cookie_decrypt_error(reason)
                 && !cancel.is_cancelled()
             {
@@ -1024,7 +1025,57 @@ mod tests_cookie_moi_trang {
         );
         let _ = std::fs::remove_dir_all(d);
     }
+
+    /// LỖI THẬT tìm ra khi rà lại việc 1: các đường TỰ PHỤC HỒI ("cookie trình
+    /// duyệt hỏng thì thử lại KHÔNG cookie") canh bằng `settings_have_cookies`
+    /// trên `Settings` GỐC — mà hàm đó chỉ nhìn Ô CHUNG. Ai chỉ đặt ô RIÊNG
+    /// cho một trang, để ô chung trống, thì bị trả `false` → đường phục hồi
+    /// KHÔNG chạy → lỗi DPAPI văng thẳng ra thay vì tự thử lại không cookie.
+    #[test]
+    fn chi_dat_o_rieng_van_phai_tinh_la_co_cookie() {
+        let mut s = Settings::default();
+        assert!(s.cookies_file.is_none() && s.cookies_browser.is_none());
+        s.site_cookies.insert(
+            "youtube".into(),
+            SiteCookie { file: None, browser: Some("edge".into()) },
+        );
+
+        let yt = "https://www.youtube.com/watch?v=abc";
+        assert!(
+            crate::args_builder::settings_have_cookies_for(&s, yt),
+            "chỉ đặt ô riêng YouTube mà app tưởng KHÔNG có cookie → mất đường tự phục hồi"
+        );
+        // Trang khác không có ô riêng, ô chung cũng trống → đúng là không cookie.
+        assert!(
+            !crate::args_builder::settings_have_cookies_for(&s, "https://www.tiktok.com/@a/video/1"),
+            "trang không có ô nào mà lại báo có cookie"
+        );
+        // Hàm cũ (chỉ nhìn ô chung) vẫn phải giữ nghĩa hẹp của nó — dùng cho
+        // chỗ đã cầm Settings ĐÃ phân giải.
+        assert!(!crate::args_builder::settings_have_cookies(&s));
+    }
+
+    /// Thử lại "không cookie" phải bỏ CẢ ô riêng, nếu không thì lượt thử lại
+    /// vẫn kèm cookie và lại hỏng y như cũ.
+    #[test]
+    fn thu_lai_khong_cookie_phai_bo_ca_o_rieng() {
+        let mut s = Settings::default();
+        s.cookies_file = Some("D:/chung.txt".into());
+        s.site_cookies.insert(
+            "youtube".into(),
+            SiteCookie { file: Some("D:/yt.txt".into()), browser: None },
+        );
+        let sach = crate::args_builder::settings_without_cookies(&s);
+        assert!(sach.cookies_file.is_none());
+        assert!(sach.cookies_browser.is_none());
+        assert!(sach.site_cookies.is_empty(), "ô riêng còn sót → thử lại vẫn kèm cookie");
+        assert!(!crate::args_builder::settings_have_cookies_for(
+            &sach,
+            "https://www.youtube.com/watch?v=abc"
+        ));
+    }
 }
+
 
 // ---------------------------------------------------------------------------
 //  CỔNG QUÉT MÃ TĨNH: MỌI cửa spawn yt-dlp phải đi qua resolve_cookies_for

@@ -179,10 +179,28 @@ pub fn push_cookie_args(args: &mut Vec<String>, settings: &Settings) {
     }
 }
 
-/// True when any cookie source is configured.
+/// True when any cookie source is configured TRONG CHÍNH `s` (ô chung).
+///
+/// Dùng cho chỗ đã cầm `Settings` ĐÃ PHÂN GIẢI theo trang (sau
+/// `resolve_cookies_for`). Chỗ nào còn cầm `Settings` GỐC thì phải dùng
+/// `settings_have_cookies_for` — nếu không sẽ bỏ sót ô riêng của trang.
 pub fn settings_have_cookies(s: &Settings) -> bool {
     s.cookies_file.as_deref().map(|f| !f.is_empty()).unwrap_or(false)
         || s.cookies_browser.as_deref().map(|b| !b.is_empty()).unwrap_or(false)
+}
+
+/// True khi lượt chạy cho `url` CÓ dùng cookie — tính cả ô riêng của trang.
+///
+/// VÌ SAO CẦN RIÊNG: các đường tự phục hồi ("đọc cookie trình duyệt hỏng thì
+/// thử lại KHÔNG cookie") canh bằng hàm này trên `Settings` GỐC. Từ bản
+/// mỗi-trang-một-ô, người chỉ đặt ô riêng cho YouTube mà để ô chung trống sẽ
+/// bị `settings_have_cookies` trả `false` → đường phục hồi KHÔNG chạy → lỗi
+/// DPAPI văng thẳng ra cho user thay vì tự thử lại.
+pub fn settings_have_cookies_for(s: &Settings, url: &str) -> bool {
+    match settings_for_url(s, url) {
+        Some(resolved) => settings_have_cookies(&resolved),
+        None => settings_have_cookies(s),
+    }
 }
 
 /// Clone settings with all cookie sources cleared — used to retry a call after

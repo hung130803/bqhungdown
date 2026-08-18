@@ -660,7 +660,8 @@ async fn run_flat_fetch(
 ) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
     let mut res = run_flat_fetch_attempt(app, resolved, limit, settings, my_gen).await;
     if let Err(AppError::YtDlpFailed(ref msg)) = res {
-        if crate::args_builder::settings_have_cookies(settings)
+        // `_for`: tính cả ô cookie RIÊNG của trang này, không chỉ ô chung.
+        if crate::args_builder::settings_have_cookies_for(settings, resolved)
             && crate::error::is_cookie_decrypt_error(msg)
         {
             let no_cookies = crate::args_builder::settings_without_cookies(settings);
@@ -939,8 +940,11 @@ async fn probe_batch(
 ) -> AppResult<std::collections::HashMap<String, ProbeMeta>> {
     let res = probe_batch_attempt(app, urls, settings, my_gen, want_view).await;
     if let Err(AppError::YtDlpFailed(ref msg)) = res {
-        if crate::args_builder::settings_have_cookies(settings)
-            && crate::error::is_cookie_decrypt_error(msg)
+        // `_for`: cả batch cùng một trang nên lấy URL đầu làm đại diện.
+        if crate::args_builder::settings_have_cookies_for(
+            settings,
+            urls.first().map(String::as_str).unwrap_or(""),
+        ) && crate::error::is_cookie_decrypt_error(msg)
         {
             let no_cookies = crate::args_builder::settings_without_cookies(settings);
             return probe_batch_attempt(app, urls, &no_cookies, my_gen, want_view).await;
