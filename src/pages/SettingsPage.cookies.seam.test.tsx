@@ -191,4 +191,23 @@ describe("Chỗ nối Rust → giao diện: ô cookie từng trang phải hiện
     const đãĐặt = Object.values(patch?.siteCookies ?? {}).some(v => v?.browser === "chrome");
     expect(đãĐặt, "chọn trình duyệt mà patch không mang khoá `browser`").toBe(true);
   });
+
+  it("gói Rust KHÔNG có `siteCookies` (bản vừa nâng cấp) thì trang vẫn mở được", async () => {
+    // Người đang dùng bản cũ: settings.json chưa từng có khoá này, nên gói
+    // Rust gửi lên có thể thiếu hẳn. Trang Cài đặt phải mở bình thường, mọi
+    // ô riêng để trống — KHÔNG được trắng trang.
+    const goiCu = { ...GÓI_RUST_TRẢ_VỀ };
+    delete (goiCu as Record<string, unknown>).siteCookies;
+    bảnRustĐangGiữ = goiCu;
+    await act(async () => {
+      await useSettingsStore.getState().refresh();
+    });
+    render(<SettingsPage />);
+    // Ô chung vẫn hiện, và các ô riêng đều ở trạng thái "dùng ô chung".
+    expect(
+      screen.getByDisplayValue(GÓI_RUST_TRẢ_VỀ.cookiesFile as string),
+    ).toBeInTheDocument();
+    expect(screen.getAllByPlaceholderText("dùng ô chung").length).toBeGreaterThan(0);
+  });
 });
+
