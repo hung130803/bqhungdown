@@ -752,6 +752,49 @@ mod tests_settings_cu_van_doc_duoc {
         );
     }
 
+
+    /// CỔNG: khoá ô cookie bên giao diện phải là tên extractor CÓ THẬT.
+    ///
+    /// Giao diện có bảng `SITE_COOKIE_SLOTS` với khoá `youtube`/`tiktok`/…
+    /// Gõ sai một chữ (vd `x` thay vì `twitter`) thì ô đó hiện ra bình thường,
+    /// nạp cookie vào vẫn lưu được, nhưng `settings_for_url` KHÔNG BAO GIỜ tìm
+    /// thấy → link của trang đó lặng lẽ dùng ô chung. Anh Hùng tưởng đã nạp
+    /// cookie rồi mà vẫn bị chặn, không hiểu vì sao.
+    ///
+    /// Rust khoá danh sách tên hợp lệ vào fixture; cổng TS đối chiếu với nó.
+    /// Sinh lại: `BQD_UPDATE_FIXTURE=1 cargo test khoa_ten_trang`
+    #[test]
+    fn khoa_ten_trang_hop_le_cho_o_cookie() {
+        let mut ten: Vec<&str> = crate::extractors::list_all()
+            .iter()
+            .map(|e| e.name)
+            .collect();
+        ten.sort_unstable();
+        ten.dedup();
+        let json = serde_json::to_string_pretty(&ten).unwrap() + "
+";
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/cookie_site_keys.json"
+        );
+        if std::env::var("BQD_UPDATE_FIXTURE").is_ok() {
+            std::fs::write(path, &json).expect("ghi fixture");
+        }
+        // Vài tên trụ cột phải luôn có — fixture rỗng/hỏng thì đỏ ngay ở đây.
+        for k in ["youtube", "tiktok", "douyin", "facebook", "instagram", "bilibili", "twitter"] {
+            assert!(ten.contains(&k), "bảng extractor thiếu `{k}`");
+        }
+        let tren_dia = std::fs::read_to_string(path).unwrap_or_default();
+        assert_eq!(
+            tren_dia.replace("
+", "
+"),
+            json,
+            "fixture cũ. Sinh lại: BQD_UPDATE_FIXTURE=1 cargo test khoa_ten_trang"
+        );
+    }
+
     /// Chiều ngược lại: ghi ra rồi đọc lại phải giữ nguyên các ô riêng.
     #[test]
     fn ghi_roi_doc_lai_giu_nguyen_o_tung_trang() {

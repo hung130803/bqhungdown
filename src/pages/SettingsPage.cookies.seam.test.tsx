@@ -35,7 +35,7 @@ import "@testing-library/jest-dom/vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { SettingsPage } from "./SettingsPage";
+import { SettingsPage, SITE_COOKIE_SLOTS } from "./SettingsPage";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 
 // ── Gói JSON THẬT Rust gửi lên ───────────────────────────────────────────────
@@ -209,5 +209,24 @@ describe("Chỗ nối Rust → giao diện: ô cookie từng trang phải hiện
     ).toBeInTheDocument();
     expect(screen.getAllByPlaceholderText("dùng ô chung").length).toBeGreaterThan(0);
   });
+
+  it("mọi khoá ô cookie phải là tên trang CÓ THẬT bên Rust", () => {
+    // Gõ sai một chữ (vd `x` thay vì `twitter`) thì ô đó vẫn hiện ra, nạp
+    // cookie vào vẫn lưu được, nhưng Rust KHÔNG BAO GIỜ tìm thấy → link trang
+    // đó lặng lẽ dùng ô chung. Anh Hùng tưởng đã nạp cookie mà vẫn bị chặn.
+    const đườngKhoá = path.resolve(
+      THƯ_MỤC_NÀY,
+      "../../src-tauri/tests/fixtures/cookie_site_keys.json",
+    );
+    const tênHợpLệ = JSON.parse(readFileSync(đườngKhoá, "utf8")) as string[];
+    expect(tênHợpLệ.length, "fixture tên trang rỗng/hỏng").toBeGreaterThan(10);
+    for (const s of SITE_COOKIE_SLOTS) {
+      expect(
+        tênHợpLệ.includes(s.key),
+        `ô "${s.label}" dùng khoá \`${s.key}\` — Rust không có tên trang này, ô sẽ chết âm thầm`,
+      ).toBe(true);
+    }
+  });
 });
+
 

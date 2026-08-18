@@ -570,7 +570,7 @@ export function SettingsPage() {
  * về (`extractors::match_host`) — sai một chữ là app không tìm thấy ô, link
  * lặng lẽ rơi về ô chung.
  */
-const SITE_COOKIE_SLOTS: { key: string; label: string }[] = [
+export const SITE_COOKIE_SLOTS: { key: string; label: string }[] = [
   { key: "youtube", label: "YouTube" },
   { key: "tiktok", label: "TikTok" },
   { key: "douyin", label: "Douyin" },
