@@ -1,6 +1,8 @@
 //! Application entry: register plugins, init stores, register commands.
 
 pub mod models;
+pub mod audio_download;
+pub mod instance_lock;
 pub mod error;
 pub mod settings_store;
 pub mod extractors;
@@ -45,6 +47,17 @@ use crate::ytdlp_runner::YtDlpRunner;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Separate app instances cannot see each other's in-memory queue and may
+    // delete active temp directories. Windows releases this lock on exit/crash.
+    #[cfg(windows)]
+    let _instance_guard = match crate::instance_lock::acquire() {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("[instance] Cannot start another BQHungDown instance: {e}");
+            crate::instance_lock::explain_failure(&e);
+            return;
+        }
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

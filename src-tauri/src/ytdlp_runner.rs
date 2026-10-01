@@ -448,6 +448,20 @@ impl YtDlpRunner {
             },
         );
 
+        // Only HTTP audio from YouTube gets bounded 2 MiB requests. Applying
+        // --http-chunk-size globally slows the large video stream; aria2c's
+        // splits also do not impose a small maximum HTTP request size.
+        if args_builder::is_youtube(&item.request.url) {
+            let data = self.app.path().app_data_dir()
+                .map_err(|e| AppError::Other(e.to_string()))?;
+            let plugin = crate::audio_download::install(&data)
+                .map_err(|e| AppError::Other(format!("Không chuẩn bị được bộ tải âm thanh: {e}")))?;
+            args.extend([
+                "--plugin-dirs".into(), plugin.to_string_lossy().into_owned(),
+                "--use-postprocessor".into(), "BqdAudio:when=before_dl".into(),
+            ]);
+        }
+
         // "Bỏ qua video đã tải": record finished downloads in an archive file and
         // skip anything already listed. yt-dlp accepts options after the URL, so
         // appending here is fine. Only YouTube/most extractors expose a stable id;

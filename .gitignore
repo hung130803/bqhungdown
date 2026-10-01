@@ -26,3 +26,7 @@ Thumbs.db
 vite.config.js
 vite.config.d.ts
 *.tsbuildinfo
+
+# Python test/plugin bytecode
+__pycache__/
+*.pyc

@@ -323,6 +323,11 @@ export function QueueRow({ item }: { item: DownloadItem }) {
           etaSec={item.etaSec}
         />
       )}
+      {isActive && item.extractor?.toLowerCase().includes("youtube") && item.request.mode === "video" && (
+        <div className="text-xs text-muted">
+          Hình và âm thanh có thể tải riêng rồi ghép lại. Dung lượng phía trên là của phần đang tải.
+        </div>
+      )}
     </div>
   );
 }
