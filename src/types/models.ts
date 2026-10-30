@@ -459,7 +459,10 @@ export interface AppErrorPayload {
     | "IllegalTransition"
     | "Io"
     | "ConfigCorrupt"
-    | "InvalidSetting";
+    | "InvalidSetting"
+    | "NotFound"
+    | "Cancelled"
+    | "Other";
   data?: unknown;
 }
 

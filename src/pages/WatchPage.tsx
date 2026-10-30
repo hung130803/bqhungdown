@@ -1,4 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import * as cmd from "@/ipc/commands";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useQueueStore } from "@/stores/useQueueStore";
@@ -30,6 +32,8 @@ export function WatchPage() {
 
   const [channels, setChannels] = useState<WatchedChannel[]>([]);
   const [checking, setChecking] = useState(false);
+  const [checkPrompt, setCheckPrompt] = useState<{ message: string; group: string | null } | null>(null);
+  const checkInFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
   // Quản lý nhiều kênh đa quốc gia: tìm nhanh (nhóm gập/mở thay cho bộ lọc).
   const [search, setSearch] = useState("");
@@ -620,7 +624,7 @@ export function WatchPage() {
   };
 
   const checkNow = async () => {
-    if (checking) return;
+    if (checking || moreRun || checkPrompt || checkInFlight.current) return;
     // CHỈ CHẠY NHÓM ĐANG XEM: `planCheckNow` lọc theo `groupFilter` (null =
     // mọi nhóm) để đếm, và `cmd.checkWatchedNow(groupFilter)` cũng nhận đúng
     // nhóm đó ở backend — không còn "ấn 1 nhóm mà kích cả các nhóm khác".
@@ -654,7 +658,7 @@ export function WatchPage() {
     // NÓI RÕ TỔNG SỐ ngay dòng đầu: "nhóm 48 kênh mà báo 43" là vì 5 kênh
     // đã tải đủ hạn mức TRONG HÔM NAY — hộp thoại phải tự giải thích điều đó.
     const tongKenh = q.run.length + q.full.length + q.off.length;
-    const ok = await cmd.confirmDialog(
+    const message =
       `Trong ${scopeTxt} có ${tongKenh} kênh — chạy ${q.run.length} kênh còn ` +
         "suất ngay bây giờ?\n\n" +
         `➜ Sẽ tải TỐI ĐA ${q.slots} video (${q.run.length} kênh còn suất hôm nay).\n` +
@@ -665,17 +669,24 @@ export function WatchPage() {
           : "") +
         (q.off.length ? `➜ ${q.off.length} kênh chưa tích ✓ — bỏ qua.\n` : "") +
         "\nMỗi kênh chỉ tải cho ĐỦ hạn mức ngày của nó (1-3 video/ngày). " +
-        "Kênh 🔴 hết kho vẫn được quét để bắt VIDEO MỚI (có bài là tự hết đỏ).",
-      "Chạy tất cả?",
-    );
-    if (!ok) return;
+        "Kênh 🔴 hết kho vẫn được quét để bắt VIDEO MỚI (có bài là tự hết đỏ).";
+    setError(null);
+    setCheckPrompt({ message, group: groupFilter });
+  };
+
+  const confirmCheckNow = async () => {
+    if (!checkPrompt || checkInFlight.current) return;
+    const group = checkPrompt.group;
+    checkInFlight.current = true;
+    setCheckPrompt(null);
     setChecking(true);
     setError(null);
     try {
-      setChannels(await cmd.checkWatchedNow(groupFilter));
+      setChannels(await cmd.checkWatchedNow(group));
     } catch (e) {
       setError(formatErr(e));
     } finally {
+      checkInFlight.current = false;
       setChecking(false);
     }
   };
@@ -889,6 +900,17 @@ export function WatchPage() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">
+      {createPortal(
+        <ConfirmDialog
+          open={checkPrompt !== null}
+          title="Xác nhận chạy nhóm"
+          message={<div className="whitespace-pre-line max-h-[60vh] overflow-y-auto">{checkPrompt?.message}</div>}
+          confirmText="Chạy ngay"
+          onConfirm={() => void confirmCheckNow()}
+          onCancel={() => setCheckPrompt(null)}
+        />,
+        document.body,
+      )}
       <div className="flex items-center gap-3 flex-wrap">
         <h2 className="text-xl font-medium text-fg">Kênh của tôi</h2>
         <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 border border-border text-muted">
@@ -1198,7 +1220,7 @@ export function WatchPage() {
           // cấu hình, tách khỏi tên kênh cho dễ đọc.
           const meta = [
             `${k.keys.length} key`,
-            (k.rep.tab === "shorts" ? "Shorts" : "Video dài"),
+            (k.rep.tab === "shorts" ? "Shorts" : k.rep.tab === "videos" ? "Video dài" : "Tất cả"),
             (mode === "new" ? "Video mới" : "Tự động"),
             `${k.rep.dailyLimit ?? 1}/ngày`,
           ].join("  ·  ");
@@ -1493,6 +1515,8 @@ export function WatchPage() {
               >
                 <option value="videos">🎬 Video dài</option>
                 <option value="shorts">📱 Shorts</option>
+                {/* Key cũ/mặc định có tab "all" — thiếu option này thì ô hiện sai "Video dài" và chọn lại "Video dài" không đổi được gì. */}
+                <option value="all">📚 Tất cả</option>
               </select>
               <select
                 value={k.rep.dailyLimit ?? 1}

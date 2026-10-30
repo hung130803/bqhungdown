@@ -258,6 +258,17 @@ export function HistoryPage() {
     return out;
   }, [entries, platform, status, editFilter, sortKey, sortDir]);
 
+  // Đổi bộ lọc/tìm kiếm → bỏ chọn các mục không còn hiện (nhãn "Xoá N mục đã
+  // chọn" phải khớp đúng những gì user đang nhìn thấy).
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(filtered.map((it) => it.shortId));
+      const next = new Set(Array.from(prev).filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [filtered]);
+
   // Keep the keyboard nav ref in sync with the latest filtered list.
   filteredItemsRef.current = filtered;
 
@@ -503,7 +514,10 @@ export function HistoryPage() {
     if (confirmMode === "all") {
       await clearAll(alsoDeleteFiles);
     } else {
-      const ids = Array.from(selected);
+      // Chỉ xoá mục ĐANG HIỆN theo bộ lọc — mục đã chọn trước đó rồi bị lọc
+      // ẩn đi (có thể kèm xoá file) không được xoá ngầm.
+      const visible = new Set(filtered.map((it) => it.shortId));
+      const ids = Array.from(selected).filter((id) => visible.has(id));
       try {
         await cmd.deleteHistoryEntries(ids, alsoDeleteFiles);
       } catch (e) {

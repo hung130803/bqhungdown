@@ -376,6 +376,7 @@ pub struct PickedVideo {
 pub struct Bookmark {
     pub id: String,
     pub url: String,
+    #[serde(default)]
     pub note: String,
     pub added_at: DateTime<Utc>,
 }

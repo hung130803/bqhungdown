@@ -25,6 +25,13 @@ interface HistoryState {
   clearAll: (deleteFiles?: boolean) => Promise<void>;
 }
 
+// Lịch sử từng bị cắt lặng lẽ ở 200 mục (mặc định của listHistory) — nhãn
+// "Xoá tất cả (N)" và thống kê sai. Lấy đủ một trang lớn.
+const HISTORY_PAGE = 20000;
+// Mỗi lần refresh mang 1 số thứ tự; kết quả của lần CŨ về muộn (gõ tìm kiếm
+// nhanh) thì bỏ, không ghi đè kết quả mới.
+let refreshSeq = 0;
+
 export const useHistoryStore = create<HistoryState>()((set, get) => ({
   entries: [],
   query: "",
@@ -34,12 +41,13 @@ export const useHistoryStore = create<HistoryState>()((set, get) => ({
     void get().refresh();
   },
   refresh: async () => {
+    const seq = ++refreshSeq;
     set({ loading: true });
     try {
-      const entries = await cmd.listHistory({ query: get().query || null });
-      set({ entries, loading: false });
+      const entries = await cmd.listHistory({ query: get().query || null, limit: HISTORY_PAGE });
+      if (seq === refreshSeq) set({ entries, loading: false });
     } catch {
-      set({ loading: false });
+      if (seq === refreshSeq) set({ loading: false });
     }
   },
   redownload: async (shortId) => {

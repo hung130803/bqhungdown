@@ -297,6 +297,12 @@ impl SettingsStore {
 }
 
 fn recover_with_defaults(path: PathBuf) -> (SettingsStore, Option<AppError>) {
+    // CẤT file hỏng trước khi ghi đè mặc định — trong đó có API key, proxy,
+    // cookie, thư mục trung chuyển; mất trắng là phải nhập lại từ đầu.
+    if path.exists() {
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        let _ = fs::copy(&path, path.with_extension(format!("json.corrupt-{stamp}")));
+    }
     let settings = Settings::default();
     let store = SettingsStore {
         inner: RwLock::new(settings.clone()),

@@ -39,7 +39,10 @@ if errorlevel 1 (
 REM ── [3/5] Git commit ────────────────────────────────────────────
 echo.
 echo [3/5] Git commit...
-git add -A
+REM CHI add 3 file version (+ Cargo.lock) — `git add -A` tung cuon ca file
+REM zip 110 MB trong dist-share\ (qua gioi han GitHub, push hong) va moi
+REM thu rac/khoa nam trong thu muc.
+git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
 git commit -m "v%VER%"
 echo    OK (bo qua neu khong co thay doi).
 
@@ -50,6 +53,13 @@ git tag v%VER%
 if errorlevel 1 (
     echo [LOI] Tag co the da ton tai.
     exit /b 1
+)
+
+REM Quy trinh an toan (CLAUDE.md): chu app duyet roi moi push.
+set /p OK=Push v%VER% len GitHub va phat hanh? (y/N): 
+if /I not "%OK%"=="y" (
+    echo Da dung truoc khi push. Tag v%VER% van o may, xoa bang: git tag -d v%VER%
+    exit /b 0
 )
 
 REM ── [5/5] Push ──────────────────────────────────────────────────

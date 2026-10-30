@@ -1,6 +1,7 @@
 @echo off
 echo === Kiem tra process BQHungDown / yt-dlp / ffmpeg / aria2c ===
-tasklist /FI "IMAGENAME eq bqhungdown.exe" /FI "IMAGENAME eq yt-dlp.exe" /FI "IMAGENAME eq ffmpeg.exe" /FI "IMAGENAME eq aria2c.exe"
+REM Moi /FI cung luc la AND -> danh sach luon rong. Kiem tung ten mot.
+for %%P in (bqhungdown.exe yt-dlp.exe ffmpeg.exe aria2c.exe) do tasklist /FI "IMAGENAME eq %%P" /NH 2>nul | find /I "%%P"
 echo.
 echo === Dang kill tat ca... ===
 taskkill /F /IM bqhungdown.exe /T 2>nul

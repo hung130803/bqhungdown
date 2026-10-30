@@ -35,9 +35,10 @@ pub static DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 /// RAII: bật cờ DIALOG_OPEN khi mở hộp thoại, TỰ tắt khi rời scope (kể cả lỗi).
 struct DialogGuard;
 impl DialogGuard {
-    fn new() -> Self {
-        DIALOG_OPEN.store(true, Ordering::SeqCst);
-        DialogGuard
+    fn new() -> AppResult<Self> {
+        DIALOG_OPEN.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| AppError::Other("Đang có hộp chọn file hoặc thư mục mở. Hãy chọn hoặc huỷ hộp đó trước.".into()))?;
+        Ok(DialogGuard)
     }
 }
 impl Drop for DialogGuard {
@@ -768,9 +769,12 @@ pub async fn pick_folder(app: AppHandle) -> AppResult<Option<String>> {
     // GẮN CỬA SỔ CHA (window "main"): trên Windows, hộp chọn thư mục không có
     // cha dễ bị đẩy ra sau rồi tự đóng ngay ("hiện lúc rồi tự tắt"). Có cha thì
     // nó modal đúng nghĩa, ở yên cho user chọn. + TẠM NGƯNG clipboard watcher.
-    let _guard = DialogGuard::new();
+    let _guard = DialogGuard::new()?;
     let mut dlg = app.dialog().file();
     if let Some(win) = app.get_webview_window("main") {
+        win.show().map_err(|e| AppError::Other(e.to_string()))?;
+        win.unminimize().map_err(|e| AppError::Other(e.to_string()))?;
+        win.set_focus().map_err(|e| AppError::Other(e.to_string()))?;
         dlg = dlg.set_parent(&win);
     }
     dlg.pick_folder(move |path| {
@@ -787,9 +791,12 @@ pub async fn pick_folder(app: AppHandle) -> AppResult<Option<String>> {
 pub async fn pick_file(app: AppHandle) -> AppResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _guard = DialogGuard::new();   // tạm ngưng clipboard watcher khi mở hộp
-    let mut dlg = app.dialog().file().add_filter("Cookies / Text", &["txt"]);
+    let _guard = DialogGuard::new()?;   // tạm ngưng clipboard watcher khi mở hộp
+    let mut dlg = app.dialog().file().set_title("Chọn file cookie (.txt)").add_filter("Cookies / Text", &["txt"]);
     if let Some(win) = app.get_webview_window("main") {
+        win.show().map_err(|e| AppError::Other(e.to_string()))?;
+        win.unminimize().map_err(|e| AppError::Other(e.to_string()))?;
+        win.set_focus().map_err(|e| AppError::Other(e.to_string()))?;
         dlg = dlg.set_parent(&win);   // có cửa sổ cha -> không bị tự đóng
     }
     dlg.pick_file(move |path| {
@@ -919,13 +926,16 @@ pub fn open_file(path: String) -> AppResult<()> {
         // Use `cmd /c start "" "<path>"` so Windows resolves the file association
         // (Movies & TV, VLC, etc.). The empty `""` is the window title argument
         // that `start` requires when the path is quoted.
-        let raw = format!("/c start \"\" \"{}\"", p.display());
-        std::process::Command::new("cmd")
-            .raw_arg(raw)
-            // Hide the brief cmd console window. 0x08000000 = CREATE_NO_WINDOW.
-            .creation_flags(0x08000000)
-            .spawn()
-            .map_err(AppError::from)?;
+        match cmd_start_arg(&p) {
+            Some(raw) => std::process::Command::new("cmd")
+                .raw_arg(raw)
+                // Hide the brief cmd console window. 0x08000000 = CREATE_NO_WINDOW.
+                .creation_flags(0x08000000)
+                .spawn(),
+            // Có `%` → explorer (ShellExecute theo liên kết file), không qua cmd.
+            None => std::process::Command::new("explorer").arg(&p).spawn(),
+        }
+        .map_err(AppError::from)?;
         return Ok(());
     }
     #[cfg(not(target_os = "windows"))]
@@ -1009,13 +1019,16 @@ pub fn update_history_output_path(
 
 #[tauri::command]
 pub fn open_url(url: String) -> AppResult<()> {
+    let url = checked_web_url(&url)?;
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        // Open URL in default browser via `cmd /c start "" "<url>"`.
-        let raw = format!("/c start \"\" \"{}\"", url);
-        std::process::Command::new("cmd")
-            .raw_arg(raw)
+        // KHÔNG đi qua `cmd /c start` nữa: URL chứa `"` từng phá được dấu
+        // ngoặc và chạy `&lệnh` tuỳ ý (`%VAR%` cũng bị cmd bung). url.dll mở
+        // trình duyệt mặc định, không qua shell lệnh.
+        std::process::Command::new("rundll32")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(&url)
             .creation_flags(0x08000000)
             .spawn()
             .map_err(AppError::from)?;
@@ -1027,6 +1040,31 @@ pub fn open_url(url: String) -> AppResult<()> {
     }
 }
 
+/// Chỉ cho mở link web thật (http/https), không khoảng trắng/ngoặc kép/ký tự
+/// điều khiển — chặn link bookmark kiểu `C:\x.exe`, `file:`, `"&calc&"`.
+fn checked_web_url(raw: &str) -> AppResult<String> {
+    let url = raw.trim();
+    let parsed = url::Url::parse(url)
+        .map_err(|_| AppError::InvalidUrl)?;
+    let bad_char = url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"' || c == '<' || c == '>');
+    if !matches!(parsed.scheme(), "http" | "https") || bad_char {
+        return Err(AppError::InvalidUrl);
+    }
+    Ok(url.to_string())
+}
+
+/// Dựng câu lệnh `cmd /c start "" "<path>"` an toàn. Đường dẫn Windows không
+/// thể chứa `"`, nhưng CÓ THỂ chứa `%` — cmd sẽ bung `%VAR%` kể cả trong ngoặc
+/// kép. Gặp `%` thì trả None để nơi gọi dùng explorer (không qua cmd).
+#[cfg(target_os = "windows")]
+fn cmd_start_arg(path: &std::path::Path) -> Option<String> {
+    let s = path.display().to_string();
+    if s.contains('"') || s.contains('%') {
+        return None;
+    }
+    Some(format!("/c start \"\" \"{s}\""))
+}
+
 fn open_path_with_os(path: &std::path::Path) -> AppResult<()> {
     #[cfg(target_os = "windows")]
     {
@@ -1034,12 +1072,14 @@ fn open_path_with_os(path: &std::path::Path) -> AppResult<()> {
         // Use `cmd /c start "" "<path>"` so Windows respects file/folder associations.
         // For directories this opens a new Explorer window rooted at the folder
         // (matching what users expect when clicking "Open folder").
-        let raw = format!("/c start \"\" \"{}\"", path.display());
-        std::process::Command::new("cmd")
-            .raw_arg(raw)
-            .creation_flags(0x08000000)
-            .spawn()
-            .map_err(AppError::from)?;
+        match cmd_start_arg(path) {
+            Some(raw) => std::process::Command::new("cmd")
+                .raw_arg(raw)
+                .creation_flags(0x08000000)
+                .spawn(),
+            None => std::process::Command::new("explorer").arg(path).spawn(),
+        }
+        .map_err(AppError::from)?;
     }
     #[cfg(target_os = "macos")]
     {
@@ -1650,14 +1690,28 @@ pub async fn check_watched_now(
 /// True for yt-dlp leftover/broken files: `.part`, `.ytdl`, `.frag`, fragment
 /// files like `name.f140.m4a` / `name.f313.webm`, `.temp.` files, and any
 /// 0-byte file. These are the "blank icon" junk left by interrupted downloads.
+///
+/// CHỈ coi là rác các file đuôi MEDIA với mẫu `.temp.`/`.fNNN.`/0 byte — bộ
+/// dọn chạy 2 phút/lần, đệ quy trong thư mục user chọn (có thể rộng như cả ổ
+/// D:\). Trước đây mọi file 0 byte / `báo-cáo.f2024.pdf` / `x.temp.txt` của
+/// user cũng bị xoá oan.
 fn is_junk_file(name: &str, size: u64) -> bool {
     let l = name.to_lowercase();
     if l.ends_with(".part")
         || l.ends_with(".ytdl")
         || l.ends_with(".frag")
         || l.contains(".part-")
-        || l.contains(".temp.")
     {
+        return true;
+    }
+    const MEDIA_EXT: &[&str] = &[
+        "mp4", "mkv", "webm", "m4a", "mp3", "mov", "m4v", "ts", "flv", "opus", "ogg", "aac", "wav",
+    ];
+    let ext = l.rsplit('.').next().unwrap_or("");
+    if !l.contains('.') || !MEDIA_EXT.contains(&ext) {
+        return false;
+    }
+    if l.contains(".temp.") {
         return true;
     }
     // Fragment leftover: a MIDDLE dotted segment shaped like `f<digits>`
@@ -1928,7 +1982,44 @@ pub(crate) fn sweep_ytdlp_temp(app: &tauri::AppHandle) -> u64 {
     if let Some(d) = crate::ytdlp_runner::ytdlp_temp_dir(app) {
         n += sweep_muc_cu_hon(&d, 2 * 3600, "");
     }
-    n + sweep_muc_cu_hon(&std::env::temp_dir(), 2 * 3600, "_MEI")
+    n + sweep_mei_cua_ytdlp(&std::env::temp_dir(), 2 * 3600)
+}
+
+/// `_MEI*` trong %TEMP% CHUNG của máy: app PyInstaller KHÁC cũng tạo `_MEI*`
+/// (đang chạy lâu > 2 giờ là chuyện thường) → chỉ xoá thư mục có dấu vết
+/// yt-dlp bên trong, không đụng của chương trình khác.
+fn sweep_mei_cua_ytdlp(dir: &std::path::Path, giay: u64) -> u64 {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    let mut n = 0u64;
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("_MEI") || !e.path().is_dir() || !la_mei_cua_ytdlp(&e.path()) {
+            continue;
+        }
+        if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+            if m.elapsed().map(|x| x.as_secs() < giay).unwrap_or(true) {
+                continue;
+            }
+        }
+        if std::fs::remove_dir_all(e.path()).is_ok() {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn la_mei_cua_ytdlp(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|it| {
+            it.flatten().any(|e| {
+                let n = e.file_name().to_string_lossy().to_lowercase();
+                n.contains("yt_dlp") || n.contains("yt-dlp")
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Xoá mọi mục trong `dir` cũ hơn `giay` giây (và khớp `tien_to` nếu có).

@@ -1,4 +1,8 @@
 use crate::models::{DownloadMode, DownloadRequest, Settings};
+
+// Keep completed broadcasts and sources without live metadata. Never infer
+// live status from a title ("live" may simply be part of a normal video's name).
+pub(crate) const LIVE_FILTER: &str = "!is_live & live_status!=?is_live & live_status!=?is_upcoming & live_status!=?post_live";
 use std::path::{Path, PathBuf};
 
 /// Tên thư mục tạm ẩn nằm NGAY TRONG thư mục kênh. Mỗi lượt tải có 1 thư mục
@@ -427,6 +431,9 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             return args;
         }
         BuildMode::Download { resume, force_generic: _, output_stem, safe_retry, temp_tag } => {
+            // Final gate for manual URLs, RSS, cached lists and restored jobs.
+            // Applies even to force-redownload and all retry paths.
+            args.extend(["--match-filters".into(), LIVE_FILTER.into(), "--no-wait-for-video".into()]);
             // Retry sau 403/format-error trên YouTube: default client bị SABR
             // giấu URL hoặc googlevideo từ chối URL đã extract → kéo format từ
             // các client còn phục vụ URL tải trực tiếp.
@@ -720,6 +727,23 @@ mod tests {
             polite: false,
             force_redownload: false,
             max_height: None,
+        }
+    }
+
+    #[test]
+    fn live_filter_covers_retry_force_and_audio() {
+        for retry in [false, true] {
+            for mode in [DownloadMode::Video, DownloadMode::Audio] {
+                let mut r = req();
+                r.mode = mode;
+                r.force_redownload = true;
+                let a = build(&r, &Settings::default(), BuildMode::Download {
+                    resume: true, force_generic: false, output_stem: None,
+                    safe_retry: retry, temp_tag: Some("live-test".into()),
+                });
+                assert!(a.windows(2).any(|p| p[0] == "--match-filters" && p[1] == LIVE_FILTER));
+                assert!(a.iter().any(|v| v == "--no-wait-for-video"));
+            }
         }
     }
 

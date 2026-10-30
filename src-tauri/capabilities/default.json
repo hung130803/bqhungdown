@@ -1,7 +1,9 @@
 {
   "identifier": "default",
-  "description": "Capabilities for main window",
-  "windows": ["main"],
+  "description": "Capabilities for main window. Giao diện KHÔNG được gọi thẳng yt-dlp/ffmpeg, mở shell hay đọc/ghi file — mọi việc đó đi qua lệnh Rust có kiểm tra (webview bị XSS cũng không thành RCE).",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:event:allow-listen",
@@ -9,17 +11,7 @@
     "core:event:allow-emit",
     "core:window:default",
     "core:webview:default",
-    "core:webview:allow-create-webview-window",
-    "core:webview:allow-create-webview",
     "core:app:default",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        { "name": "binaries/yt-dlp", "sidecar": true, "args": true },
-        { "name": "binaries/ffmpeg", "sidecar": true, "args": true }
-      ]
-    },
-    "shell:allow-open",
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-message",
@@ -27,13 +19,6 @@
     "notification:allow-notify",
     "notification:allow-request-permission",
     "notification:allow-is-permission-granted",
-    "fs:default",
-    "fs:allow-read-text-file",
-    "fs:allow-write-text-file",
-    "fs:allow-exists",
-    "fs:allow-mkdir",
-    "fs:scope-app",
-    "fs:scope-appdata",
     "process:default",
     "process:allow-restart",
     "updater:default",

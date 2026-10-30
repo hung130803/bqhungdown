@@ -628,6 +628,9 @@ export function ChannelInput({ onSubmit }: Props) {
       const where = folder ? ` → thư mục "${folder}"` : "";
       setAddedMsg(`✓ Đã thêm ${urls.length} video vào hàng đợi${where}. Dán kênh khác để tải tiếp.`);
       setUrl("");
+    } catch (e) {
+      // Trước đây không bắt lỗi: chưa chọn thư mục / Rust báo lỗi vẫn im lặng.
+      setAddedMsg(`✗ Chưa thêm được: ${formatErr(e)}`);
     } finally {
       setSubmitting(false);
     }

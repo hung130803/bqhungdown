@@ -17,7 +17,15 @@ pub struct BookmarksStore {
 impl BookmarksStore {
     pub fn load(path: PathBuf) -> Self {
         let inner = match fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str::<Vec<Bookmark>>(&text).unwrap_or_default(),
+            Ok(text) => match serde_json::from_str::<Vec<Bookmark>>(&text) {
+                Ok(v) => v,
+                Err(_) => {
+                    // File hỏng: CẤT bản gốc sang `.corrupt` trước khi lần ghi
+                    // sau đè rỗng lên — để còn cứu tay được, không mất trắng.
+                    let _ = fs::copy(&path, path.with_extension("json.corrupt"));
+                    Vec::new()
+                }
+            },
             Err(_) => Vec::new(),
         };
         Self { inner: RwLock::new(inner), path }

@@ -45,9 +45,6 @@
     "createUpdaterArtifacts": true
   },
   "plugins": {
-    "shell": {
-      "open": true
-    },
     "updater": {
       "endpoints": [
         "https://github.com/hung130803/bqhungdown/releases/latest/download/latest.json"

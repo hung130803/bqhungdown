@@ -45,6 +45,18 @@ pub fn cancel() {
     FETCH_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
+/// Thế hệ đặc biệt cho lượt lấy NỀN (watcher quét kênh, vét kho, dò view):
+/// KHÔNG BAO GIỜ bị huỷ bởi fetch khác hay nút Huỷ trên UI.
+///
+/// LỖI CŨ: watcher quét 3 kênh song song qua cùng `fetch_channel`, mỗi lần gọi
+/// bump bộ đếm chung → kênh bắt đầu sau làm kênh đang chạy yt-dlp nhận "Đã huỷ"
+/// (và mỗi lần user bấm lấy danh sách trên UI cũng giết lượt quét nền).
+const NO_CANCEL: u64 = u64::MAX;
+
+fn is_cancelled(my_gen: u64) -> bool {
+    my_gen != NO_CANCEL && FETCH_GENERATION.load(Ordering::SeqCst) != my_gen
+}
+
 /// Translate a raw yt-dlp stderr line into a short, actionable Vietnamese
 /// message. Most importantly, detect YouTube's anti-bot wall so the user knows
 /// it's a temporary block (and that updating yt-dlp / retrying usually helps),
@@ -400,13 +412,12 @@ pub async fn probe_views(
     if videos.is_empty() {
         return Ok(videos);
     }
-    // Không bump generation (đây là probe nền, không phải fetch UI); đọc gen
-    // hiện tại để enrich tự dừng nếu có fetch UI mới chen vào.
-    let my_gen = FETCH_GENERATION.load(Ordering::SeqCst);
-    enrich_in_parallel(app, videos, settings, my_gen, true).await
+    // Probe nền (watcher) — không bị fetch UI hay lượt quét kênh khác huỷ.
+    enrich_in_parallel(app, videos, settings, NO_CANCEL, true).await
 }
 
 /// `limit = 0` → fetch all videos. `detailed = true` → also probe view_count.
+/// Dành cho UI: lượt mới huỷ lượt UI cũ, nút Huỷ (`cancel`) cũng huỷ được.
 pub async fn fetch_channel(
     app: &AppHandle,
     url: &str,
@@ -417,6 +428,34 @@ pub async fn fetch_channel(
     force_refresh: bool,
 ) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
     let my_gen = FETCH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    fetch_channel_gen(app, url, limit, detailed, tab, settings, force_refresh, my_gen).await
+}
+
+/// Như `fetch_channel` nhưng cho lượt NỀN (watcher): không bump bộ đếm chung
+/// nên không huỷ lượt nào khác, và cũng không bị lượt khác/nút Huỷ UI huỷ.
+pub async fn fetch_channel_background(
+    app: &AppHandle,
+    url: &str,
+    limit: u32,
+    detailed: bool,
+    tab: &str,
+    settings: &Settings,
+    force_refresh: bool,
+) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
+    fetch_channel_gen(app, url, limit, detailed, tab, settings, force_refresh, NO_CANCEL).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_channel_gen(
+    app: &AppHandle,
+    url: &str,
+    limit: u32,
+    detailed: bool,
+    tab: &str,
+    settings: &Settings,
+    force_refresh: bool,
+    my_gen: u64,
+) -> AppResult<(ChannelInfo, Vec<ChannelVideo>)> {
 
     // Douyin user URLs (`douyin.com/user/<sec_uid>`) — yt-dlp doesn't expose
     // an extractor for these. Use tikwm `/api/user/posts` instead. Each
@@ -567,7 +606,7 @@ pub async fn fetch_channel(
             Ok(Err(e)) => last_err = Some(e.to_string()),
             Err(_) => last_err = Some("Hết thời gian chờ (timeout)".into()),
         }
-        if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+        if is_cancelled(my_gen) {
             return Err(AppError::YtDlpFailed("Đã huỷ".into()));
         }
     }
@@ -770,7 +809,7 @@ async fn run_flat_fetch_attempt(
             Ok(None) => break,
             Err(_) => {
                 // Timed out — check for cancellation.
-                if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+                if is_cancelled(my_gen) {
                     let _ = child.kill();
                     return Err(AppError::YtDlpFailed("Đã huỷ".into()));
                 }
@@ -874,7 +913,7 @@ async fn enrich_in_parallel(
         let sem = sem.clone();
         set.spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
-            if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+            if is_cancelled(my_gen) {
                 return HashMap::new();
             }
             probe_batch(&app, &urls, &s, my_gen, detailed).await.unwrap_or_default()
@@ -883,7 +922,7 @@ async fn enrich_in_parallel(
 
     let mut updated = videos;
     while let Some(joined) = set.join_next().await {
-        if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+        if is_cancelled(my_gen) {
             set.shutdown().await;
             return Ok(updated);
         }
@@ -1029,7 +1068,7 @@ async fn probe_batch_attempt(
             },
             Ok(None) => break,
             Err(_) => {
-                if FETCH_GENERATION.load(Ordering::SeqCst) != my_gen {
+                if is_cancelled(my_gen) {
                     let _ = child.kill();
                     return Ok(HashMap::new());
                 }

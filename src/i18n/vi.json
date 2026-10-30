@@ -114,7 +114,11 @@
     "Io": "Lỗi I/O",
     "ConfigCorrupt": "Cấu hình bị hỏng — đã khôi phục mặc định",
     "InvalidSetting": "Giá trị cài đặt không hợp lệ",
-    "Generic": "Đã xảy ra lỗi"
+    "Generic": "Đã xảy ra lỗi",
+    "Other": "Lỗi",
+    "NotFound": "Không tìm thấy mục",
+    "Cancelled": "Đã huỷ",
+    "IllegalTransition": "Thao tác không hợp lệ ở trạng thái hiện tại"
   },
   "time": {
     "justNow": "vài giây trước",

@@ -137,6 +137,7 @@ pub enum RunOutcome {
     /// yt-dlp skipped the item because it's already in the download-archive
     /// (the "Bỏ qua video đã tải" feature). Not an error, not a real download.
     Skipped,
+    SkippedLive,
     Failed { reason: String },
 }
 
@@ -303,7 +304,10 @@ impl YtDlpRunner {
         //    these through tikwm + parallel image fetcher and produce a folder
         //    of jpgs named after the post title.
         let url_lower = item.request.url.to_lowercase();
-        let looks_like_tiktok = url_lower.contains("tiktok.com");
+        // Link `/video/<id>` chắc chắn là video → khỏi hỏi TikWM (trước đây
+        // MỌI link TikTok đều gọi TikWM trước: tới 3 endpoint × 30s chậm thêm
+        // và lộ link ra bên thứ ba vô ích). Link ngắn/`/photo/` mới cần hỏi.
+        let looks_like_tiktok = url_lower.contains("tiktok.com") && !url_lower.contains("/video/");
         if looks_like_tiktok {
             // Fetch tikwm metadata; if it has `images` we treat as photo post.
             if let Some(post) = crate::tiktok_photo::fetch_photo_meta(&item.request.url).await {
@@ -318,7 +322,12 @@ impl YtDlpRunner {
                         percent: None,
                     })
                     .await;
-                let folder = crate::tiktok_photo::download_photo_post(&post, &item.request.save_folder).await?;
+                // Tôn trọng nút Huỷ (nhánh này trước đây không nghe cancel →
+                // mục đã huỷ vẫn bị ghi Hoàn tất).
+                let folder = tokio::select! {
+                    r = crate::tiktok_photo::download_photo_post(&post, &item.request.save_folder) => r?,
+                    _ = cancel.cancelled() => return Ok(RunOutcome::Cancelled),
+                };
                 return Ok(RunOutcome::Completed {
                     output_path: Some(folder),
                     title: Some(post.title.clone()),
@@ -451,15 +460,19 @@ impl YtDlpRunner {
         // Only HTTP audio from YouTube gets bounded 2 MiB requests. Applying
         // --http-chunk-size globally slows the large video stream; aria2c's
         // splits also do not impose a small maximum HTTP request size.
+        // Plugin chỉ là TỐI ƯU tốc độ: không chuẩn bị được (ổ đầy, quyền ghi…)
+        // thì tải theo đường thường, KHÔNG làm hỏng cả lượt tải.
         if args_builder::is_youtube(&item.request.url) {
-            let data = self.app.path().app_data_dir()
-                .map_err(|e| AppError::Other(e.to_string()))?;
-            let plugin = crate::audio_download::install(&data)
-                .map_err(|e| AppError::Other(format!("Không chuẩn bị được bộ tải âm thanh: {e}")))?;
-            args.extend([
-                "--plugin-dirs".into(), plugin.to_string_lossy().into_owned(),
-                "--use-postprocessor".into(), "BqdAudio:when=before_dl".into(),
-            ]);
+            let plugin = self.app.path().app_data_dir()
+                .map_err(|e| e.to_string())
+                .and_then(|data| crate::audio_download::install(&data).map_err(|e| e.to_string()));
+            match plugin {
+                Ok(plugin) => args.extend([
+                    "--plugin-dirs".into(), plugin.to_string_lossy().into_owned(),
+                    "--use-postprocessor".into(), "BqdAudio:when=before_dl".into(),
+                ]),
+                Err(e) => eprintln!("[audio-plugin] bỏ qua tối ưu âm thanh: {e}"),
+            }
         }
 
         // "Bỏ qua video đã tải": record finished downloads in an archive file and
@@ -505,6 +518,7 @@ impl YtDlpRunner {
         let mut resolved_channel: Option<String> = None;
         let mut cancelled = false;
         let mut archived_skip = false;
+        let mut live_skip = false;
         let mut exit_code: Option<i32> = None;
         let started_at = std::time::Instant::now();
         let mut last_activity = std::time::Instant::now();
@@ -514,7 +528,9 @@ impl YtDlpRunner {
         // thông lúc chạy nhiều. 90s giết oan hàng loạt. 240s vẫn để HARD_TIMEOUT
         // 30 phút bắt treo thật, và stall thật giờ được tự retry (xem queue).
         const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(240);
-        const HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+        // 6 giờ (trước 30 phút): video dài/4K tải hợp lệ quá 30 phút từng bị
+        // giết đúng lúc ffmpeg đang ghép. Treo thật đã có STALL_TIMEOUT bắt.
+        const HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
         let child_pid = child.pid();
         loop {
@@ -552,7 +568,7 @@ impl YtDlpRunner {
                     if started_at.elapsed() > HARD_TIMEOUT {
                         kill_process_tree(child_pid);
                         let _ = child.kill();
-                        stderr_tail.push_str("\n[watchdog] hard timeout 30 minutes, killed yt-dlp");
+                        stderr_tail.push_str("\n[watchdog] hard timeout 6 hours, killed yt-dlp");
                         break;
                     }
                 }
@@ -563,6 +579,7 @@ impl YtDlpRunner {
                         CommandEvent::Stdout(bytes) => {
                             let text = String::from_utf8_lossy(&bytes);
                             for line in text.split_terminator(|c| c == '\n' || c == '\r') {
+                                live_skip |= is_live_rejection(line);
                                 // "Bỏ qua video đã tải": yt-dlp prints this when the
                                 // id is already in the download-archive and exits 0.
                                 if line.contains("has already been recorded in the archive") {
@@ -635,6 +652,9 @@ impl YtDlpRunner {
         }
 
         if cancelled { return Ok(RunOutcome::Cancelled); }
+        if live_skip || is_live_rejection(&stderr_tail) {
+            return Ok(RunOutcome::SkippedLive);
+        }
         if archived_skip && output_path.is_none() {
             return Ok(RunOutcome::Skipped);
         }
@@ -650,6 +670,53 @@ impl YtDlpRunner {
                 Ok(RunOutcome::Failed { reason: format!("(exit {code}) {last}") })
             }
         }
+    }
+}
+
+/// Dò từng dòng. Câu báo "chờ live/premiere" CHỈ tính khi nằm trên dòng
+/// `ERROR:` của yt-dlp — KHÔNG BAO GIỜ dò trên dòng tiêu đề (`TITLE|…`,
+/// `FINALPATH|…`, `[download] Destination: …`): video thường tên kiểu
+/// "X premieres in theaters" từng bị báo "bỏ qua live" dù đã tải xong
+/// (trái quy tắc "không suy đoán theo tiêu đề" trong CLAUDE.md).
+fn is_live_rejection(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim();
+        if line.starts_with("[download]")
+            && line.contains("does not pass filter")
+            && line.contains(args_builder::LIVE_FILTER)
+        {
+            return true;
+        }
+        if !line.starts_with("ERROR:") {
+            return false;
+        }
+        let lower = line.to_lowercase();
+        lower.contains("live event will begin")
+            || lower.contains("premieres in")
+            || lower.contains("premiere will begin")
+    })
+}
+
+#[cfg(test)]
+mod live_gate_tests {
+    #[test]
+    fn detects_filter_and_upcoming_without_matching_titles() {
+        assert!(super::is_live_rejection(&format!("[download] entry does not pass filter ({}), skipping ..", crate::args_builder::LIVE_FILTER)));
+        assert!(super::is_live_rejection("ERROR: This live event will begin in 2 hours"));
+        assert!(super::is_live_rejection("ERROR: This premiere will begin in 30 minutes"));
+        assert!(!super::is_live_rejection("TITLE|live in downtown inwood"));
+        assert!(!super::is_live_rejection("HTTP Error 403: Forbidden"));
+        assert!(super::is_live_rejection("ERROR: [youtube] abc: Premieres in 3 hours"));
+    }
+
+    #[test]
+    fn titles_mentioning_premieres_are_not_live() {
+        assert!(!super::is_live_rejection("TITLE|Avatar 3 premieres in theaters"));
+        assert!(!super::is_live_rejection("FINALPATH|D:/x/This live event will begin soon.mp4"));
+        assert!(!super::is_live_rejection("[download] Destination: Premiere will begin tonight.mp4"));
+        let stderr = "WARNING: foo
+ERROR: [youtube] x: This live event will begin in 5 minutes.";
+        assert!(super::is_live_rejection(stderr));
     }
 }
 

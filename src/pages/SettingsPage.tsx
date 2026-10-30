@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { formatError } from "@/lib/error";
 import { useTranslation } from "react-i18next";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import * as cmd from "@/ipc/commands";
@@ -367,11 +368,11 @@ export function SettingsPage() {
               siteKey={s.key}
               label={s.label}
               slot={settings.siteCookies?.[s.key]}
-              onChange={next => {
+              onChange={async next => {
                 const map = { ...(settings.siteCookies ?? {}) };
                 if (next) map[s.key] = next;
                 else delete map[s.key];
-                void update({ siteCookies: map });
+                await update({ siteCookies: map });
               }}
             />
           ))}
@@ -379,13 +380,9 @@ export function SettingsPage() {
       </div>
 
       <Field label="Proxy (chống chặn khi tải số lượng lớn)">
-        <textarea
-          rows={4}
-          value={(settings.proxies ?? []).join("\n")}
-          onChange={e => set("proxies", e.target.value.split("\n") as unknown as Settings["proxies"])}
-          placeholder={"Mỗi dòng 1 proxy. Dán dạng nào cũng được:\nip:port:user:pass\nhttp://user:pass@host:port\nsocks5://host:port"}
-          className="w-full px-3 py-2 rounded-md bg-surface border border-border text-fg placeholder:text-muted font-mono text-xs"
-          spellCheck={false}
+        <ProxyBox
+          saved={settings.proxies ?? []}
+          onSave={lines => set("proxies", lines as unknown as Settings["proxies"])}
         />
       </Field>
       <div className="flex items-center gap-2 -mt-2">
@@ -592,36 +589,54 @@ function SiteCookieRow({
   siteKey: string;
   label: string;
   slot?: SiteCookie;
-  onChange: (next: SiteCookie | null) => void;
+  onChange: (next: SiteCookie | null) => void | Promise<void>;
 }) {
   const file = slot?.file ?? "";
   const browser = slot?.browser ?? "";
   const isSet = !!file || !!browser;
+  const [draft, setDraft] = useState(file);
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setDraft(file); }, [file]);
+  const perform = async (pick: boolean) => {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const selected = pick ? await cmd.pickFile() : draft.trim().replace(/^"(.*)"$/, "$1");
+      if (selected) {
+        await onChange({ file: selected, browser: null });
+        setDraft(selected);
+      }
+    } catch (e) { setError(formatError(e)); }
+    finally { pending.current = false; setBusy(false); }
+  };
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 flex-wrap">
       <span className="text-sm text-fg w-24 shrink-0" title={siteKey}>
         {label}
       </span>
       <input
-        readOnly
-        value={file}
+        aria-label={`Đường dẫn cookie ${label}`}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        disabled={busy}
         placeholder={browser ? `(trình duyệt: ${browser})` : "dùng ô chung"}
         className="flex-1 min-w-0 px-2 py-1.5 text-xs rounded-md bg-surface border border-border text-fg placeholder:text-muted"
       />
       <button
-        onClick={async () => {
-          const f = await cmd.pickFile();
-          // Chọn file thì bỏ luôn lựa chọn trình duyệt — một ô một nguồn,
-          // tránh cảnh "đặt file rồi mà vẫn đi lấy cookie trình duyệt".
-          if (f) onChange({ file: f, browser: null });
-        }}
+        onClick={() => void perform(true)}
+        disabled={busy}
         className="px-2 py-1.5 text-xs rounded-md bg-surface-2 border border-border text-fg shrink-0"
       >
-        Chọn file
+        {busy ? "Đang mở / lưu…" : "Chọn file"}
       </button>
+      {draft !== file && <button disabled={busy || !draft.trim()} onClick={() => void perform(false)} className="px-2 py-1.5 text-xs rounded-md bg-accent text-accent-fg">Lưu đường dẫn</button>}
       <select
         value={browser}
-        disabled={!!file}
+        disabled={!!file || busy}
         onChange={e => {
           const v = e.target.value;
           if (!v) onChange(file ? { file, browser: null } : null);
@@ -639,12 +654,14 @@ function SiteCookieRow({
       </select>
       <button
         onClick={() => onChange(null)}
-        disabled={!isSet}
+        disabled={!isSet || busy}
         className="px-2 py-1.5 text-xs rounded-md border border-border text-fg shrink-0 disabled:opacity-30"
         title={`Xoá ô ${label} — link ${label} sẽ dùng lại ô chung`}
       >
         ✕
       </button>
+      {error && <p role="alert" className="w-full text-xs text-danger">{error}</p>}
+      {busy && <p role="status" className="w-full text-xs text-muted">Đang chờ hộp chọn file hoặc lưu cài đặt. Nếu không thấy hộp chọn, thử Alt+Tab để tìm.</p>}
     </div>
   );
 }
@@ -664,5 +681,45 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
       <span className="text-sm text-fg">{label}</span>
       <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} className="h-4 w-4" />
     </label>
+  );
+}
+
+/** Ô proxy giữ BẢN NHÁP riêng. Trước đây ô bám thẳng dữ liệu Rust trả về —
+ *  Rust bỏ dòng trống nên bấm Enter là dòng mới biến mất (không gõ tay được
+ *  proxy thứ 2), và mỗi phím là 1 lần lưu (gõ nhanh mất ký tự). Nay: lưu sau
+ *  khi ngừng gõ 0,6s hoặc khi rời ô; chỉ nhận dữ liệu mới khi KHÔNG đang gõ. */
+function ProxyBox({ saved, onSave }: { saved: string[]; onSave: (lines: string[]) => void }) {
+  const savedText = saved.join("\n");
+  const [draft, setDraft] = useState(savedText);
+  const focused = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!focused.current) setDraft(savedText);
+  }, [savedText]);
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+  const flush = (text: string) => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+    if (lines.join("\n") !== savedText) onSave(lines);
+  };
+  return (
+    <textarea
+      rows={4}
+      value={draft}
+      onFocus={() => { focused.current = true; }}
+      onBlur={() => { focused.current = false; flush(draft); }}
+      onChange={e => {
+        const text = e.target.value;
+        setDraft(text);
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => flush(text), 600);
+      }}
+      placeholder={"Mỗi dòng 1 proxy. Dán dạng nào cũng được:\nip:port:user:pass\nhttp://user:pass@host:port\nsocks5://host:port"}
+      className="w-full px-3 py-2 rounded-md bg-surface border border-border text-fg placeholder:text-muted font-mono text-xs"
+      spellCheck={false}
+    />
   );
 }

@@ -114,7 +114,11 @@
     "Io": "I/O error",
     "ConfigCorrupt": "Config was corrupt — defaults restored",
     "InvalidSetting": "Invalid setting value",
-    "Generic": "An error occurred"
+    "Generic": "An error occurred",
+    "Other": "Error",
+    "NotFound": "Item not found",
+    "Cancelled": "Cancelled",
+    "IllegalTransition": "Action not allowed in the current state"
   },
   "time": {
     "justNow": "just now",
