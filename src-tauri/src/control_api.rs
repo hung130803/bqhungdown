@@ -153,7 +153,6 @@ struct Request {
     method: String,
     path: String,
     query: Vec<(String, String)>,
-    auth: Option<String>,
     body: Vec<u8>,
 }
 
@@ -251,7 +250,7 @@ async fn read_request_inner(stream: &mut tokio::net::TcpStream, token: &str) -> 
         Some((p, q)) => (p.to_string(), parse_query(q)),
         None => (target, Vec::new()),
     };
-    Ok(Request { method, path, query, auth, body })
+    Ok(Request { method, path, query, body })
 }
 
 fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -883,7 +882,6 @@ mod tests {
             assert_eq!(req.method, "POST");
             assert_eq!(req.path, "/api/enqueue");
             assert_eq!(req.q("x"), Some("1"));
-            assert_eq!(req.auth.as_deref(), Some("Bearer abc"));
             assert_eq!(req.json().unwrap()["urls"][0], "https://youtu.be/a");
         });
     }
