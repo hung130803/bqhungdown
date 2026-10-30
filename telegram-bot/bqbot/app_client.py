@@ -156,7 +156,9 @@ class AppClient:
         return self.post("/api/watch/check", {"group": group})
 
     def watch_action(self, channel_id: str, action: str, body: dict | None = None) -> dict:
-        return self.post(f"/api/watch/{channel_id}/{action}", body or {})
+        # Quét / lấy thêm phải chờ app quét xong kênh (có thể vài phút với kênh lớn).
+        timeout = 900 if action in ("check", "more") else 30
+        return self.post(f"/api/watch/{channel_id}/{action}", body or {}, timeout=timeout)
 
     def watch_add(self, url: str, tab: str = "all") -> dict:
         return self.post("/api/watch/add", {"url": url, "tab": tab}, timeout=180)

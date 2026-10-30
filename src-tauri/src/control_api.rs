@@ -312,7 +312,7 @@ async fn route(app: &AppHandle, req: &Request) -> ApiResult {
         ("GET", ["api", "watch"]) => Ok(watch_list(app, req)),
         ("POST", ["api", "watch", "check"]) => watch_check_all(app, req.json().map_err(bad)?),
         ("POST", ["api", "watch", "add"]) => watch_add(app, req.json().map_err(bad)?).await,
-        ("POST", ["api", "watch", id, action]) => watch_action(app, id, action, req.json().map_err(bad)?),
+        ("POST", ["api", "watch", id, action]) => watch_action(app, id, action, req.json().map_err(bad)?).await,
         ("GET", ["api", "history"]) => history(app, req),
         ("GET", ["api", "cookies"]) => Ok(cookies_status(app)),
         ("POST", ["api", "cookies", site]) => cookies_set(app, site, req.json().map_err(bad)?).await,
@@ -534,6 +534,7 @@ fn channel_json(c: &WatchedChannel) -> Value {
         "lastNewCount": c.last_new_count,
         "lastError": c.last_error,
         "sourceEmpty": c.source_empty,
+        "lastPick": c.last_pick,
     })
 }
 
@@ -600,7 +601,7 @@ async fn watch_add(app: &AppHandle, body: Value) -> ApiResult {
     Ok(json!({ "ok": true, "channel": channel_json(&c) }))
 }
 
-fn watch_action(app: &AppHandle, id: &str, action: &str, body: Value) -> ApiResult {
+async fn watch_action(app: &AppHandle, id: &str, action: &str, body: Value) -> ApiResult {
     let store = app.state::<Arc<WatchlistStore>>();
     if store.get(id).is_none() {
         return Err(ApiError(404, format!("Không thấy kênh {id}")));
@@ -611,21 +612,17 @@ fn watch_action(app: &AppHandle, id: &str, action: &str, body: Value) -> ApiResu
             let c = crate::commands::set_watched_enabled(id.to_string(), on, app.state())?;
             Ok(json!({ "ok": true, "channel": c.as_ref().map(channel_json) }))
         }
+        // CHỜ kết quả rồi trả về (bot chạy việc này ở luồng việc-dài, không
+        // chặn ai). Trước đây trả "started" ngay → kênh hết video / không có
+        // video mới thì bot im lặng, người dùng tưởng nút không chạy.
         "check" | "more" => {
-            let app2 = app.clone();
-            let id2 = id.to_string();
-            let more = action == "more";
-            tauri::async_runtime::spawn(async move {
-                let r = if more {
-                    crate::commands::download_more_today(id2, app2.clone(), app2.state(), app2.state(), app2.state(), app2.state()).await
-                } else {
-                    crate::commands::check_watched_one(id2, app2.clone(), app2.state(), app2.state(), app2.state(), app2.state()).await
-                };
-                if let Err(e) = r {
-                    eprintln!("[control-api] thao tác kênh lỗi: {e}");
-                }
-            });
-            Ok(json!({ "ok": true, "started": true }))
+            let count = if action == "more" {
+                crate::commands::download_more_today(id.to_string(), app.clone(), app.state(), app.state(), app.state(), app.state()).await?
+            } else {
+                crate::commands::check_watched_one(id.to_string(), app.clone(), app.state(), app.state(), app.state(), app.state()).await?
+            };
+            let c = store.get(id);
+            Ok(json!({ "ok": true, "count": count, "channel": c.as_ref().map(channel_json) }))
         }
         _ => Err(bad(format!("Không có thao tác '{action}'"))),
     }

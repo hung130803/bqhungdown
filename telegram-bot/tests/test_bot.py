@@ -475,6 +475,30 @@ class RouterTests(NoNetworkCase):
         mon.tick()
         self.assertEqual(tg.calls[-1], last, "xong rồi thì thôi theo dõi")
 
+    def test_more_button_reports_empty_channel(self):
+        """Bấm '+1' ở kênh đã hết video: phải BÁO RÕ, không im lặng."""
+        tg = FakeTG()
+        ch = {"id": "c1", "title": "Bodycam", "enabled": True, "dailyLimit": 1, "sourceEmpty": True}
+        app = FakeApp({"/api/watch/c1/more": {"ok": True, "count": 0, "channel": ch},
+                       "/api/watch": {"ok": True, "items": [ch]}})
+        r = Router(tg, app, cfg())
+        self.run_task(r.route_callback({"id": "c", "data": "wm:c1:a:0",
+                                        "message": {"chat": {"id": CHAT}, "message_id": 5}}))
+        texts = tg.texts()
+        self.assertIn("Đang tìm", texts[0], "báo ngay là đang làm")
+        self.assertIn("HẾT video chưa tải", texts[-1])
+
+    def test_more_button_reports_added_video(self):
+        tg = FakeTG()
+        ch = {"id": "c1", "title": "K", "enabled": True, "dailyLimit": 1, "lastPick": "🔥 tự lấy: Video X"}
+        app = FakeApp({"/api/watch/c1/more": {"ok": True, "count": 1, "channel": ch},
+                       "/api/watch": {"ok": True, "items": [ch]}})
+        r = Router(tg, app, cfg())
+        self.run_task(r.route_callback({"id": "c", "data": "wm:c1:a:0",
+                                        "message": {"chat": {"id": CHAT}, "message_id": 5}}))
+        self.assertIn("Đã thêm 1 video", tg.texts()[-1])
+        self.assertIn("Video X", tg.texts()[-1])
+
     def test_item_and_channel_detail_screens(self):
         tg = FakeTG()
         app = FakeApp({

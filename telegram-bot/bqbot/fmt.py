@@ -166,6 +166,27 @@ def tracked_text(items: list[dict], folder: str | None, audio: bool) -> str:
     return "\n".join(lines)
 
 
+def watch_result(action: str, res: dict | None, err: BaseException | None) -> str:
+    """Câu báo kết quả bấm 'Quét ngay' / 'Tải thêm 1 video'."""
+    if err is not None:
+        return f"❌ <b>Không làm được:</b> {esc(err)}"
+    res = res or {}
+    if "count" not in res:  # app bản cũ: chỉ biết đã gửi lệnh
+        return "✅ Đã gửi lệnh cho app (bản app này chưa báo kết quả — cập nhật app để thấy kết quả)."
+    n = int(res.get("count") or 0)
+    ch = res.get("channel") or {}
+    if n > 0:
+        pick = f"\n{esc(ch['lastPick'])}" if action == "more" and ch.get("lastPick") else ""
+        what = "video mới" if action == "check" else "video"
+        return f"✅ <b>Đã thêm {n} {what}</b> vào hàng đợi tải.{pick}"
+    if ch.get("lastError"):
+        return "🔴 <b>Quét kênh bị lỗi</b> — xem lý do bên dưới."
+    if action == "more":
+        return ("ℹ️ <b>Kênh đã HẾT video chưa tải</b> — mọi video trên kênh đều đã làm/đã tải. "
+                "Chờ kênh đăng video mới (app tự quét theo lịch).")
+    return "ℹ️ <b>Không có video mới</b> kể từ lần quét trước."
+
+
 def channel_button(c: dict) -> str:
     icon = "🔴" if c.get("lastError") else ("🟢" if c.get("enabled") else "⏸")
     name = short(c.get("targetName") or c.get("title") or c.get("url"), 26)
@@ -182,7 +203,8 @@ def channel_detail(c: dict) -> str:
         + (f" · đang tải {c['downloading']}" if c.get("downloading") else ""),
         f"Lần quét gần nhất: {ago(c.get('lastChecked'))}"
         + (f" · {c['lastNewCount']} video mới" if c.get("lastNewCount") else ""),
-        f"Đã làm: {c.get('done', 0)} video",
+        f"Đã làm: {c.get('done', 0)} video"
+        + (" · ⚠️ <b>kênh đã hết video chưa tải</b>" if c.get("sourceEmpty") else ""),
     ]
     if c.get("lastError"):
         lines.append("\n🔴 <b>Lỗi lần quét trước:</b>\n<i>" + esc(short(c["lastError"], 600)) + "</i>")

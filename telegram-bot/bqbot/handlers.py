@@ -449,16 +449,22 @@ class Router:
         self._guard(chat_id, mid, go)
 
     def _cb_watch_check(self, chat_id: int, mid: int, args: list[str]) -> None:
-        def go():
-            self.app.watch_action(args[0], "check")
-            self._cb_watch_item(chat_id, mid, args, "▶ <b>Đang quét kênh</b> (chạy nền) — có video mới bot sẽ báo.")
-        self._guard(chat_id, mid, go)
+        self._watch_run(chat_id, mid, args, "check")
 
     def _cb_watch_more(self, chat_id: int, mid: int, args: list[str]) -> None:
-        def go():
-            self.app.watch_action(args[0], "more")
-            self._cb_watch_item(chat_id, mid, args, "➕ <b>Đang lấy thêm 1 video</b> cho hôm nay (chạy nền).")
-        self._guard(chat_id, mid, go)
+        self._watch_run(chat_id, mid, args, "more")
+
+    def _watch_run(self, chat_id: int, mid: int, args: list[str], action: str) -> None:
+        """Quét / tải thêm: báo NGAY là đang làm, xong thì báo KẾT QUẢ rõ ràng
+        (có video nào, hay kênh đã hết video) — không để người dùng đoán."""
+        if not args:
+            return
+        doing = "🔄 <b>Đang quét kênh…</b>" if action == "check" else "➕ <b>Đang tìm 1 video chưa tải…</b>"
+        self._show(chat_id, mid, doing + "\n<i>Kênh nhiều video có thể mất 1–2 phút.</i>")
+
+        def done(res: Any, err: BaseException | None) -> None:
+            self._cb_watch_item(chat_id, mid, args, fmt.watch_result(action, res, err))
+        self._job(f"kênh {action} {args[0]}", lambda: self.app.watch_action(args[0], action), done)
 
     def _cb_watch_enable(self, chat_id: int, mid: int, args: list[str]) -> None:
         def go():
