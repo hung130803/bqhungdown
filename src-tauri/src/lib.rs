@@ -34,6 +34,7 @@ pub mod js_runtime;
 pub mod bookmarks_store;
 pub mod queue;
 pub mod commands;
+pub mod control_api;
 
 use std::sync::Arc;
 
@@ -275,6 +276,13 @@ pub fn run() {
             app.manage(bookmarks);
             app.manage(po_proc);
             app.manage(PendingConflicts::default());
+
+            // Cổng điều khiển cục bộ cho bot Telegram — mở SAU khi mọi state
+            // đã manage (handler gọi app.state::<…>()).
+            {
+                let cfg = crate::control_api::load_or_create_config(&config_dir);
+                crate::control_api::spawn(handle.clone(), cfg);
+            }
 
             // System tray: lets the app keep running in the background (so it
             // resumes rate-limited downloads) after the window is closed.

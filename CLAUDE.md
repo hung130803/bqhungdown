@@ -36,3 +36,11 @@
   không ghi Hoàn tất hoặc tự retry. Giữ `was_live` đã thành video hoàn chỉnh
   và video thiếu metadata live. Không suy đoán theo chữ "live" trong tiêu đề.
   RSS không có trạng thái live nên bộ lọc lúc quét không đủ bảo vệ.
+- **BOT TELEGRAM + CỔNG ĐIỀU KHIỂN (30/10/2026):** `src-tauri/src/control_api.rs`
+  mở HTTP `127.0.0.1:<port>` (khoá trong `<config>/control_api.json`) cho bot
+  `telegram-bot/` (Python). Route CHỈ gọi lại `commands::*` — không viết lại
+  nghiệp vụ, để bấm trên bot = bấm trên máy (cùng luật live/chống trùng/thư
+  mục). Thêm tính năng bot: route Rust → hàm trong `app_client.py` → lệnh trong
+  `handlers.py` (xem `telegram-bot/README.md`). `COOKIE_SITES` phải khớp ở
+  `control_api.rs`, `handlers.py` và `SITE_COOKIE_SLOTS` (SettingsPage.tsx).
+  Test bot: `cd telegram-bot && python -m unittest discover -s tests`.

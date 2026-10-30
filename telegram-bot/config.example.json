@@ -1,0 +1,14 @@
+{
+  "telegram_token": "<token lấy từ @BotFather>",
+  "allowed_chat_ids": [],
+  "notify_chat_ids": [],
+  "app_config_path": null,
+  "poll_interval_sec": 5,
+  "digest_interval_sec": 20,
+  "board_interval_sec": 10,
+  "notify_completed": true,
+  "notify_failed": true,
+  "notify_new": true,
+  "max_send_file_mb": 49,
+  "workers": 3
+}
