@@ -617,6 +617,31 @@ class RouterTests(NoNetworkCase):
             self.assertEqual(sent, [(str(small), True)], "gửi BẢN NÉN, không phải file gốc 60 MB")
             self.assertTrue(big.exists(), "file gốc trên máy tính giữ nguyên")
 
+    def test_open_app_from_phone(self):
+        tg = FakeTG()
+        app = FakeApp({"/api/ping": {"ok": True, "version": "0.5.4"}})
+        app.offline = True
+        r = Router(tg, app, cfg())
+        # Lệnh khác khi app tắt → có nút mở app.
+        self.run_task(r.route_message({"chat": {"id": CHAT}, "text": "/status"}))
+        buttons = [b["callback_data"] for row in tg.calls[-1][3]["inline_keyboard"] for b in row]
+        self.assertIn("oa", buttons)
+        opened = []
+
+        def fake_open(exe):
+            opened.append(exe)
+            app.offline = False  # app lên sau khi mở
+
+        with mock.patch("bqbot.launcher.find_app", return_value="C:/x/bqhungdown.exe"), \
+                mock.patch("bqbot.launcher.open_app", side_effect=fake_open):
+            r._cb_openapp(CHAT, 9, [], sleep=lambda s: None)
+        self.assertEqual(opened, ["C:/x/bqhungdown.exe"])
+        self.assertIn("Đã mở app", tg.texts()[-1])
+        # App đang chạy rồi thì không mở thêm.
+        with mock.patch("bqbot.launcher.open_app") as op:
+            r._cb_openapp(CHAT, 9, [], sleep=lambda s: None)
+            op.assert_not_called()
+
     def test_history_shows_only_completed(self):
         tg = FakeTG()
         app = FakeApp({"/api/history": {"ok": True, "items": [
@@ -753,6 +778,50 @@ class UtilTests(unittest.TestCase):
             p.write_text("{hỏng", encoding="utf-8")
             with self.assertRaises(config_mod.ConfigError):
                 config_mod.load(p)
+
+    def test_launcher_register_and_single_instance(self):
+        import json as _json
+        from bqbot import launcher
+        with tempfile.TemporaryDirectory() as d:
+            appdir = Path(d) / "com.prodown.app"
+            botdir = Path(d) / "bot"
+            reg = launcher.register(botdir, appdir, python_exe=sys.executable)
+            data = _json.loads(reg.read_text(encoding="utf-8"))
+            self.assertTrue(data["enabled"])
+            self.assertEqual(data["dir"], str(botdir))
+            self.assertTrue(data["python"].lower().endswith(("pythonw.exe", "python.exe", "python3", "python")))
+            # Người dùng tắt tự bật → đăng ký lại KHÔNG được bật lại.
+            data["enabled"] = False
+            reg.write_text(_json.dumps(data), encoding="utf-8")
+            launcher.register(botdir, appdir, python_exe=sys.executable)
+            self.assertFalse(_json.loads(reg.read_text(encoding="utf-8"))["enabled"])
+
+            lock = Path(d) / "bot.lock"
+            first = launcher.SingleInstance(lock)
+            self.assertTrue(first.acquire())
+            self.assertFalse(launcher.SingleInstance(lock).acquire(), "bản thứ hai phải bị chặn")
+            first.release()
+            again = launcher.SingleInstance(lock)
+            self.assertTrue(again.acquire(), "bản trước thoát thì chạy được")
+            again.release()
+
+    def test_find_app_prefers_newest_exe(self):
+        from bqbot import launcher
+        with tempfile.TemporaryDirectory() as d:
+            old = Path(d) / "BQHungDown" / "bqhungdown.exe"
+            old.parent.mkdir()
+            old.write_bytes(b"x")
+            os.utime(old, (1, 1))
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": d}):
+                found = launcher.find_app(None)
+                self.assertIsNotNone(found)
+                build = Path(launcher.__file__).resolve().parents[2] / "src-tauri" / "target" / "release" / "bqhungdown.exe"
+                if build.is_file():
+                    self.assertEqual(Path(found), build, "bản build mới hơn bản cài cũ")
+                else:
+                    self.assertEqual(Path(found), old)
+            self.assertEqual(launcher.find_app(str(old)), str(old), "app_exe trong config được ưu tiên")
+            self.assertIsNone(launcher.find_app(str(Path(d) / "khong-co.exe")))
 
     def test_compress_plan(self):
         from bqbot import compress

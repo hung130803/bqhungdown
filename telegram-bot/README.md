@@ -21,10 +21,18 @@ Telegram ⇄ bot.py (Python, máy anh) ⇄ http://127.0.0.1:47321 (app BQHungDow
 
 `python bot.py --check` kiểm tra kết nối Telegram + app rồi thoát.
 
-**Tự bật khi mở máy:** nhấn `Win + R` → gõ `shell:startup` → Enter, rồi kéo (giữ
-chuột phải → *Create shortcuts here*) file `start-all.bat` vào thư mục vừa mở.
-`start-all.bat` mở app (nếu chưa chạy), chờ 15 giây rồi bật bot thu nhỏ (nếu
-chưa có bot nào chạy — 2 bot cùng token Telegram sẽ báo lỗi 409).
+**App và bot tự bật lẫn nhau:**
+- Bot chạy lần đầu tự ghi `%APPDATA%\com.prodown.app\telegram_bot.json`. Từ đó **mở
+  app là app tự bật bot chạy ngầm** (không cửa sổ), bot văng thì app bật lại.
+  Tắt tự bật: sửa `"enabled": false` trong file đó.
+- **App đang tắt → bấm "▶ Mở app trên máy tính" (hoặc `/openapp`) trên điện thoại**
+  để bật app từ xa. Bot tìm app ở bản cài (`%LOCALAPPDATA%\BQHungDown`), hoặc điền
+  `app_exe` trong `config.json`.
+- Mỗi lúc chỉ 1 bot chạy (khoá `logs\bot.lock`); bản thứ hai thoát ngay (mã 4).
+
+**Muốn điều khiển được cả khi app tắt** thì bot phải luôn chạy: nhấn `Win + R` →
+`shell:startup` → kéo (giữ chuột phải → *Create shortcuts here*) `start-all.bat`
+vào thư mục vừa mở. Máy tính bật là bot + app chạy.
 
 ## Dùng
 
@@ -43,6 +51,7 @@ chưa có bot nào chạy — 2 bot cùng token Telegram sẽ báo lỗi 409).
 | Bảng tự cập nhật | `/board` (1 tin tự sửa, không spam), `/stopboard` |
 | Cài đặt nhanh | `/settings` — bật/tắt tự quét, số luồng, nhịp quét |
 | Sửa lỗi tải | `/fix` (cập nhật yt-dlp…) |
+| Bật app từ xa | `/openapp` hoặc nút **▶ Mở app trên máy tính** (máy tính phải đang mở) |
 
 **Bot tự báo:** tải xong / lỗi (kèm nút thử lại) / video mới từ kênh (gom 1 tin mỗi
 20 giây) · cookie hỏng hoặc sắp hết hạn · kênh quét lỗi · app tắt/chạy lại.
@@ -67,6 +76,8 @@ bqbot/dispatcher.py  Luồng nghe, ThreadPool, khoá theo đối tượng, việ
 bqbot/handlers.py    Lệnh + nút bấm
 bqbot/monitor.py     Thông báo + bảng theo dõi
 bqbot/fmt.py         Định dạng tin (hàm thuần)
+bqbot/launcher.py    Đăng ký tự bật cùng app, chỉ 1 bản chạy, mở app từ xa
+bqbot/compress.py    Nén video > 49 MB để gửi về điện thoại
 tests/test_bot.py    Test — KHÔNG gửi tin thật
 ```
 

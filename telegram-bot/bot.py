@@ -17,6 +17,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from bqbot import config as config_mod  # noqa: E402
+from bqbot import launcher  # noqa: E402
 from bqbot.app_client import AppClient, AppError, AppOffline  # noqa: E402
 from bqbot.dispatcher import Dispatcher  # noqa: E402
 from bqbot.handlers import BOT_COMMANDS, Router  # noqa: E402
@@ -47,11 +48,14 @@ def setup_logging(token: str = "") -> None:
     logs.mkdir(exist_ok=True)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     fh = logging.handlers.RotatingFileHandler(logs / "bot.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8")
-    sh = logging.StreamHandler()
-    for h in (fh, sh):
+    handlers: list[logging.Handler] = [fh]
+    # pythonw.exe (app tự bật bot chạy ngầm) không có cửa sổ → sys.stderr là None.
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler())
+    for h in handlers:
         h.setFormatter(fmt)
         h.addFilter(RedactToken(token))
-    logging.basicConfig(level=logging.INFO, handlers=[fh, sh], force=True)
+    logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
@@ -64,6 +68,11 @@ def main() -> int:
         return config_mod.CONFIG_EXIT_CODE
     setup_logging(cfg.telegram_token)
     log = logging.getLogger("bqbot")
+    check_only = "--check" in sys.argv
+    instance = launcher.SingleInstance(HERE / "logs" / "bot.lock")
+    if not check_only and not instance.acquire():
+        log.info("Bot đã đang chạy (có thể do app tự bật) — bản này thoát.")
+        return launcher.ALREADY_RUNNING
     tg = TelegramAPI(cfg.telegram_token)
     app = AppClient(Path(cfg.app_config_path) if cfg.app_config_path else None)
 
@@ -76,11 +85,15 @@ def main() -> int:
         log.error("Không kết nối được Telegram: %s", e)
         return 1
     log.info("Bot @%s sẵn sàng", me.get("username"))
+    # Đăng ký với app: từ lần mở app sau, APP TỰ BẬT bot chạy ngầm.
+    reg = launcher.register(HERE, app.config_path.parent)
+    if reg:
+        log.info("Đã đăng ký tự bật cùng app: %s", reg)
     try:
         log.info("App BQHungDown %s đang chạy", app.ping().get("version"))
     except (AppOffline, AppError) as e:
         log.warning("Chưa kết nối được app: %s (bot vẫn chạy, sẽ tự nối lại)", e)
-    if "--check" in sys.argv:
+    if check_only:
         return 0
     if not cfg.allowed_chat_ids:
         log.warning("allowed_chat_ids đang trống — nhắn bất kỳ cho bot để lấy mã chat rồi điền vào config.json")

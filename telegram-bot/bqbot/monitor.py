@@ -173,7 +173,9 @@ class Monitor:
             data = self.app.queue("all", limit=5000)
         except AppOffline:
             if self._online:
-                self._notify("⚠️ <b>App BQHungDown đã tắt</b> hoặc không liên lạc được. Bot sẽ báo khi app chạy lại.")
+                self._notify("⚠️ <b>App BQHungDown trên máy tính đã tắt.</b> Bot vẫn chạy — "
+                             "bấm nút dưới để bật lại app từ xa, hoặc chờ bot báo khi app chạy lại.",
+                             _kb([[("▶ Mở app trên máy tính", "oa")]]))
             self._online = False
             return
         except AppError as e:
