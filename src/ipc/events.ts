@@ -8,6 +8,7 @@ import type {
   DownloadItem,
   DownloadState,
   ProgressSnapshot,
+  Settings,
 } from "@/types/models";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -147,6 +148,11 @@ export function onNotificationClicked(
   handler: (p: NotificationClickedPayload) => void,
 ): Promise<UnlistenFn> {
   return tauriListen(EVENTS.NotificationClicked, handler);
+}
+
+/** Rust phát khi cài đặt đổi từ NƠI KHÁC (bot Telegram / cổng điều khiển). */
+export function onSettingsChanged(handler: (p: Settings) => void): Promise<UnlistenFn> {
+  return tauriListen(EVENTS.SettingsChanged, handler);
 }
 
 export function onQueueUpdated(

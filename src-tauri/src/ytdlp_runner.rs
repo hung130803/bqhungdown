@@ -304,10 +304,9 @@ impl YtDlpRunner {
         //    these through tikwm + parallel image fetcher and produce a folder
         //    of jpgs named after the post title.
         let url_lower = item.request.url.to_lowercase();
-        // Link `/video/<id>` chắc chắn là video → khỏi hỏi TikWM (trước đây
-        // MỌI link TikTok đều gọi TikWM trước: tới 3 endpoint × 30s chậm thêm
-        // và lộ link ra bên thứ ba vô ích). Link ngắn/`/photo/` mới cần hỏi.
-        let looks_like_tiktok = url_lower.contains("tiktok.com") && !url_lower.contains("/video/");
+        // KHÔNG được bỏ qua link `/video/<id>`: bài ảnh TikTok dùng CHUNG dạng
+        // link đó (xem tiktok_photo.rs) — bỏ qua là bài ảnh thành file chỉ có tiếng.
+        let looks_like_tiktok = url_lower.contains("tiktok.com");
         if looks_like_tiktok {
             // Fetch tikwm metadata; if it has `images` we treat as photo post.
             if let Some(post) = crate::tiktok_photo::fetch_photo_meta(&item.request.url).await {
@@ -640,7 +639,12 @@ impl YtDlpRunner {
                             let text = String::from_utf8_lossy(&bytes);
                             stderr_tail.push_str(&text);
                             if stderr_tail.len() > 8192 {
-                                let drop = stderr_tail.len() - 4096;
+                                let mut drop = stderr_tail.len() - 4096;
+                                // Cắt đúng ranh giới ký tự (tiếng Việt/tên file Unicode
+                                // nhiều byte — cắt giữa ký tự là panic).
+                                while !stderr_tail.is_char_boundary(drop) {
+                                    drop += 1;
+                                }
                                 stderr_tail.drain(..drop);
                             }
                         }
@@ -652,7 +656,9 @@ impl YtDlpRunner {
         }
 
         if cancelled { return Ok(RunOutcome::Cancelled); }
-        if live_skip || is_live_rejection(&stderr_tail) {
+        // Playlist (--yes-playlist): 1 entry live bị lọc không được biến cả mục
+        // thành "bỏ qua vì live" khi các video khác đã tải xong.
+        if (live_skip || is_live_rejection(&stderr_tail)) && output_path.is_none() {
             return Ok(RunOutcome::SkippedLive);
         }
         if archived_skip && output_path.is_none() {

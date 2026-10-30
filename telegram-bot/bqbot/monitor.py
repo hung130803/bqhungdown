@@ -39,7 +39,9 @@ class Monitor:
         self.cfg = cfg
         self.clock = clock
         self._prev: dict[str, str] | None = None
-        self._titles: dict[str, str] = {}
+        # shortId do CHÍNH bot thêm (người dùng gửi link) → không báo "mục mới".
+        self._own: dict[str, float] = {}
+        self._own_lock = threading.Lock()
         self._online: bool | None = None
         self._events: dict[str, list[dict]] = {"completed": [], "failed": [], "skipped": [], "new": []}
         self._last_digest = clock()
@@ -69,6 +71,13 @@ class Monitor:
                 self.tg.edit_message(chat_id, old, "⏹ Bảng cũ — đã chuyển sang bảng mới bên dưới.")
             except Exception:  # noqa: BLE001
                 pass
+
+    def mark_own(self, short_ids) -> None:
+        now = self.clock()
+        with self._own_lock:
+            for sid in short_ids:
+                if sid:
+                    self._own[sid] = now
 
     def remove_board(self, chat_id: int) -> None:
         with self._boards_lock:
@@ -132,8 +141,10 @@ class Monitor:
 
     def _diff(self, items: list[dict]) -> None:
         cur = {it["shortId"]: it.get("state", "") for it in items}
-        for it in items:
-            self._titles[it["shortId"]] = it.get("title") or it.get("url") or it["shortId"]
+        with self._own_lock:
+            now = self.clock()
+            self._own = {k: t for k, t in self._own.items() if now - t < 600}
+            own = set(self._own)
         if self._prev is None:  # nhịp đầu: chỉ ghi mốc
             self._prev = cur
             return
@@ -143,7 +154,8 @@ class Monitor:
             if before == st:
                 continue
             if before is None and st in ("queued", "downloading"):
-                self._events["new"].append(it)
+                if sid not in own:
+                    self._events["new"].append(it)
             elif st == "completed":
                 self._events["completed"].append(it)
             elif st == "failed":

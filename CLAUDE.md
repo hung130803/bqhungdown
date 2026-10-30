@@ -36,6 +36,10 @@
   không ghi Hoàn tất hoặc tự retry. Giữ `was_live` đã thành video hoàn chỉnh
   và video thiếu metadata live. Không suy đoán theo chữ "live" trong tiêu đề.
   RSS không có trạng thái live nên bộ lọc lúc quét không đủ bảo vệ.
+  Video bị cổng tải chặn vì live (qua RSS) được GIỮ TẠM 6 giờ
+  (`WatchedChannel.live_hold`, `watcher::LIVE_HOLD_SECS`): nằm trong seen nên
+  không chiếm suất mỗi lượt quét, hết hạn thì gỡ khỏi seen để xét lại — KHÔNG
+  được cho vào skipped_ids (mất video khi nó thành was_live).
 - **BOT TELEGRAM + CỔNG ĐIỀU KHIỂN (30/10/2026):** `src-tauri/src/control_api.rs`
   mở HTTP `127.0.0.1:<port>` (khoá trong `<config>/control_api.json`) cho bot
   `telegram-bot/` (Python). Route CHỈ gọi lại `commands::*` — không viết lại

@@ -15,6 +15,7 @@ import {
   onClipboardDetected,
   onNotificationClicked,
   onQueueUpdated,
+  onSettingsChanged,
 } from "@/ipc/events";
 
 import { PasteUrlPage } from "@/pages/PasteUrlPage";
@@ -71,6 +72,10 @@ function Bootstrap({ children }: { children: React.ReactNode }) {
 
       keep(await onDownloadProgress((p) => applyProgress(p.shortId, p.progress)));
       keep(await onDownloadState((p) => applyState(p.shortId, p.state, p.errorMessage, p.outputPath)));
+      // Bot đổi cài đặt (nạp cookie, bật/tắt tự quét…) → giao diện nhận bản
+      // mới. Không nghe thì store giữ bản cũ, lần sửa ô cookie sau gửi CẢ BẢNG
+      // cũ lên → xoá mất cookie bot vừa nạp.
+      keep(await onSettingsChanged((s) => hydrate(s)));
       keep(await onQueueUpdated((p) => setQueueAll(p.items)));
       keep(
         await onClipboardDetected((p) => {

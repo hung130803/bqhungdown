@@ -88,6 +88,8 @@ class AppClient:
             raise AppOffline("App BQHungDown đang tắt hoặc chưa mở cổng điều khiển.") from e
         except requests.Timeout as e:
             raise AppError("App phản hồi quá lâu — thử lại sau.") from e
+        except requests.RequestException as e:
+            raise AppError(f"Lỗi kết nối app: {type(e).__name__}") from e
         try:
             return resp.status_code, resp.json()
         except ValueError:

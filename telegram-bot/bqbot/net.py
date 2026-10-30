@@ -60,6 +60,7 @@ class TelegramAPI:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ):
+        self._token = token
         self.base = f"https://api.telegram.org/bot{token}/"
         self.file_base = f"https://api.telegram.org/file/bot{token}/"
         self._transport = transport or self._http
@@ -67,6 +68,13 @@ class TelegramAPI:
         self._clock = clock
         self._send_lock = threading.Lock()
         self._last_send = float("-inf")  # lần gửi đầu không phải chờ
+        # Telegram bắt chờ (429) → MỌI luồng gửi cùng chờ tới mốc này.
+        self._send_blocked_until = float("-inf")
+
+    def redact(self, text: object) -> str:
+        """Che token trong mọi chuỗi lỗi — lỗi requests in nguyên URL /bot<TOKEN>/…"""
+        s = str(text)
+        return s.replace(self._token, "***") if self._token else s
 
     # ── vận chuyển HTTP thật ──
     def _http(self, method: str, data: dict | None, files: dict | None, read_timeout: float) -> dict:
@@ -88,7 +96,8 @@ class TelegramAPI:
         if not method.startswith("send"):
             return
         with self._send_lock:
-            wait = self._last_send + SEND_GAP_SEC - self._clock()
+            now = self._clock()
+            wait = max(self._last_send + SEND_GAP_SEC, self._send_blocked_until) - now
             if wait > 0:
                 self._sleep(wait)
             self._last_send = self._clock()
@@ -101,11 +110,15 @@ class TelegramAPI:
             self._space_sends(method)
             try:
                 res = self._transport(method, data, files, read_timeout)
-            except requests.RequestException as e:
-                if method.startswith("send") and attempts < 3:
+            except (requests.ConnectionError, requests.ConnectTimeout) as e:
+                # Chưa kết nối được = Telegram CHƯA nhận → gửi lại an toàn.
+                # (ReadTimeout thì có thể đã nhận rồi → KHÔNG gửi lại, tránh trùng.)
+                if method.startswith("send") and attempts < 3 and not isinstance(e, requests.ReadTimeout):
                     self._sleep(1.5 * attempts)
                     continue
-                raise TelegramError(method, f"lỗi mạng: {e}") from e
+                raise TelegramError(method, "lỗi mạng: " + self.redact(e)) from None
+            except requests.RequestException as e:
+                raise TelegramError(method, "lỗi mạng: " + self.redact(e)) from None
             if res.get("ok"):
                 return res.get("result")
             code = res.get("error_code")
@@ -116,12 +129,13 @@ class TelegramAPI:
                     log.info("429 trên %s — bỏ qua", method)
                     return None
                 if method.startswith("send") and attempts < 5:
-                    self._sleep(retry)
-                    continue
+                    with self._send_lock:
+                        self._send_blocked_until = max(self._send_blocked_until, self._clock() + retry)
+                    continue  # _space_sends sẽ chờ tới mốc
             # Sửa tin y nguyên nội dung cũ → Telegram báo lỗi, coi như xong.
             if code == 400 and "message is not modified" in desc:
                 return None
-            raise TelegramError(method, desc, code)
+            raise TelegramError(method, self.redact(desc), code)
 
     # ── tiện ích ──
     def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None, **kw) -> dict:
@@ -150,8 +164,11 @@ class TelegramAPI:
         info = self.call("getFile", {"file_id": file_id})
         if not info or info.get("file_size", 0) > max_bytes:
             raise TelegramError("getFile", "file quá lớn hoặc không tải được")
-        resp = session().get(self.file_base + info["file_path"], timeout=(CONNECT_TIMEOUT, 60))
-        resp.raise_for_status()
+        try:
+            resp = session().get(self.file_base + info["file_path"], timeout=(CONNECT_TIMEOUT, 60))
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            raise TelegramError("getFile", "không tải được file: " + self.redact(e)) from None
         return resp.content
 
     def send_file(self, chat_id: int, path: str, caption: str = "", as_video: bool = False) -> Any:

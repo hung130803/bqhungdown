@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import re
 import time
 from datetime import datetime, timezone
 
@@ -59,7 +60,7 @@ def ago(iso: str | None, now: float | None = None) -> str:
     if not iso:
         return "chưa"
     try:
-        t = datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+        t = parse_time(iso)
     except ValueError:
         return "?"
     d = int((now if now is not None else time.time()) - t)
@@ -70,6 +71,15 @@ def ago(iso: str | None, now: float | None = None) -> str:
     if d < 86400:
         return f"{d // 3600} giờ trước"
     return f"{d // 86400} ngày trước"
+
+
+def parse_time(iso: str) -> float:
+    """ISO của chrono (có thể 9 chữ số lẻ giây — Python 3.10 không đọc được) → epoch."""
+    s = iso.replace("Z", "+00:00")
+    m = re.match(r"^(.*?\.\d{6})\d+(.*)$", s)
+    if m:
+        s = m.group(1) + m.group(2)
+    return datetime.fromisoformat(s).timestamp()
 
 
 def days_left(epoch: int | None, now: float | None = None) -> float | None:

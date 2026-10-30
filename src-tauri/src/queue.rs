@@ -1203,6 +1203,13 @@ impl QueueManager {
             // xong yt-dlp có thể vẫn trả lỗi thay vì Cancelled) → TÔN TRỌNG
             // lựa chọn của user, không xếp lịch thử lại.
             if matches!(it.state, DownloadState::Cancelled | DownloadState::Paused) {
+                // cancel() đã giao việc dọn `.part` cho run-loop (có token) —
+                // run-loop kết thúc bằng lỗi thay vì Cancelled thì dọn ở đây.
+                if it.state == DownloadState::Cancelled {
+                    let snap = it.clone();
+                    drop(map);
+                    self.cleanup_partials_retry(snap);
+                }
                 return;
             }
             if is_bot || is_stall {
@@ -1249,6 +1256,10 @@ impl QueueManager {
                     // Hiện là "đang chờ" (như nhánh cooldown) — để timer bên
                     // dưới chỉ chạy lại khi mục VẪN đang chờ.
                     it.state = DownloadState::Queued;
+                    let cloned = it.clone();
+                    drop(map);
+                    self.emit_state(&cloned);
+                    self.emit_queue_updated();
                 }
                 (delay.is_some(), delay.unwrap_or_default())
             }

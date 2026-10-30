@@ -8,6 +8,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+# Mã thoát riêng cho lỗi cấu hình — run-bot.bat thấy mã này thì DỪNG, không
+# tự chạy lại vô hạn.
+CONFIG_EXIT_CODE = 3
+
+
+class ConfigError(Exception):
+    pass
+
+
 @dataclass
 class Config:
     telegram_token: str
@@ -28,10 +37,14 @@ class Config:
 def load(path: Path) -> Config:
     raw: dict = {}
     if path.exists():
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig: Notepad hay lưu kèm BOM — json.loads sẽ hỏng nếu không bỏ.
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        except ValueError as e:
+            raise ConfigError(f"{path} sai định dạng JSON: {e}") from None
     token = os.environ.get("BQBOT_TOKEN") or raw.get("telegram_token") or ""
     if not token or token.startswith("<"):
-        raise SystemExit(f"Thiếu telegram_token trong {path} (lấy từ @BotFather) hoặc biến BQBOT_TOKEN.")
+        raise ConfigError(f"Thiếu telegram_token trong {path} (lấy từ @BotFather) hoặc biến BQBOT_TOKEN.")
     allowed = [int(x) for x in raw.get("allowed_chat_ids") or []]
     known = set(Config.__dataclass_fields__)
     extra = {k: v for k, v in raw.items() if k in known and k not in ("telegram_token", "allowed_chat_ids")}

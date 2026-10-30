@@ -157,6 +157,11 @@ class Router:
         }.get(verb)
         if not handler:
             return None
+        # Bấm nút (khác dừng/bật bảng) ngay TRÊN tin bảng theo dõi → tin đó
+        # chuyển thành màn hình khác; thôi tự cập nhật, kẻo 10 s sau bảng ghi đè
+        # mất màn hình người dùng đang thao tác.
+        if self.monitor and verb not in ("bx", "bd") and self.monitor.boards().get(chat_id) == mid:
+            self.monitor.remove_board(chat_id)
         light = verb in ("m", "x")
         # Thao tác trên 1 mục/kênh: khoá theo đối tượng đó → bấm liên tục vẫn làm lần lượt.
         key = f"obj:{args[0]}" if verb in ("qa", "wc", "wm", "we") and args else f"chat:{chat_id}"
@@ -312,6 +317,8 @@ class Router:
         def go():
             res = self.app.enqueue(urls, audio=audio)
             n = res.get("added", 0)
+            if self.monitor:  # mục người dùng tự gửi — đừng báo lại là "mục mới"
+                self.monitor.mark_own(it.get("shortId") for it in res.get("items", []))
             if n == 0:
                 self._send(chat_id, "ℹ️ Không thêm mục nào — link đã có trong hàng đợi, đã tải, hoặc trang không hỗ trợ.")
                 return
@@ -474,26 +481,43 @@ class Router:
             self._apply_cookie(chat_id, None, site, content)
             return
         token = str(msg.get("message_id"))
+        key = f"{chat_id}:{token}"
         with self._pending_lock:
             now = time.monotonic()
             self._pending_cookie = {k: v for k, v in self._pending_cookie.items() if now - v[0] < PENDING_COOKIE_TTL}
-            self._pending_cookie[token] = (now, content)
-        rows = [[(k, f"cs:{token}:{k}") for k in list(COOKIE_SITES)[i:i + 3]] for i in range(0, len(COOKIE_SITES), 3)]
-        self._send(chat_id, "File này là cookie của trang nào?", kb(rows))
+            self._pending_cookie[key] = (now, content)
+        self._send(chat_id, "File này là cookie của trang nào?", self._cookie_site_buttons(token))
 
     def _cb_cookie_set(self, chat_id: int, mid: int, args: list[str]) -> None:
         if len(args) < 2:
             return
+        key = f"{chat_id}:{args[0]}"
         with self._pending_lock:
-            entry = self._pending_cookie.pop(args[0], None)
+            entry = self._pending_cookie.get(key)
         if not entry:
             self._show(chat_id, mid, "⌛ File đã quá hạn chờ — gửi lại file cookie.")
             return
-        self._apply_cookie(chat_id, mid, args[1], entry[1])
+        self._apply_cookie(chat_id, mid, args[1], entry[1], retry_token=args[0])
 
-    def _apply_cookie(self, chat_id: int, mid: int | None, site: str, content: str) -> None:
+    def _cookie_site_buttons(self, token: str) -> dict:
+        sites = list(COOKIE_SITES)
+        return kb([[(k, f"cs:{token}:{k}") for k in sites[i:i + 3]] for i in range(0, len(sites), 3)])
+
+    def _apply_cookie(self, chat_id: int, mid: int | None, site: str, content: str,
+                      retry_token: str | None = None) -> None:
         def go():
-            res = self.app.set_cookie(site, content)
+            try:
+                res = self.app.set_cookie(site, content)
+            except AppError as e:
+                if retry_token is None:
+                    raise
+                # Chọn nhầm trang → GIỮ file, cho chọn lại (không bắt gửi lại file).
+                self._show(chat_id, mid, f"❌ {fmt.esc(e)}\nChọn lại trang đúng:",
+                           self._cookie_site_buttons(retry_token))
+                return
+            if retry_token is not None:
+                with self._pending_lock:
+                    self._pending_cookie.pop(f"{chat_id}:{retry_token}", None)
             dl = fmt.days_left(res.get("earliestExpiry"))
             exp = f" · hạn sớm nhất còn {dl:.0f} ngày" if dl is not None else ""
             warn = f"\n⚠️ {res['expired']} cookie trong file đã hết hạn." if res.get("expired") else ""
@@ -560,7 +584,9 @@ class Router:
 
     def _cb_history(self, chat_id: int, mid: int | None, _args: list[str]) -> None:
         def go():
-            items = self.app.history(limit=10).get("items", [])
+            # Lịch sử có cả mục lỗi/huỷ — chỉ hiện mục tải XONG (mới có file để gửi).
+            items = [e for e in self.app.history(limit=30).get("items", [])
+                     if e.get("status") == "completed"][:10]
             lines = ["<b>🕘 Tải xong gần đây</b>", ""]
             rows = []
             for e in items:
@@ -636,7 +662,8 @@ class Router:
         self._send(chat_id, "⏹ Đã dừng bảng theo dõi.")
 
     def _cb_board_stop(self, chat_id: int, mid: int, _args: list[str]) -> None:
-        if self.monitor:
+        # Chỉ tắt bảng ĐANG chạy khi bấm đúng trên nó (nút trên bảng cũ không tắt bảng mới).
+        if self.monitor and self.monitor.boards().get(chat_id) == mid:
             self.monitor.remove_board(chat_id)
         self._show(chat_id, mid, "⏹ Đã dừng bảng theo dõi.", kb([[("📡 Bật lại", "bd"), HOME]]))
 

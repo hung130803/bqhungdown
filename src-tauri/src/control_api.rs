@@ -123,15 +123,24 @@ pub fn spawn(app: AppHandle, cfg: ControlConfig) {
         };
         let token = Arc::new(cfg.token);
         loop {
-            let Ok((stream, peer)) = listener.accept().await else { continue };
+            let (stream, peer) = match listener.accept().await {
+                Ok(x) => x,
+                Err(_) => {
+                    // Lỗi lặp lại (hết handle…) không được thành vòng quay 100% CPU.
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    continue;
+                }
+            };
             if !peer.ip().is_loopback() {
                 continue;
             }
             let app = app.clone();
             let token = token.clone();
             tauri::async_runtime::spawn(async move {
+                // Dài hơn mọi việc có thể chạy qua cổng (sửa bộ tải ~10 phút)
+                // để bot không nhận "app tắt" oan khi server tự cắt.
                 let _ = tokio::time::timeout(
-                    Duration::from_secs(600),
+                    Duration::from_secs(1200),
                     serve_conn(stream, app, token),
                 )
                 .await;
@@ -161,31 +170,34 @@ impl Request {
 }
 
 async fn serve_conn(mut stream: tokio::net::TcpStream, app: AppHandle, token: Arc<String>) {
-    let req = match read_request(&mut stream).await {
+    let req = match read_request(&mut stream, &token).await {
         Ok(r) => r,
-        Err(msg) => {
-            let _ = write_response(&mut stream, 400, &json!({ "ok": false, "error": msg })).await;
+        Err((code, msg)) => {
+            let _ = write_response(&mut stream, code, &json!({ "ok": false, "error": msg })).await;
             return;
         }
     };
-    let authed = req
-        .auth
-        .as_deref()
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .map(|t| same_token(t.trim(), &token))
-        .unwrap_or(false);
-    let (status, body) = if !authed {
-        (401, json!({ "ok": false, "error": "Sai hoặc thiếu khoá điều khiển" }))
-    } else {
-        match route(&app, &req).await {
-            Ok(v) => (200, v),
-            Err(ApiError(code, msg)) => (code, json!({ "ok": false, "error": msg })),
-        }
+    let (status, body) = match route(&app, &req).await {
+        Ok(v) => (200, v),
+        Err(ApiError(code, msg)) => (code, json!({ "ok": false, "error": msg })),
     };
     let _ = write_response(&mut stream, status, &body).await;
 }
 
-async fn read_request(stream: &mut tokio::net::TcpStream) -> Result<Request, String> {
+fn is_authorized(auth: Option<&str>, token: &str) -> bool {
+    auth.and_then(|h| h.strip_prefix("Bearer "))
+        .map(|t| same_token(t.trim(), token))
+        .unwrap_or(false)
+}
+
+/// Đọc 1 request. Kiểm khoá ngay sau phần header — sai khoá thì KHÔNG đọc
+/// thân (tới 6 MB) của kẻ lạ.
+async fn read_request(stream: &mut tokio::net::TcpStream, token: &str) -> Result<Request, (u16, String)> {
+    read_request_inner(stream, token).await
+}
+
+async fn read_request_inner(stream: &mut tokio::net::TcpStream, token: &str) -> Result<Request, (u16, String)> {
+    let bad = |m: &str| (400u16, m.to_string());
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut tmp = [0u8; 8192];
     let head_end = loop {
@@ -193,11 +205,11 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Result<Request, Str
             break i;
         }
         if buf.len() > MAX_HEAD {
-            return Err("Header quá lớn".into());
+            return Err(bad("Header quá lớn"));
         }
-        let n = stream.read(&mut tmp).await.map_err(|e| e.to_string())?;
+        let n = stream.read(&mut tmp).await.map_err(|e| bad(&e.to_string()))?;
         if n == 0 {
-            return Err("Kết nối đóng sớm".into());
+            return Err(bad("Kết nối đóng sớm"));
         }
         buf.extend_from_slice(&tmp[..n]);
     };
@@ -214,18 +226,21 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Result<Request, Str
             let k = k.trim().to_ascii_lowercase();
             let v = v.trim();
             if k == "content-length" {
-                content_len = v.parse().map_err(|_| "Content-Length sai".to_string())?;
+                content_len = v.parse().map_err(|_| bad("Content-Length sai"))?;
             } else if k == "authorization" {
                 auth = Some(v.to_string());
             }
         }
     }
+    if !is_authorized(auth.as_deref(), token) {
+        return Err((401, "Sai hoặc thiếu khoá điều khiển".into()));
+    }
     if content_len > MAX_BODY {
-        return Err("Dữ liệu gửi lên quá lớn (tối đa 6 MB)".into());
+        return Err(bad("Dữ liệu gửi lên quá lớn (tối đa 6 MB)"));
     }
     let mut body = buf[head_end + 4..].to_vec();
     while body.len() < content_len {
-        let n = stream.read(&mut tmp).await.map_err(|e| e.to_string())?;
+        let n = stream.read(&mut tmp).await.map_err(|e| bad(&e.to_string()))?;
         if n == 0 {
             break;
         }
@@ -863,13 +878,37 @@ mod tests {
                 s
             });
             let (mut srv, _) = listener.accept().await.unwrap();
-            let req = read_request(&mut srv).await.unwrap();
+            let req = read_request(&mut srv, "abc").await.unwrap();
             let _keep = client.await.unwrap();
             assert_eq!(req.method, "POST");
             assert_eq!(req.path, "/api/enqueue");
             assert_eq!(req.q("x"), Some("1"));
             assert_eq!(req.auth.as_deref(), Some("Bearer abc"));
             assert_eq!(req.json().unwrap()["urls"][0], "https://youtu.be/a");
+        });
+    }
+
+    #[test]
+    fn wrong_token_is_rejected_before_reading_body() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let client = tokio::spawn(async move {
+                let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+                // Hứa gửi 5 MB nhưng không gửi gì — server không được chờ thân.
+                s.write_all(b"POST /api/enqueue HTTP/1.1\r\nAuthorization: Bearer sai\r\nContent-Length: 5000000\r\n\r\n")
+                    .await
+                    .unwrap();
+                s
+            });
+            let (mut srv, _) = listener.accept().await.unwrap();
+            let r = tokio::time::timeout(Duration::from_secs(2), read_request(&mut srv, "dung")).await;
+            let _keep = client.await.unwrap();
+            match r {
+                Ok(Err((401, _))) => {}
+                other => panic!("phải trả 401 ngay, được: {:?}", other.map(|x| x.map(|_| ()))),
+            }
         });
     }
 

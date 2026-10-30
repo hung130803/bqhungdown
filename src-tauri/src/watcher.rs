@@ -29,6 +29,10 @@ const CHECK_LIMIT: u32 = 50;
 /// Wait before the first sweep so app startup isn't slammed.
 const STARTUP_DELAY: Duration = Duration::from_secs(60);
 
+/// Giữ video đang live/chờ live bao lâu trước khi cho xét lại (6 giờ): đủ cho
+/// đa số buổi live/công chiếu kết thúc; còn live thì lại bị chặn + giữ tiếp.
+const LIVE_HOLD_SECS: i64 = 6 * 3600;
+
 fn video_id_of(url: &str) -> String {
     crate::channel_fetcher::extract_video_id(url).unwrap_or_else(|| url.to_string())
 }
@@ -48,7 +52,7 @@ pub fn reconcile_all(
 ) {
     use crate::models::HistoryStatus;
     let channels = store.list();
-    if channels.iter().all(|c| c.dl_pending.is_empty()) {
+    if channels.iter().all(|c| c.dl_pending.is_empty() && c.live_hold.is_empty()) {
         return; // không có gì đang chờ chốt — khỏi truy vấn queue/history
     }
     // Video đang "sống" trong hàng đợi (chưa kết thúc) — theo video id.
@@ -83,11 +87,11 @@ pub fn reconcile_all(
     // vẫn còn. Nay đọc thêm mục Failed ĐANG NẰM trong hàng đợi (lời báo có
     // kèm "Chi tiết kỹ thuật" gốc của yt-dlp nên `is_permanent_fail` dò được).
     //
-    // Thêm: mục bị cổng LIVE chặn (Skipped + LIVE_SKIP_MESSAGE). Đường RSS
-    // không có trạng thái live → video live/chờ live lọt vào, bị chặn ở cổng
-    // tải, rồi reconcile coi là "lỗi tạm" → gỡ seen → lượt sau RSS nạp lại,
-    // chiếm suất → kênh ĐỨNG cho tới khi hết live. Chủ app: live thì "bỏ đi"
-    // → xử như bỏ qua hẳn (vào skipped_ids, user vẫn bỏ chọn được trên UI).
+    // Mục bị cổng LIVE chặn (Skipped + LIVE_SKIP_MESSAGE) xử RIÊNG ở `live_now`
+    // bên dưới: RSS không có trạng thái live → video live/chờ live lọt vào, bị
+    // chặn ở cổng tải. Coi là "lỗi tạm" (gỡ seen) thì lượt sau RSS nạp lại,
+    // chiếm suất → kênh ĐỨNG; coi là bỏ vĩnh viễn thì MẤT video khi nó thành
+    // was_live. Nên: GIỮ TẠM `LIVE_HOLD_SECS` rồi cho xét lại.
     let mut dead_perm: std::collections::HashSet<String> = hist
         .iter()
         .filter(|e| e.status == HistoryStatus::Failed
@@ -95,23 +99,39 @@ pub fn reconcile_all(
                 .unwrap_or(false))
         .map(|e| video_id_of(&e.url))
         .collect();
+    let mut live_now: std::collections::HashSet<String> = std::collections::HashSet::new();
     for it in queue.list() {
         let msg = it.error_message.as_deref().unwrap_or("");
-        let dead = match it.state {
-            crate::models::DownloadState::Failed => crate::error::is_permanent_fail(msg),
-            crate::models::DownloadState::Skipped => msg == crate::queue::LIVE_SKIP_MESSAGE,
-            _ => false,
-        };
-        if dead {
-            dead_perm.insert(video_id_of(&it.request.url));
+        match it.state {
+            crate::models::DownloadState::Failed if crate::error::is_permanent_fail(msg) => {
+                dead_perm.insert(video_id_of(&it.request.url));
+            }
+            crate::models::DownloadState::Skipped if msg == crate::queue::LIVE_SKIP_MESSAGE => {
+                live_now.insert(video_id_of(&it.request.url));
+            }
+            _ => {}
         }
     }
+    let now_ts = Utc::now().timestamp();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     for ch in channels {
-        if ch.dl_pending.is_empty() {
+        if ch.dl_pending.is_empty() && ch.live_hold.is_empty() {
             continue;
         }
         let _ = store.update(&ch.id, |c| {
+            // Hết hạn giữ live → gỡ khỏi seen để lượt quét sau xét lại.
+            let expired: Vec<String> = c
+                .live_hold
+                .iter()
+                .filter(|(_, at)| now_ts - **at >= LIVE_HOLD_SECS)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for vid in expired {
+                c.live_hold.remove(&vid);
+                if !c.dl_pending.contains(&vid) {
+                    c.seen_ids.retain(|s| s != &vid);
+                }
+            }
             let mut vua_xong = 0u32;   // số video của kênh này VỪA tải xong
             let pending = std::mem::take(&mut c.dl_pending);
             for vid in pending {
@@ -122,6 +142,17 @@ pub fn reconcile_all(
                     vua_xong += 1;
                 } else if live.contains(&vid) {
                     c.dl_pending.push(vid); // vẫn đang tải/chờ/retry
+                } else if live_now.contains(&vid) {
+                    // ĐANG live/chờ live: giữ trong seen (không chiếm suất lượt
+                    // sau), trả suất hôm nay, hẹn xét lại sau LIVE_HOLD_SECS.
+                    if !c.seen_ids.contains(&vid) {
+                        c.seen_ids.push(vid.clone());
+                    }
+                    c.live_hold.insert(vid, now_ts);
+                    if c.drip_date.as_deref() == Some(today.as_str()) && c.drip_count > 0 {
+                        c.drip_count -= 1;
+                    }
+                    c.auto_fetch_date = None;
                 } else if dead_perm.contains(&vid) {
                     // LỖI VĨNH VIỄN (private/xoá/…) → BỎ QUA hẳn: giữ trong
                     // seen_ids + thêm skipped_ids để KHÔNG BAO GIỜ nạp lại.
@@ -269,9 +300,18 @@ pub async fn check_channel(
     history: &Arc<HistoryStore>,
     id: &str,
 ) -> u32 {
-    // Kênh này đang có lượt quét khác chạy → bỏ lượt này (lượt kia lo rồi).
-    let Some(_guard) = CheckingGuard::try_new(id) else {
-        return 0;
+    // Kênh này đang có lượt quét khác chạy → CHỜ lượt kia xong rồi mới quét
+    // (bấm ▶ đúng lúc quét nền không bị báo nhầm "0 video mới"). Tối đa 10 phút.
+    let mut waited = 0u32;
+    let _guard = loop {
+        if let Some(g) = CheckingGuard::try_new(id) {
+            break g;
+        }
+        if waited >= 2400 {
+            return 0;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        waited += 1;
     };
     // Đối soát video ĐANG TẢI dở trước tiên: tải xong → chốt "đã làm";
     // hủy/lỗi cứng → trả lại suất để lấy lại (không coi là đã tải).
@@ -1308,6 +1348,7 @@ mod tests {
         WatchedChannel {
             id: "t".into(),
             url: "https://youtube.com/@t".into(),
+            live_hold: Default::default(),
             title: None,
             enabled: true,
             tab: "all".into(),

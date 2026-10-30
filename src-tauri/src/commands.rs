@@ -1043,7 +1043,15 @@ pub fn open_url(url: String) -> AppResult<()> {
 /// Chỉ cho mở link web thật (http/https), không khoảng trắng/ngoặc kép/ký tự
 /// điều khiển — chặn link bookmark kiểu `C:\x.exe`, `file:`, `"&calc&"`.
 fn checked_web_url(raw: &str) -> AppResult<String> {
-    let url = raw.trim();
+    let trimmed = raw.trim();
+    // Bookmark cũ có thể lưu thiếu scheme ("youtube.com/@x") — thêm https://.
+    let owned;
+    let url = if trimmed.contains("://") {
+        trimmed
+    } else {
+        owned = format!("https://{trimmed}");
+        owned.as_str()
+    };
     let parsed = url::Url::parse(url)
         .map_err(|_| AppError::InvalidUrl)?;
     let bad_char = url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"' || c == '<' || c == '>');
@@ -1295,6 +1303,7 @@ pub async fn add_watched_channel(
     let channel = WatchedChannel {
         id: id.clone(),
         url: url.clone(),
+        live_hold: Default::default(),
         title: None,
         enabled: true,
         tab: tab.unwrap_or_else(|| "all".into()),
