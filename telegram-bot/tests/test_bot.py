@@ -593,6 +593,30 @@ class RouterTests(NoNetworkCase):
         self.run_task(r.route_callback({"id": "c", "data": "bx", "message": {"chat": {"id": CHAT}, "message_id": 70}}))
         self.assertEqual(mon.boards(), {CHAT: 80}, "nút dừng trên bảng CŨ không tắt bảng mới")
 
+    def test_big_file_is_compressed_then_sent(self):
+        tg = FakeTG()
+        sent = []
+        tg.send_file = lambda chat, path, cap="", as_video=False: sent.append((path, as_video))
+        tg.delete_message = lambda *a: None
+        with tempfile.TemporaryDirectory() as d:
+            big = Path(d) / "phim.mp4"
+            big.write_bytes(b"x" * (60 * 1024 * 1024))
+            app = FakeApp({"/api/queue": {"ok": True, "items": [
+                {"shortId": "v1", "state": "completed", "title": "Phim", "outputPath": str(big)}]},
+                "/api/status": STATUS})
+            r = Router(tg, app, cfg())
+            small = Path(d) / "nho.mp4"
+            small.write_bytes(b"y")
+            with mock.patch("bqbot.compress.find_ffmpeg", return_value="ffmpeg"), \
+                    mock.patch("bqbot.compress.compress", return_value=str(small)) as comp, \
+                    mock.patch("bqbot.compress.cleanup") as clean:
+                self.run_task(r.route_callback({"id": "c", "data": "f:v1",
+                                                "message": {"chat": {"id": CHAT}, "message_id": 3}}))
+            comp.assert_called_once()
+            clean.assert_called_once_with(str(small))
+            self.assertEqual(sent, [(str(small), True)], "gửi BẢN NÉN, không phải file gốc 60 MB")
+            self.assertTrue(big.exists(), "file gốc trên máy tính giữ nguyên")
+
     def test_history_shows_only_completed(self):
         tg = FakeTG()
         app = FakeApp({"/api/history": {"ok": True, "items": [
@@ -729,6 +753,16 @@ class UtilTests(unittest.TestCase):
             p.write_text("{hỏng", encoding="utf-8")
             with self.assertRaises(config_mod.ConfigError):
                 config_mod.load(p)
+
+    def test_compress_plan(self):
+        from bqbot import compress
+        self.assertAlmostEqual(compress.parse_duration("  Duration: 00:13:12.50, start: 0"), 792.5)
+        vk, h = compress.plan(792.5, 45)
+        self.assertGreater(vk, 300)
+        self.assertIn(h, (360, 480, 720))
+        # Bitrate tính ra phải giữ tổng dung lượng dưới mục tiêu.
+        self.assertLessEqual((vk + compress.AUDIO_KBPS) * 792.5 / 8192, 45.01)
+        self.assertIsNone(compress.plan(4 * 3600, 45), "video quá dài thì báo, không gửi bản vỡ hình")
 
     def test_format_helpers(self):
         self.assertEqual(fmt.bar(50, 4), "██░░")

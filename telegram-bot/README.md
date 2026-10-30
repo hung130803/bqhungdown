@@ -21,6 +21,11 @@ Telegram ⇄ bot.py (Python, máy anh) ⇄ http://127.0.0.1:47321 (app BQHungDow
 
 `python bot.py --check` kiểm tra kết nối Telegram + app rồi thoát.
 
+**Tự bật khi mở máy:** nhấn `Win + R` → gõ `shell:startup` → Enter, rồi kéo (giữ
+chuột phải → *Create shortcuts here*) file `start-all.bat` vào thư mục vừa mở.
+`start-all.bat` mở app (nếu chưa chạy), chờ 15 giây rồi bật bot thu nhỏ (nếu
+chưa có bot nào chạy — 2 bot cùng token Telegram sẽ báo lỗi 409).
+
 ## Dùng
 
 | Việc | Cách |
@@ -34,7 +39,7 @@ Telegram ⇄ bot.py (Python, máy anh) ⇄ http://127.0.0.1:47321 (app BQHungDow
 | Quét kênh | `/check` (tất cả) hoặc `/check Tên-nhóm` |
 | Thêm kênh | `/addchannel link [videos\|shorts\|all]` |
 | Thay cookie | Gửi file `cookies.txt` (chú thích: `youtube`, `tiktok`, `douyin`, `facebook`, `instagram`, `bilibili`, `twitter` — bỏ trống thì bot tự nhận) |
-| Gửi file đã tải | `/history` → 📤, hoặc `/file mã` (≤ 49 MB) |
+| Gửi video về điện thoại | `/history` → 📤, hoặc nút **📤 Gửi về điện thoại** khi tải xong. File > 49 MB (giới hạn Telegram) được nén thành bản xem thử dưới 45 MB bằng ffmpeg của app; file gốc trên máy tính giữ nguyên |
 | Bảng tự cập nhật | `/board` (1 tin tự sửa, không spam), `/stopboard` |
 | Cài đặt nhanh | `/settings` — bật/tắt tự quét, số luồng, nhịp quét |
 | Sửa lỗi tải | `/fix` (cập nhật yt-dlp…) |

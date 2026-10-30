@@ -401,6 +401,8 @@ fn status(app: &AppHandle) -> Value {
             "defaultFolder": s.default_folder,
             "watchRoot": s.watch_root,
             "proxies": s.proxies.len(),
+            // ffmpeg app đang dùng — bot mượn để nén video gửi về điện thoại.
+            "ffmpegPath": crate::sidecar_detect::ffmpeg_path(),
             "notifications": s.notifications,
         },
         "watch": {

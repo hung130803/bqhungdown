@@ -12,9 +12,10 @@ import logging
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable
 
-from . import fmt
+from . import compress, fmt
 from .app_client import AppClient, AppError, AppOffline
 from .dispatcher import Dispatcher, Task
 
@@ -694,8 +695,7 @@ class Router:
                 return
             mb = os.path.getsize(path) / 1024 / 1024
             if mb > self.cfg.max_send_file_mb:
-                self._send(chat_id, f"📁 File {mb:.0f} MB — quá giới hạn gửi qua bot ({self.cfg.max_send_file_mb} MB).\n"
-                                    f"<code>{fmt.esc(path)}</code>")
+                self._send_compressed(chat_id, path, title, mb)
                 return
             self._send(chat_id, f"📤 Đang gửi {fmt.esc(fmt.short(title, 50))} ({mb:.1f} MB)…")
             as_video = path.lower().endswith((".mp4", ".mov", ".m4v"))
@@ -706,6 +706,40 @@ class Router:
             self._job(f"gửi file {sid}",
                       lambda: self.tg.send_file(chat_id, path, fmt.esc(fmt.short(title, 200)), as_video), done)
         self._guard(chat_id, mid, go)
+
+    def _send_compressed(self, chat_id: int, path: str, title: str, mb: float) -> None:
+        """File quá 50 MB (giới hạn Telegram cho bot): nén thành bản xem thử rồi gửi.
+        File gốc trên máy tính giữ nguyên."""
+        if not path.lower().endswith((".mp4", ".mkv", ".webm", ".mov", ".m4v")):
+            self._send(chat_id, f"📁 File {mb:.0f} MB — quá giới hạn {self.cfg.max_send_file_mb} MB của Telegram.\n"
+                                f"Nằm ở: <code>{fmt.esc(path)}</code>")
+            return
+        try:
+            ff = compress.find_ffmpeg(self.app.status().get("settings", {}).get("ffmpegPath"))
+        except (AppError, AppOffline):
+            ff = compress.find_ffmpeg(None)
+        if not ff:
+            self._send(chat_id, "❌ Không tìm thấy ffmpeg để nén video.")
+            return
+        status = self._send(chat_id, f"🗜 Video {mb:.0f} MB lớn hơn giới hạn 50 MB của Telegram — "
+                                     f"đang nén bản xem thử cho điện thoại (file gốc trên máy tính giữ nguyên)…")
+
+        def work() -> None:
+            out = compress.compress(path, ff, target_mb=min(45, self.cfg.max_send_file_mb - 3))
+            try:
+                self.tg.send_file(chat_id, out, fmt.esc(fmt.short(title, 180)) + "\n<i>(bản nén để xem)</i>", True)
+            finally:
+                compress.cleanup(out)
+
+        def done(_res: Any, err: BaseException | None) -> None:
+            if status:
+                try:
+                    self.tg.delete_message(chat_id, status["message_id"])
+                except Exception:  # noqa: BLE001
+                    pass
+            if err:
+                self._send(chat_id, f"❌ Không gửi được: {fmt.esc(err)}\nFile gốc: <code>{fmt.esc(path)}</code>")
+        self._job(f"nén+gửi {Path(path).name}", work, done)
 
     # ───────────────────────── bảng theo dõi ─────────────────────────
     def _cmd_board(self, chat_id: int, _arg: str) -> None:

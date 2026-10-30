@@ -328,7 +328,13 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
     let mut args: Vec<String> = Vec::new();
 
     // Common flags
-    args.push("--no-warnings".into());
+    // Lệnh TẢI giữ cảnh báo của yt-dlp: câu "cookies are no longer valid" chỉ
+    // xuất hiện dưới dạng WARNING — tắt đi thì app không bao giờ báo được
+    // "cookie YouTube hết hạn". `error::best_error_line` chỉ lấy dòng ERROR làm
+    // lý do lỗi nên cảnh báo không làm lệch phân loại lỗi.
+    if !matches!(mode, BuildMode::Download { .. }) {
+        args.push("--no-warnings".into());
+    }
     // CHỈ ĐƯỜNG ffmpeg BUNDLE — bắt buộc để GHÉP video+tiếng. Thiếu cờ này,
     // yt-dlp chỉ tìm ffmpeg trong PATH; máy nhân viên không có -> ghép THẤT BẠI,
     // để lại mảnh rời (.f399.mp4 + .f140.m4a) thay vì 1 video hoàn chỉnh.
@@ -1083,5 +1089,34 @@ mod tests_don_vo_temp {
         super::purge_temp_dir(&kenh, "khong-co");
         assert!(kenh.exists());
         let _ = fs::remove_dir_all(kenh.parent().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod warning_flag_tests {
+    use super::*;
+    use crate::models::*;
+
+    #[test]
+    fn download_keeps_warnings_metadata_silences_them() {
+        let req = DownloadRequest {
+            url: "https://www.youtube.com/watch?v=abc".into(),
+            mode: DownloadMode::Video,
+            format_id: None,
+            save_folder: std::path::PathBuf::from("C:/x"),
+            sub_langs: vec![],
+            auto_translate_to: None,
+            on_conflict: ConflictPolicy::Rename,
+            use_aria2c: false,
+            playlist_all: false,
+            polite: false,
+            max_height: None,
+            force_redownload: false,
+        };
+        let s = Settings::default();
+        let dl = build(&req, &s, BuildMode::Download { resume: false, force_generic: false, safe_retry: false, output_stem: None, temp_tag: None });
+        assert!(!dl.iter().any(|a| a == "--no-warnings"), "lệnh tải phải giữ cảnh báo (cookie hết hạn)");
+        let meta = build(&req, &s, BuildMode::FetchMetadata);
+        assert!(meta.iter().any(|a| a == "--no-warnings"));
     }
 }
