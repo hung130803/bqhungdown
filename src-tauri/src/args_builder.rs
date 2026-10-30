@@ -1,4 +1,8 @@
 use crate::models::{DownloadMode, DownloadRequest, Settings};
+
+// Keep completed broadcasts and sources without live metadata. Never infer
+// live status from a title ("live" may simply be part of a normal video's name).
+pub(crate) const LIVE_FILTER: &str = "!is_live & live_status!=?is_live & live_status!=?is_upcoming & live_status!=?post_live";
 use std::path::{Path, PathBuf};
 
 /// Tên thư mục tạm ẩn nằm NGAY TRONG thư mục kênh. Mỗi lượt tải có 1 thư mục
@@ -324,7 +328,13 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
     let mut args: Vec<String> = Vec::new();
 
     // Common flags
-    args.push("--no-warnings".into());
+    // Lệnh TẢI giữ cảnh báo của yt-dlp: câu "cookies are no longer valid" chỉ
+    // xuất hiện dưới dạng WARNING — tắt đi thì app không bao giờ báo được
+    // "cookie YouTube hết hạn". `error::best_error_line` chỉ lấy dòng ERROR làm
+    // lý do lỗi nên cảnh báo không làm lệch phân loại lỗi.
+    if !matches!(mode, BuildMode::Download { .. }) {
+        args.push("--no-warnings".into());
+    }
     // CHỈ ĐƯỜNG ffmpeg BUNDLE — bắt buộc để GHÉP video+tiếng. Thiếu cờ này,
     // yt-dlp chỉ tìm ffmpeg trong PATH; máy nhân viên không có -> ghép THẤT BẠI,
     // để lại mảnh rời (.f399.mp4 + .f140.m4a) thay vì 1 video hoàn chỉnh.
@@ -427,6 +437,9 @@ pub fn build(req: &DownloadRequest, settings: &Settings, mode: BuildMode) -> Vec
             return args;
         }
         BuildMode::Download { resume, force_generic: _, output_stem, safe_retry, temp_tag } => {
+            // Final gate for manual URLs, RSS, cached lists and restored jobs.
+            // Applies even to force-redownload and all retry paths.
+            args.extend(["--match-filters".into(), LIVE_FILTER.into(), "--no-wait-for-video".into()]);
             // Retry sau 403/format-error trên YouTube: default client bị SABR
             // giấu URL hoặc googlevideo từ chối URL đã extract → kéo format từ
             // các client còn phục vụ URL tải trực tiếp.
@@ -720,6 +733,23 @@ mod tests {
             polite: false,
             force_redownload: false,
             max_height: None,
+        }
+    }
+
+    #[test]
+    fn live_filter_covers_retry_force_and_audio() {
+        for retry in [false, true] {
+            for mode in [DownloadMode::Video, DownloadMode::Audio] {
+                let mut r = req();
+                r.mode = mode;
+                r.force_redownload = true;
+                let a = build(&r, &Settings::default(), BuildMode::Download {
+                    resume: true, force_generic: false, output_stem: None,
+                    safe_retry: retry, temp_tag: Some("live-test".into()),
+                });
+                assert!(a.windows(2).any(|p| p[0] == "--match-filters" && p[1] == LIVE_FILTER));
+                assert!(a.iter().any(|v| v == "--no-wait-for-video"));
+            }
         }
     }
 
@@ -1059,5 +1089,34 @@ mod tests_don_vo_temp {
         super::purge_temp_dir(&kenh, "khong-co");
         assert!(kenh.exists());
         let _ = fs::remove_dir_all(kenh.parent().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod warning_flag_tests {
+    use super::*;
+    use crate::models::*;
+
+    #[test]
+    fn download_keeps_warnings_metadata_silences_them() {
+        let req = DownloadRequest {
+            url: "https://www.youtube.com/watch?v=abc".into(),
+            mode: DownloadMode::Video,
+            format_id: None,
+            save_folder: std::path::PathBuf::from("C:/x"),
+            sub_langs: vec![],
+            auto_translate_to: None,
+            on_conflict: ConflictPolicy::Rename,
+            use_aria2c: false,
+            playlist_all: false,
+            polite: false,
+            max_height: None,
+            force_redownload: false,
+        };
+        let s = Settings::default();
+        let dl = build(&req, &s, BuildMode::Download { resume: false, force_generic: false, safe_retry: false, output_stem: None, temp_tag: None });
+        assert!(!dl.iter().any(|a| a == "--no-warnings"), "lệnh tải phải giữ cảnh báo (cookie hết hạn)");
+        let meta = build(&req, &s, BuildMode::FetchMetadata);
+        assert!(meta.iter().any(|a| a == "--no-warnings"));
     }
 }

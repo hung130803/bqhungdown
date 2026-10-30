@@ -1,6 +1,6 @@
 [package]
 name = "bqhungdown"
-version = "0.5.3"
+version = "0.5.4"
 description = "BQHungDown — Tải video đa nền tảng"
 authors = ["BQHung"]
 edition = "2021"
@@ -25,7 +25,7 @@ tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "io-util", "net"] }
 tokio-util = "0.7"
 
 thiserror = "1"

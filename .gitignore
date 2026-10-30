@@ -30,3 +30,9 @@ vite.config.d.ts
 # Python test/plugin bytecode
 __pycache__/
 *.pyc
+
+# Goi zip chia se (100+ MB) + khoa ky — KHONG BAO GIO commit
+dist-share/
+.tauri-keys/
+telegram-bot/config.json
+telegram-bot/logs/

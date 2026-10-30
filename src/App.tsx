@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BrowserRouter, NavLink, Routes, Route, useNavigate } from "react-router-dom";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -15,6 +15,7 @@ import {
   onClipboardDetected,
   onNotificationClicked,
   onQueueUpdated,
+  onSettingsChanged,
 } from "@/ipc/events";
 
 import { PasteUrlPage } from "@/pages/PasteUrlPage";
@@ -42,10 +43,22 @@ function Bootstrap({ children }: { children: React.ReactNode }) {
   const setClipboard = useClipboardStore((s) => s.setDetected);
   const isDismissed = useClipboardStore((s) => s.isDismissed);
   const navigate = useNavigate();
+  // `navigate` đổi danh tính mỗi lần đổi trang (react-router 6) — để trong deps
+  // là MỖI LẦN CHUYỂN TAB gọi lại app_bootstrap + gỡ/đăng ký lại listener.
+  // Giữ bản mới nhất trong ref, effect chỉ chạy 1 lần.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    let unlistens: Array<() => void> = [];
+    const unlistens: Array<() => void> = [];
+    let disposed = false;
+    // Listener đăng ký XONG sau khi effect đã dọn (unmount giữa chừng) thì gỡ
+    // ngay, không để rò.
+    const keep = (fn: () => void) => {
+      if (disposed) fn();
+      else unlistens.push(fn);
+    };
     (async () => {
       setupI18n(detectInitialLanguage());
       try {
@@ -57,26 +70,31 @@ function Bootstrap({ children }: { children: React.ReactNode }) {
         console.error("[bootstrap] app_bootstrap failed:", e);
       }
 
-      unlistens.push(await onDownloadProgress((p) => applyProgress(p.shortId, p.progress)));
-      unlistens.push(await onDownloadState((p) => applyState(p.shortId, p.state, p.errorMessage, p.outputPath)));
-      unlistens.push(await onQueueUpdated((p) => setQueueAll(p.items)));
-      unlistens.push(
+      keep(await onDownloadProgress((p) => applyProgress(p.shortId, p.progress)));
+      keep(await onDownloadState((p) => applyState(p.shortId, p.state, p.errorMessage, p.outputPath)));
+      // Bot đổi cài đặt (nạp cookie, bật/tắt tự quét…) → giao diện nhận bản
+      // mới. Không nghe thì store giữ bản cũ, lần sửa ô cookie sau gửi CẢ BẢNG
+      // cũ lên → xoá mất cookie bot vừa nạp.
+      keep(await onSettingsChanged((s) => hydrate(s)));
+      keep(await onQueueUpdated((p) => setQueueAll(p.items)));
+      keep(
         await onClipboardDetected((p) => {
           if (!isDismissed(p.url)) setClipboard(p.url, p.extractor);
         }),
       );
-      unlistens.push(
+      keep(
         await onNotificationClicked((p) => {
-          navigate(`/queue?focus=${encodeURIComponent(p.shortId)}`);
+          navigateRef.current(`/queue?focus=${encodeURIComponent(p.shortId)}`);
         }),
       );
 
-      setReady(true);
+      if (!disposed) setReady(true);
     })();
     return () => {
+      disposed = true;
       unlistens.forEach((fn) => fn());
     };
-  }, [hydrate, setQueueAll, applyProgress, applyState, setClipboard, isDismissed, navigate]);
+  }, [hydrate, setQueueAll, applyProgress, applyState, setClipboard, isDismissed]);
 
   if (!ready) {
     return (

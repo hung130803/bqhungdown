@@ -15,27 +15,31 @@ static ARIA2C: OnceLock<Option<PathBuf>> = OnceLock::new();
 static FFMPEG: OnceLock<bool> = OnceLock::new();
 static FFMPEG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
-/// Initialise aria2c lookup with the bundled sidecar path if available.
-/// Should be called once at app startup with the Tauri-resolved binary directory.
-pub fn init_aria2c(bundled_dir: Option<&std::path::Path>) {
-    let resolved = resolve_aria2c(bundled_dir);
+/// Dò aria2c trong NHIỀU thư mục trong 1 lần chốt. LỖI CŨ: lib.rs gọi
+/// `init_aria2c(dev)` trước — trên máy user không có thư mục dev nên chốt
+/// luôn None (OnceLock chỉ ăn lần đầu), lần dò cạnh exe bị bỏ qua → aria2c
+/// đi kèm bản cài KHÔNG BAO GIỜ được dùng (đúng cái bẫy đã gặp với ffmpeg).
+pub fn init_aria2c_dirs(dirs: &[&std::path::Path]) {
+    let resolved = dirs
+        .iter()
+        .find_map(|d| resolve_aria2c_in(d))
+        .or_else(|| resolve_aria2c(None));
     let _ = ARIA2C.set(resolved);
+}
+
+fn resolve_aria2c_in(dir: &std::path::Path) -> Option<PathBuf> {
+    let triple = current_triple();
+    let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
+    [format!("aria2c-{triple}{exe_suffix}"), format!("aria2c{exe_suffix}")]
+        .into_iter()
+        .map(|n| dir.join(n))
+        .find(|p| p.is_file())
 }
 
 fn resolve_aria2c(bundled_dir: Option<&std::path::Path>) -> Option<PathBuf> {
     // 1) Look in the Tauri bundle directory next to yt-dlp/ffmpeg.
-    if let Some(dir) = bundled_dir {
-        let triple = current_triple();
-        let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
-        let candidate = dir.join(format!("aria2c-{triple}{exe_suffix}"));
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        // Also accept the bare name that Tauri uses post-bundling.
-        let bare = dir.join(format!("aria2c{exe_suffix}"));
-        if bare.is_file() {
-            return Some(bare);
-        }
+    if let Some(found) = bundled_dir.and_then(resolve_aria2c_in) {
+        return Some(found);
     }
     // 2) Fall back to system PATH lookup.
     if which_exists("aria2c") {
@@ -56,7 +60,7 @@ pub fn ffmpeg_available_in_path() -> bool {
     *FFMPEG.get_or_init(|| which_exists("ffmpeg"))
 }
 
-/// Khởi tạo đường dẫn ffmpeg BUNDLE (gọi 1 lần lúc mở app, cùng chỗ init_aria2c).
+/// Khởi tạo đường dẫn ffmpeg BUNDLE (gọi 1 lần lúc mở app, cùng chỗ init_aria2c_dirs).
 ///
 /// VÌ SAO SỐNG CÒN: yt-dlp cần ffmpeg để GHÉP video+tiếng. Trước đây app KHÔNG
 /// truyền `--ffmpeg-location`, chỉ dựa vào PATH hệ thống → máy nào không có

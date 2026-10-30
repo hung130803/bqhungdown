@@ -24,8 +24,27 @@
   live/upcoming; snippet đã có trong `part=` nên KHÔNG tốn thêm quota).
   BẤT BIẾN: `was_live` + video thường + extractor không trả live_status
   (TikTok/Douyin) đều phải GIỮ — vá quá tay là mất video thật.
-  CHƯA LÀM: đường RSS (`watcher::fetch_rss_videos`) không có thông tin live.
-  Nó KHÔNG gây tải live (candidate lấy từ `vet_pool` đã lọc) nhưng có thể
-  đánh dấu "đã làm" cho id chờ-live. Muốn sửa thì phải KIỂM CHỨNG trước xem
-  premiere có nằm trong feed hay không (lần thử 07/08 feed trả rỗng).
+  Đường RSS (`watcher::fetch_rss_videos`) không có thông tin live; không được
+  coi lọc danh sách là đủ. Cổng tải cuối bổ sung ngày 25/10 bên dưới bảo vệ
+  cả nguồn này. Mục vẫn có thể xuất hiện trong queue rồi bị Bỏ qua khi kiểm
+  tra metadata thật; không có nghĩa đã tải nội dung live.
 - Chủ app: BQ Hung — trao đổi tiếng Việt.
+- **MẶC ĐỊNH KHÔNG TẢI LIVE (25/10/2026, yêu cầu trực tiếp của chủ app):**
+  chặn `is_live`, `is_upcoming`, `post_live` ở cả quét kênh và lệnh tải cuối
+  (`args_builder::LIVE_FILTER`). Áp dụng URL tay, RSS, cache, queue khôi phục,
+  retry và force-redownload. Không chờ đến giờ phát; báo Bỏ qua có lý do,
+  không ghi Hoàn tất hoặc tự retry. Giữ `was_live` đã thành video hoàn chỉnh
+  và video thiếu metadata live. Không suy đoán theo chữ "live" trong tiêu đề.
+  RSS không có trạng thái live nên bộ lọc lúc quét không đủ bảo vệ.
+  Video bị cổng tải chặn vì live (qua RSS) được GIỮ TẠM 6 giờ
+  (`WatchedChannel.live_hold`, `watcher::LIVE_HOLD_SECS`): nằm trong seen nên
+  không chiếm suất mỗi lượt quét, hết hạn thì gỡ khỏi seen để xét lại — KHÔNG
+  được cho vào skipped_ids (mất video khi nó thành was_live).
+- **BOT TELEGRAM + CỔNG ĐIỀU KHIỂN (30/10/2026):** `src-tauri/src/control_api.rs`
+  mở HTTP `127.0.0.1:<port>` (khoá trong `<config>/control_api.json`) cho bot
+  `telegram-bot/` (Python). Route CHỈ gọi lại `commands::*` — không viết lại
+  nghiệp vụ, để bấm trên bot = bấm trên máy (cùng luật live/chống trùng/thư
+  mục). Thêm tính năng bot: route Rust → hàm trong `app_client.py` → lệnh trong
+  `handlers.py` (xem `telegram-bot/README.md`). `COOKIE_SITES` phải khớp ở
+  `control_api.rs`, `handlers.py` và `SITE_COOKIE_SLOTS` (SettingsPage.tsx).
+  Test bot: `cd telegram-bot && python -m unittest discover -s tests`.

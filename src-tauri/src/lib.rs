@@ -34,6 +34,7 @@ pub mod js_runtime;
 pub mod bookmarks_store;
 pub mod queue;
 pub mod commands;
+pub mod control_api;
 
 use std::sync::Arc;
 
@@ -105,12 +106,14 @@ pub fn run() {
                 .ok()
                 .and_then(|p| p.parent().map(|x| x.to_path_buf()));
             let dev_bin_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
-            crate::sidecar_detect::init_aria2c(Some(&dev_bin_dir));
-            // Also probe production location if dev didn't find it.
-            if !crate::sidecar_detect::aria2c_available() {
+            // Cạnh exe (bản cài) TRƯỚC, rồi thư mục dev — dò 1 lần duy nhất.
+            {
+                let mut dirs: Vec<&std::path::Path> = Vec::new();
                 if let Some(dir) = bundled_dir.as_deref() {
-                    crate::sidecar_detect::init_aria2c(Some(dir));
+                    dirs.push(dir);
                 }
+                dirs.push(&dev_bin_dir);
+                crate::sidecar_detect::init_aria2c_dirs(&dirs);
             }
             // Note: aria2c is opt-in via Settings. It's faster but yt-dlp does
             // not pass through aria2c's progress, so the UI progress bar stays
@@ -274,6 +277,13 @@ pub fn run() {
             app.manage(po_proc);
             app.manage(PendingConflicts::default());
 
+            // Cổng điều khiển cục bộ cho bot Telegram — mở SAU khi mọi state
+            // đã manage (handler gọi app.state::<…>()).
+            {
+                let cfg = crate::control_api::load_or_create_config(&config_dir);
+                crate::control_api::spawn(handle.clone(), cfg);
+            }
+
             // System tray: lets the app keep running in the background (so it
             // resumes rate-limited downloads) after the window is closed.
             {
@@ -300,6 +310,11 @@ pub fn run() {
                         "quit" => {
                             if let Some(q) = app.try_state::<Arc<QueueManager>>() {
                                 q.shutdown();
+                            }
+                            // app.exit không chắc phát Destroyed cho cửa sổ đang
+                            // ẩn → tắt server PO token ngay tại đây, kẻo mồ côi.
+                            if let Some(po) = app.try_state::<Arc<crate::po_token::ProviderProcess>>() {
+                                crate::po_token::shutdown(&po);
                             }
                             app.exit(0);
                         }

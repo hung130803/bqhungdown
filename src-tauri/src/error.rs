@@ -47,10 +47,12 @@ pub enum AppError {
 
 pub type AppResult<T> = Result<T, AppError>;
 
-/// True when a yt-dlp error means it couldn't read/decrypt browser cookies
-/// (modern Chrome/Edge on Windows use AppBound/DPAPI encryption that yt-dlp
-/// can't decrypt). When this happens we retry the call WITHOUT cookies, since
-/// public videos don't need them. See https://github.com/yt-dlp/yt-dlp/issues/10927
+/// Authentication or account eligibility is required to view this video.
+pub fn is_age_restricted_error(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    l.contains("confirm your age") || l.contains("age-restricted") || l.contains("age restricted")
+}
+
 /// True when yt-dlp hit YouTube's anti-bot / rate-limit wall ("Sign in to
 /// confirm you're not a bot" or HTTP 429). We respond by rotating to the next
 /// proxy (if configured) and backing off longer before retrying.
@@ -58,7 +60,7 @@ pub fn is_bot_error(msg: &str) -> bool {
     let l = msg.to_lowercase();
     // "Sign in to confirm your AGE" = video giới hạn tuổi (cần cookie), KHÔNG
     // phải bot wall — retry/cooldown không bao giờ giúp, đừng nhầm.
-    if l.contains("confirm your age") {
+    if is_age_restricted_error(msg) {
         return false;
     }
     l.contains(SOFT_BLOCK_MARKER)
@@ -141,6 +143,10 @@ pub fn is_format_error(msg: &str) -> bool {
         || l.contains("did not get any data blocks")
 }
 
+/// True when a yt-dlp error means it couldn't read/decrypt browser cookies
+/// (modern Chrome/Edge on Windows use AppBound/DPAPI encryption that yt-dlp
+/// can't decrypt). When this happens we retry the call WITHOUT cookies, since
+/// public videos don't need them. See https://github.com/yt-dlp/yt-dlp/issues/10927
 pub fn is_cookie_decrypt_error(msg: &str) -> bool {
     let l = msg.to_lowercase();
     l.contains("dpapi")
@@ -160,12 +166,29 @@ pub fn best_error_line(stderr: &str) -> String {
     if lines.is_empty() {
         return "yt-dlp failed".to_string();
     }
-    if let Some(idx) = lines.iter().rposition(|l| l.to_lowercase().contains("error")) {
-        // Dòng ERROR + các dòng sau nó (gợi ý VPN/proxy/cookie) — gộp lại.
-        return lines[idx..].join(" ");
+    let is_warning = |l: &&str| l.starts_with("WARNING:");
+    let cookie_expired = lines
+        .iter()
+        .any(|line| line.to_lowercase().contains("cookies are no longer valid"));
+    // Ưu tiên dòng bắt đầu bằng "ERROR:"; không có thì dòng nào chứa "error"
+    // nhưng KHÔNG phải WARNING (lệnh tải giờ giữ cảnh báo — cảnh báo không được
+    // thành lý do lỗi).
+    let idx = lines
+        .iter()
+        .rposition(|l| l.starts_with("ERROR:"))
+        .or_else(|| lines.iter().rposition(|l| !is_warning(l) && l.to_lowercase().contains("error")));
+    if let Some(idx) = idx {
+        // Dòng ERROR + các dòng sau nó (gợi ý VPN/proxy/cookie) — gộp lại, bỏ cảnh báo.
+        let error = lines[idx..].iter().filter(|l| !is_warning(l)).copied().collect::<Vec<_>>().join(" ");
+        if cookie_expired {
+            return format!("YouTube cookies are no longer valid. {error}");
+        }
+        return error;
     }
-    let start = lines.len().saturating_sub(3);
-    lines[start..].join(" ")
+    let rest: Vec<&str> = lines.iter().filter(|l| !is_warning(l)).copied().collect();
+    let pool = if rest.is_empty() { &lines } else { &rest };
+    let start = pool.len().saturating_sub(3);
+    pool[start..].join(" ")
 }
 
 /// Dịch lỗi thô của yt-dlp (tiếng Anh, khó hiểu) thành thông báo tiếng Việt
@@ -178,7 +201,11 @@ pub fn best_error_line(stderr: &str) -> String {
 pub fn friendly_reason(raw: &str) -> String {
     let l = raw.to_lowercase();
 
-    let hint = if is_forbidden_error(raw) || is_bot_error(raw) {
+    let hint = if l.contains("cookies are no longer valid") {
+        "🍪 Bộ tải báo phiên cookie YouTube đã xuất không còn hợp lệ. \
+         Trình duyệt vẫn có thể xem được vì đang dùng phiên đã cập nhật. \
+         Hãy xuất lại cookie từ tài khoản đang xem được video và thay file trong Cài đặt → Cookie → YouTube, rồi bấm Thử lại."
+    } else if is_forbidden_error(raw) || is_bot_error(raw) {
         "🚫 YouTube đang chặn tải (đã tự thử lại nhiều lần không thành). \
          Cách sửa theo thứ tự: 1) mở Cài đặt → bấm \"Sửa lỗi tải ngay\" → Thử lại; \
          2) thêm cookie (Cài đặt → Cookie — xuất file cookies.txt từ cửa sổ ẩn danh); \
@@ -189,8 +216,11 @@ pub fn friendly_reason(raw: &str) -> String {
     } else if l.contains("members-only") || l.contains("join this channel") {
         "🔒 Video chỉ dành cho hội viên của kênh — cần cookie của tài khoản đã đăng ký hội viên \
          (Cài đặt → Cookie)."
-    } else if l.contains("confirm your age") || l.contains("age-restricted") || l.contains("age restricted") {
-        "🔞 Video giới hạn tuổi — thêm cookie của tài khoản đã đăng nhập (Cài đặt → Cookie) rồi thử lại."
+    } else if is_age_restricted_error(raw) {
+        "🔞 YouTube chưa xác nhận phiên đăng nhập đủ điều kiện xem video giới hạn tuổi. \
+         Cookie mới không đồng nghĩa tài khoản có quyền xem. Hãy tự mở đúng video trên YouTube \
+         bằng tài khoản đã xuất cookie; nếu có yêu cầu xác nhận tuổi, hãy hoàn tất trên YouTube. \
+         Nếu trình duyệt xem được nhưng app vẫn lỗi, kiểm tra đúng ô cookie YouTube và cập nhật bộ tải."
     } else if l.contains("live event will begin") || l.contains("premieres in") || l.contains("premiere will begin") {
         "⏰ Video này là buổi phát trực tiếp / công chiếu CHƯA diễn ra — chưa có gì để tải. \
          Đợi phát xong rồi bấm Thử lại."
@@ -313,6 +343,9 @@ pub fn friendly_reason_for(raw: &str, url: &str) -> String {
         return base;
     };
     let label = crate::args_builder::cookie_site_label(site);
+    if is_age_restricted_error(raw) {
+        return base;
+    }
 
     // Câu "chặn bot" ghi cứng tên YouTube (hồi đó app chỉ lo YouTube). Kênh
     // Douyin/TikTok bị chặn mà báo "YouTube đang chặn tải" là nói sai trang,
@@ -346,6 +379,28 @@ impl From<std::io::Error> for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preserve_invalid_cookie_warning_before_age_error() {
+        let raw = "WARNING: [youtube] The provided YouTube account cookies are no longer valid.\nERROR: Sign in to confirm your age.";
+        let reason = best_error_line(raw);
+        assert!(reason.contains("cookies are no longer valid"));
+        assert!(is_age_restricted_error(&reason));
+        let hint = friendly_reason_for(&reason, "https://www.youtube.com/watch?v=abc");
+        assert!(hint.contains("phiên cookie YouTube đã xuất không còn hợp lệ"));
+        assert!(!hint.contains("Cookie mới không đồng nghĩa"));
+    }
+
+    #[test]
+    fn age_gate_is_not_proof_of_expired_cookie_or_bot_block() {
+        let raw = "ERROR: Sign in to confirm your age. Use --cookies";
+        assert!(is_age_restricted_error(raw));
+        assert!(!is_bot_error(raw));
+        assert!(!is_age_restricted_error("Sign in to confirm you're not a bot"));
+        let hint = friendly_reason_for(raw, "https://www.youtube.com/watch?v=abc");
+        assert!(hint.contains("Cookie mới không đồng nghĩa"));
+        assert!(!hint.contains("Cookie cần nạp lại"));
+    }
 
     // Mẫu lỗi thô lấy từ yt-dlp thật — mỗi cái phải ra đúng thông báo hướng dẫn.
 
@@ -649,5 +704,27 @@ mod tests_bao_dung_trang_cookie {
             "ERROR: [youtube] abc: Sign in to confirm you're not a bot"
         ));
         assert!(!is_cancel_message("ERROR: No space left on device"));
+    }
+}
+
+#[cfg(test)]
+mod warning_tests {
+    use super::*;
+
+    #[test]
+    fn warnings_never_become_the_error_reason() {
+        let stderr = "WARNING: [youtube] some format error ignored\nERROR: [youtube] x: Video unavailable";
+        assert_eq!(best_error_line(stderr), "ERROR: [youtube] x: Video unavailable");
+        // Không có dòng ERROR: không được lấy dòng WARNING làm lý do.
+        let only_warn = "WARNING: retrying fragment, error 503\nkilled";
+        assert!(!best_error_line(only_warn).contains("WARNING"));
+    }
+
+    #[test]
+    fn expired_cookie_warning_is_detected() {
+        let stderr = "WARNING: [youtube] The provided YouTube account cookies are no longer valid. They have likely been rotated\nERROR: [youtube] x: Sign in to confirm you're not a bot";
+        let line = best_error_line(stderr);
+        assert!(line.starts_with("YouTube cookies are no longer valid."));
+        assert!(friendly_reason(&line).starts_with("🍪"));
     }
 }

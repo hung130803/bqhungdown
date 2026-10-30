@@ -1,19 +1,25 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { parseBatch } from "@/lib/parse-batch";
+import { formatError } from "@/lib/error";
 
 export function BatchInput({ onSubmit }: { onSubmit: (urls: string[]) => Promise<void> | void }) {
   const { t } = useTranslation();
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const valid = parseBatch(text);
 
   const handleClick = async () => {
     if (submitting || valid.length === 0) return;
     setSubmitting(true);
+    setError(null);
     try {
       await Promise.resolve(onSubmit(valid));
       setText("");
+    } catch (e) {
+      // Lỗi thì GIỮ nguyên danh sách link (trước đây bị xoá sạch dù chưa thêm được gì).
+      setError(formatError(e));
     } finally {
       setSubmitting(false);
     }
@@ -42,6 +48,11 @@ export function BatchInput({ onSubmit }: { onSubmit: (urls: string[]) => Promise
           {submitting ? "Đang thêm…" : "Thêm hàng loạt"}
         </button>
       </div>
+      {error && (
+        <div className="px-3 py-2 rounded-md bg-danger/10 border border-danger text-danger text-sm">
+          {error}
+        </div>
+      )}
     </div>
   );
 }

@@ -219,6 +219,13 @@ pub struct PlaylistEntry {
 pub struct WatchedChannel {
     pub id: String,
     pub url: String,
+    /// Video bị cổng tải chặn vì ĐANG live/chờ live/công chiếu: id → mốc giữ
+    /// (Unix giây). Trong lúc giữ: vẫn ở seen_ids (không chiếm suất "mới
+    /// nhất" mỗi lượt quét). Hết hạn giữ: gỡ khỏi seen để lượt sau xét lại —
+    /// lúc đó thường đã thành `was_live`/video thường và tải được (CLAUDE.md:
+    /// was_live phải GIỮ).
+    #[serde(default)]
+    pub live_hold: std::collections::BTreeMap<String, i64>,
     // MỌI trường (trừ id/url định danh) đều CÓ default: bản mới thêm trường mới
     // thì watchlist.json CŨ (thiếu trường đó) VẪN đọc được. Thiếu default =
     // parse hỏng = load() trả rỗng = MẤT SẠCH kênh khi cập nhật (bug đã gặp:
@@ -376,6 +383,7 @@ pub struct PickedVideo {
 pub struct Bookmark {
     pub id: String,
     pub url: String,
+    #[serde(default)]
     pub note: String,
     pub added_at: DateTime<Utc>,
 }

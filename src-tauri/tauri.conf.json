@@ -1,6 +1,6 @@
 {
   "productName": "BQHungDown",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "identifier": "com.prodown.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -45,9 +45,6 @@
     "createUpdaterArtifacts": true
   },
   "plugins": {
-    "shell": {
-      "open": true
-    },
     "updater": {
       "endpoints": [
         "https://github.com/hung130803/bqhungdown/releases/latest/download/latest.json"

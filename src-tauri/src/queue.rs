@@ -1123,7 +1123,8 @@ impl QueueManager {
                     // chỉ chứa các mục Completed.
                 }
             }
-            Ok(RunOutcome::Skipped) => {
+            Ok(ref skipped @ (RunOutcome::Skipped | RunOutcome::SkippedLive)) => {
+                let skipped_live = matches!(skipped, RunOutcome::SkippedLive);
                 // Video đã có trong download-archive → bỏ qua. Đánh dấu Skipped
                 // (không lưu History, không báo lỗi). UI hiện "Đã bỏ qua".
                 let snap = {
@@ -1131,7 +1132,9 @@ impl QueueManager {
                     if let Some(it) = map.get_mut(&id) {
                         it.state = DownloadState::Skipped;
                         it.finished_at = Some(Utc::now());
-                        it.error_message = None;
+                        it.error_message = if skipped_live {
+                            Some(LIVE_SKIP_MESSAGE.into())
+                        } else { None };
                     }
                     map.get(&id).cloned()
                 };
@@ -1196,6 +1199,19 @@ impl QueueManager {
         let (should_retry, delay) = {
             let mut map = self.items.write().unwrap();
             let it = match map.get_mut(&id) { Some(i) => i, None => return };
+            // User đã Huỷ/Tạm dừng trong lúc tiến trình đang chết dần (kill
+            // xong yt-dlp có thể vẫn trả lỗi thay vì Cancelled) → TÔN TRỌNG
+            // lựa chọn của user, không xếp lịch thử lại.
+            if matches!(it.state, DownloadState::Cancelled | DownloadState::Paused) {
+                // cancel() đã giao việc dọn `.part` cho run-loop (có token) —
+                // run-loop kết thúc bằng lỗi thay vì Cancelled thì dọn ở đây.
+                if it.state == DownloadState::Cancelled {
+                    let snap = it.clone();
+                    drop(map);
+                    self.cleanup_partials_retry(snap);
+                }
+                return;
+            }
             if is_bot || is_stall {
                 // Nghẽn tạm / bot wall: đừng bỏ cuộc — nghỉ cooldown rồi tự thử
                 // lại (đếm riêng bằng bot_retries). IP hạ nhiệt (hoặc proxy xoay)
@@ -1230,27 +1246,64 @@ impl QueueManager {
                     (false, Duration::default())
                 }
             } else {
-                let delay = next_retry_delay(it.attempt);
+                // Same-session retries cannot fix account eligibility.
+                let delay = if crate::error::is_age_restricted_error(&reason) {
+                    None
+                } else { next_retry_delay(it.attempt) };
                 it.attempt += 1;
                 it.error_message = Some(friendly.clone());
+                if delay.is_some() {
+                    // Hiện là "đang chờ" (như nhánh cooldown) — để timer bên
+                    // dưới chỉ chạy lại khi mục VẪN đang chờ.
+                    it.state = DownloadState::Queued;
+                    let cloned = it.clone();
+                    drop(map);
+                    self.emit_state(&cloned);
+                    self.emit_queue_updated();
+                }
                 (delay.is_some(), delay.unwrap_or_default())
             }
         };
         if should_retry {
             // Spawn separate task for the backoff sleep so the parent
             // worker future stays simple and Send.
+            //
+            // LỖI CŨ: hết giờ chờ, timer ÉP state = Queued rồi chạy lại — kể cả
+            // khi user đã bấm Huỷ trong lúc chờ (mục đã Huỷ tự tải lại), hoặc
+            // khi "Tiếp tục tất cả" đã chạy sớm mục này (2 yt-dlp cùng 1 mục).
+            // Nay: token huỷ riêng cho lượt chờ (cancel/pause bấm token → timer
+            // thôi), và hết giờ chỉ chạy lại khi mục VẪN đang Queued.
+            let wait_tok = CancellationToken::new();
+            self.cancel_tokens.lock().unwrap().insert(id.clone(), wait_tok.clone());
             let me = self.clone();
             tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(delay).await;
-                {
-                    let mut map = me.items.write().unwrap();
-                    if let Some(it) = map.get_mut(&id) {
-                        it.state = DownloadState::Queued;
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = wait_tok.cancelled() => {
+                        // Huỷ trong lúc chờ: không có run-loop nào dọn hộ file
+                        // tải dở của lần thử trước → tự dọn (Tạm dừng thì giữ).
+                        if let Some(it) = me.get(&id) {
+                            if it.state == DownloadState::Cancelled {
+                                me.cleanup_partials_retry(it);
+                            }
+                        }
+                        return;
                     }
                 }
+                let still_waiting = me
+                    .get(&id)
+                    .map(|it| it.state == DownloadState::Queued)
+                    .unwrap_or(false);
+                if !still_waiting {
+                    // Đã có run-loop khác chạy (nó tự gắn token riêng) hoặc
+                    // mục đã kết thúc — không đụng gì.
+                    return;
+                }
+                // Còn Queued = chưa run-loop nào nhận → token trong map là của
+                // lượt chờ này; gỡ đi để run-loop gắn token mới.
+                me.cancel_tokens.lock().unwrap().remove(&id);
                 me.emit_queue_updated();
-                let me2 = me.clone();
-                tauri::async_runtime::spawn(async move { me2.run_loop_for(id).await; });
+                me.run_loop_for(id).await;
             });
         } else {
             let snap = {
@@ -1277,6 +1330,11 @@ impl QueueManager {
         }
     }
 }
+
+/// Lời báo của mục bị cổng live chặn. `watcher::reconcile_all` nhận diện mục
+/// "bỏ qua vì live" qua đúng chuỗi này — đổi chữ phải giữ nguyên hằng.
+pub const LIVE_SKIP_MESSAGE: &str =
+    "Đã bỏ qua: video đang live, chờ phát hoặc vừa kết thúc và chưa xử lý xong.";
 
 fn to_history(item: &DownloadItem, status: HistoryStatus, error: Option<String>) -> HistoryEntry {
     HistoryEntry {

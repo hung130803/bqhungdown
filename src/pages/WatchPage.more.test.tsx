@@ -295,6 +295,25 @@ describe("Nút ➕ Thêm 1 lượt (trang Theo dõi)", () => {
 describe("Nút ▶ Chạy nhóm — hộp thoại phải nói ĐÚNG số kênh sẽ tải", () => {
   const btnRun = () => screen.getByText(/^▶ Chạy (tất cả|nhóm)/);
 
+  it("xác nhận trong app chạy đúng nhóm một lần và hiện lỗi backend", async () => {
+    localStorage.setItem("watch.groupFilter", "Mỹ mới");
+    mockChannels = [mkKey({ id: "a", group: "Mỹ mới" }), mkKey({ id: "b", group: "Hàn" })];
+    const cmdMod = await import("@/ipc/commands");
+    vi.mocked(cmdMod.checkWatchedNow).mockRejectedValueOnce(new Error("Không kết nối được máy chủ"));
+    await mountPage();
+    btnRun().click();
+    await screen.findByText("Xác nhận chạy nhóm");
+    expect(vi.mocked(cmdMod.confirmDialog)).not.toHaveBeenCalled();
+    expect(vi.mocked(cmdMod.checkWatchedNow)).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("button", { name: "Chạy ngay" });
+    confirm.click();
+    confirm.click();
+    await waitFor(() => expect(vi.mocked(cmdMod.checkWatchedNow)).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(cmdMod.checkWatchedNow)).toHaveBeenCalledWith("Mỹ mới");
+    await screen.findByText(/Không kết nối được máy chủ/);
+    expect(btnRun()).not.toBeDisabled();
+  });
+
   it("8 kênh đã đủ 1/ngày + 3 kênh chờ lượt → báo 3 kênh / tối đa 3 video", async () => {
     // Dựng đúng ảnh anh Hùng gửi (nhóm "Mỹ mới": 11 kênh, 8 đã tải 1 hôm nay).
     mockChannels = [
@@ -305,10 +324,9 @@ describe("Nút ▶ Chạy nhóm — hộp thoại phải nói ĐÚNG số kênh 
     await mountPage();
     btnRun().click();
     const cmdMod = await import("@/ipc/commands");
-    await waitFor(() =>
-      expect(vi.mocked(cmdMod.confirmDialog)).toHaveBeenCalled(),
-      { timeout: 3000 });
-    const msg = vi.mocked(cmdMod.confirmDialog).mock.calls[0][0];
+    await screen.findByText("Xác nhận chạy nhóm");
+    expect(vi.mocked(cmdMod.confirmDialog)).not.toHaveBeenCalled();
+    const msg = screen.getByText(/Trong .* có .* kênh — chạy/).textContent!;
     // Dòng đầu phải nêu TỔNG (11 kênh) rồi mới tới số chạy (3) — trả lời đúng
     // thắc mắc "nhóm 48 kênh mà sao báo 43".
     expect(msg).toContain("có 11 kênh");
@@ -341,10 +359,9 @@ describe("Nút ▶ Chạy nhóm — hộp thoại phải nói ĐÚNG số kênh 
     await mountPage();
     btnRun().click();
     const cmdMod = await import("@/ipc/commands");
-    await waitFor(() =>
-      expect(vi.mocked(cmdMod.confirmDialog)).toHaveBeenCalled(),
-      { timeout: 3000 });
-    const msg = vi.mocked(cmdMod.confirmDialog).mock.calls[0][0];
+    await screen.findByText("Xác nhận chạy nhóm");
+    expect(vi.mocked(cmdMod.confirmDialog)).not.toHaveBeenCalled();
+    const msg = screen.getByText(/Trong .* có .* kênh — chạy/).textContent!;
     expect(msg).toContain("chạy 1 kênh còn suất");
     expect(msg).toContain("TỐI ĐA 2 video");
   });
@@ -355,10 +372,9 @@ describe("Nút ▶ Chạy nhóm — hộp thoại phải nói ĐÚNG số kênh 
     await mountPage();
     btnRun().click();
     const cmdMod = await import("@/ipc/commands");
-    await waitFor(() =>
-      expect(vi.mocked(cmdMod.confirmDialog)).toHaveBeenCalled(),
-      { timeout: 3000 });
-    await new Promise((r) => setTimeout(r, 120));
+    await screen.findByText("Xác nhận chạy nhóm");
+    screen.getByRole("button", { name: "Huỷ" }).click();
+    await waitFor(() => expect(screen.queryByText("Xác nhận chạy nhóm")).toBeNull());
     expect(vi.mocked(cmdMod.checkWatchedNow)).not.toHaveBeenCalled();
   });
 
@@ -367,6 +383,9 @@ describe("Nút ▶ Chạy nhóm — hộp thoại phải nói ĐÚNG số kênh 
     await mountPage();
     btnRun().click();
     const cmdMod = await import("@/ipc/commands");
+    await screen.findByText("Xác nhận chạy nhóm");
+    expect(vi.mocked(cmdMod.checkWatchedNow)).not.toHaveBeenCalled();
+    screen.getByRole("button", { name: "Chạy ngay" }).click();
     await waitFor(() =>
       expect(vi.mocked(cmdMod.checkWatchedNow)).toHaveBeenCalledWith(null),
       { timeout: 3000 });

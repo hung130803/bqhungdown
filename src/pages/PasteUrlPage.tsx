@@ -14,6 +14,7 @@ import { useUrlStore } from "@/stores/useUrlStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useChannelStore } from "@/stores/useChannelStore";
 import * as cmd from "@/ipc/commands";
+import { formatError } from "@/lib/error";
 
 export function PasteUrlPage() {
   const { t } = useTranslation();
@@ -68,7 +69,8 @@ export function PasteUrlPage() {
     } catch (e) {
       // Surface the backend error so the user knows why nothing happened.
       // Common causes: folder not writable, format conflict, duplicate URL.
-      const msg = (e as { message?: string })?.message ?? String(e);
+      // AppError của Rust là {kind,data} — String(e) ra "[object Object]".
+      const msg = formatError(e);
       console.error("[enqueueDownload] failed:", e);
       setErrorMsg(msg || "Không thêm được vào hàng đợi. Kiểm tra thư mục lưu hoặc URL.");
     } finally {
@@ -77,7 +79,8 @@ export function PasteUrlPage() {
   };
 
   const startBatch = async (urls: string[]) => {
-    if (!folder) return;
+    // Ném lỗi (không `return` im lặng) để ô nhập GIỮ danh sách link và báo lý do.
+    if (!folder) throw new Error("Chưa chọn thư mục lưu — chọn thư mục ở trên rồi bấm lại.");
     // Big pasted batches get "polite mode" too (random 2-5s sleep between
     // requests) so tải số lượng lớn không bị YouTube/TikTok chặn IP (429).
     const polite = urls.length > 15;
@@ -91,7 +94,7 @@ export function PasteUrlPage() {
    *  into their own subfolder `<folder>/<channel name>` so downloading many
    *  channels stays organised. */
   const startChannelBatch = async (urls: string[], channelName?: string) => {
-    if (!folder) return;
+    if (!folder) throw new Error("Chưa chọn thư mục lưu — chọn thư mục ở trên rồi bấm lại.");
     const useSub = settings?.channelSubfolder !== false && channelName;
     const target = useSub
       ? `${folder.replace(/[\\/]+$/, "")}/${sanitizeFolderName(channelName!)}`

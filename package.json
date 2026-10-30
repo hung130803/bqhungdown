@@ -1,7 +1,7 @@
 {
   "name": "bqhungdown",
   "private": true,
-  "version": "0.5.3",
+  "version": "0.5.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -19,11 +19,7 @@
     "setup:sidecars": "node scripts/fetch-sidecars.mjs",
     "update:ytdlp": "node scripts/fetch-sidecars.mjs --only=ytdlp --force",
     "verify:sidecars": "node scripts/verify-sidecars.mjs",
-    "test": "vitest",
-    "web:dev": "concurrently -n SERVER,VITE -c blue,green \"node server/server.js\" \"vite --config vite.web.config.ts\"",
-    "web:build": "vite build --config vite.web.config.ts",
-    "server:dev": "node server/server.js",
-    "server:start": "node server/server.js"
+    "test": "vitest"
   },
   "dependencies": {
     "@crabnebula/tauri-plugin-drag": "^2.1.0",
