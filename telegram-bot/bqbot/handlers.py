@@ -62,7 +62,8 @@ HELP = """<b>🤖 Bot BQHungDown</b>
 • Gửi file <b>cookies.txt</b> → thay cookie (ghi tên trang ở chú thích nếu muốn: youtube, tiktok, douyin, facebook, instagram, bilibili, twitter).
 • /board → 1 tin tự cập nhật tiến độ (không spam).
 • Bot tự báo: tải xong / lỗi / video mới từ kênh / cookie sắp hết hạn / app tắt.
-Dùng /menu để bấm nút."""
+• Các việc chính: bấm <b>nút dưới ô nhập</b> (Tình trạng, Đang tải, Lỗi, Kênh, Cookie…).
+  Mất nút thì gửi /start. Lệnh khác: bấm nút <b>Menu</b> cạnh ô nhập."""
 
 
 def kb(rows: list[list[tuple[str, str]]]) -> dict:
@@ -92,6 +93,37 @@ def main_menu() -> dict:
     ])
 
 
+# BÀN PHÍM CỐ ĐỊNH dưới ô nhập — luôn hiện, bấm là chạy, khỏi gõ lệnh.
+# Chữ trên nút → lệnh (route_message tra bảng này trước khi coi là chữ thường).
+KEYBOARD_COMMANDS: dict[str, str] = {
+    "📊 Tình trạng": "status",
+    "⬇️ Đang tải": "queue",
+    "❌ Lỗi": "failed",
+    "✅ Đã xong": "history",
+    "📺 Kênh": "channels",
+    "🍪 Cookie": "cookies",
+    "⚙️ Cài đặt": "settings",
+    "▶ Mở app": "openapp",
+    "🏠 Menu": "menu",
+}
+
+
+def reply_keyboard() -> dict:
+    labels = list(KEYBOARD_COMMANDS)
+    rows = [labels[0:2], labels[2:4], labels[4:6], labels[6:9]]
+    return {
+        "keyboard": [[{"text": t} for t in row] for row in rows],
+        "resize_keyboard": True,
+        "is_persistent": True,
+        "input_field_placeholder": "Dán link video để tải…",
+    }
+
+
+WELCOME = ("👋 <b>Bot BQHungDown sẵn sàng.</b>\n"
+           "Bấm các nút <b>dưới ô nhập</b> để dùng — không cần gõ lệnh.\n"
+           "Muốn tải video: <b>dán link</b> vào rồi gửi (nhiều link một lúc cũng được).")
+
+
 class Router:
     def __init__(self, tg, app: AppClient, cfg, monitor=None):
         self.tg = tg
@@ -103,7 +135,7 @@ class Router:
         self._pending_lock = threading.Lock()
         self.commands: dict[str, tuple[Callable[[dict, str], None], bool]] = {
             # tên: (hàm, nặng?)
-            "start": (self._cmd_menu, False),
+            "start": (self._cmd_start, False),
             "menu": (self._cmd_menu, False),
             "help": (self._cmd_help, False),
             "status": (self._cmd_status, True),
@@ -145,11 +177,16 @@ class Router:
                 return Task(lambda: self._send(chat_id, "Không có lệnh này. Gõ /help."), "lệnh lạ")
             fn, heavy = entry
             return Task(lambda: fn(chat_id, arg.strip()), "/" + name, heavy=heavy, key=f"chat:{chat_id}")
+        if text in KEYBOARD_COMMANDS:  # bấm nút ở bàn phím cố định
+            name = KEYBOARD_COMMANDS[text]
+            fn, heavy = self.commands[name]
+            return Task(lambda: fn(chat_id, ""), "nút " + name, heavy=heavy, key=f"chat:{chat_id}")
         urls = URL_RE.findall(text)
         if urls:
             return Task(lambda: self._enqueue(chat_id, urls, audio=False), "thêm link", heavy=True,
                         key=f"chat:{chat_id}")
-        return Task(lambda: self._send(chat_id, "Gửi link để tải, hoặc /menu.", main_menu()), "chữ thường")
+        # Chữ lạ → nhắc cách dùng + bật lại bàn phím (lỡ người dùng ẩn mất).
+        return Task(lambda: self._send(chat_id, WELCOME, reply_keyboard()), "chữ thường")
 
     def route_callback(self, cb: dict) -> Task | None:
         msg = cb.get("message") or {}
@@ -208,6 +245,11 @@ class Router:
                             "Chủ app thêm mã này vào <code>allowed_chat_ids</code> trong config.json để dùng.")
 
     # ───────────────────────── lệnh gõ ─────────────────────────
+    def _cmd_start(self, chat_id: int, _arg: str) -> None:
+        # 1 tin chỉ mang được 1 loại nút: tin chào bật bàn phím cố định, tin sau là menu bấm nhanh.
+        self._send(chat_id, WELCOME, reply_keyboard())
+        self._cmd_menu(chat_id, "")
+
     def _cmd_menu(self, chat_id: int, _arg: str) -> None:
         self._send(chat_id, "<b>BQHungDown</b> — chọn việc:", main_menu())
 
@@ -218,7 +260,33 @@ class Router:
         return None
 
     def _cmd_help(self, chat_id: int, _arg: str) -> None:
-        self._send(chat_id, HELP, main_menu())
+        self._send(chat_id, HELP, reply_keyboard())
+
+    def send_welcome_once(self, state_path: "Path", version: str = "kb1") -> int:
+        """Gửi bàn phím cố định 1 LẦN cho mỗi chat được phép (nhớ trong file trạng
+        thái) — người dùng không phải tự gõ /start mới thấy nút. Trả số chat đã gửi."""
+        import json as _json
+        try:
+            done = _json.loads(state_path.read_text(encoding="utf-8")).get(version, [])
+        except (OSError, ValueError):
+            done = []
+        sent = 0
+        for chat in self.cfg.allowed_chat_ids:
+            if chat in done:
+                continue
+            try:
+                self._send(chat, WELCOME, reply_keyboard())
+                done.append(chat)
+                sent += 1
+            except Exception as e:  # noqa: BLE001
+                log.info("Gửi bàn phím cho %s lỗi: %s", chat, e)
+        if sent:
+            try:
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(_json.dumps({version: done}), encoding="utf-8")
+            except OSError:
+                pass
+        return sent
 
     def _cmd_id(self, chat_id: int, _arg: str) -> None:
         self._send(chat_id, f"Mã chat: <code>{chat_id}</code>")
