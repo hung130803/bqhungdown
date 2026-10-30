@@ -70,6 +70,16 @@ def kb(rows: list[list[tuple[str, str]]]) -> dict:
 HOME = ("🏠 Menu", "m")
 
 
+def nav_row(prefix: str, page: int, pages: int) -> list[list[tuple[str, str]]]:
+    """Hàng chuyển trang ghi rõ chữ; 1 trang thì chỉ có nút Làm mới."""
+    row = [("🔄 Làm mới", f"{prefix}:{page}")]
+    if page > 0:
+        row.insert(0, ("◀ Trước", f"{prefix}:{page - 1}"))
+    if page + 1 < pages:
+        row.append(("Sau ▶", f"{prefix}:{page + 1}"))
+    return [row]
+
+
 def main_menu() -> dict:
     return kb([
         [("📊 Tình trạng", "st"), ("⬇️ Đang chạy", "q:active:0")],
@@ -149,6 +159,7 @@ class Router:
         verb, args = parts[0], parts[1:]
         handler = {
             "m": self._cb_menu, "st": self._cb_status, "q": self._cb_queue, "qa": self._cb_queue_action,
+            "qi": self._cb_queue_item, "wi": self._cb_watch_item,
             "b": self._cb_bulk, "bc": self._cb_bulk_confirm, "w": self._cb_watch, "wc": self._cb_watch_check,
             "wq": self._cb_watch_check_group, "wm": self._cb_watch_more, "we": self._cb_watch_enable,
             "ck": self._cb_cookies, "cs": self._cb_cookie_set, "s": self._cb_settings, "sa": self._cb_set_auto,
@@ -229,39 +240,56 @@ class Router:
 
     # ───────────────────────── hàng đợi ─────────────────────────
     def _queue_markup(self, state: str, page: int, items: list[dict], total: int) -> dict:
+        """Mỗi mục 1 nút ghi số + tên (bấm → màn hình chi tiết có nút chữ rõ ràng)."""
         rows: list[list[tuple[str, str]]] = []
-        for it in items[page * PER_PAGE:(page + 1) * PER_PAGE]:
-            sid = it["shortId"]
-            st = it.get("state")
-            act = lambda a: f"qa:{sid}:{a}:{state}:{page}"  # noqa: E731
-            if st == "downloading":
-                rows.append([(f"⏸ {sid}", act("pause")), (f"✖ {sid}", act("cancel"))])
-            elif st == "queued":
-                rows.append([(f"✖ Huỷ {sid}", act("cancel"))])
-            elif st == "paused":
-                rows.append([(f"▶ {sid}", act("resume")), (f"✖ {sid}", act("cancel"))])
-            elif st == "failed":
-                rows.append([(f"🔁 {sid}", act("retry")), (f"🗑 {sid}", act("remove"))])
-            elif st == "skipped":
-                rows.append([(f"⬇️ Vẫn tải {sid}", act("force")), (f"🗑 {sid}", act("remove"))])
-            elif st == "completed":
-                rows.append([(f"📤 Gửi file {sid}", f"f:{sid}"), (f"🗑 {sid}", act("remove"))])
-            elif st == "cancelled":
-                rows.append([(f"🔁 {sid}", act("retry")), (f"🗑 {sid}", act("remove"))])
-        pages = max(1, -(-min(total, len(items)) // PER_PAGE))
-        nav = [("🔄", f"q:{state}:{page}")]
-        if page > 0:
-            nav.insert(0, ("◀", f"q:{state}:{page - 1}"))
-        if page + 1 < pages:
-            nav.append(("▶", f"q:{state}:{page + 1}"))
-        rows.append(nav)
+        start = page * PER_PAGE
+        for n, it in enumerate(items[start:start + PER_PAGE], start + 1):
+            icon = fmt.STATE_ICON.get(it.get("state"), "•")
+            rows.append([(f"{n}. {icon} {fmt.short(fmt.title_of(it), 38)}",
+                          f"qi:{it['shortId']}:{state}:{page}")])
+        rows += nav_row(f"q:{state}", page, fmt.page_count(min(total, len(items)), PER_PAGE))
         if state == "failed":
             rows.append([("🔁 Thử lại TẤT CẢ mục lỗi", "b:retry_failed")])
         elif state in ("active", "downloading", "queued", "paused"):
-            rows.append([("⏸ Dừng hết", "b:pause_all"), ("▶ Chạy tiếp", "b:resume_all"),
-                         ("✖ Huỷ hết", "bc:cancel_all")])
-        rows.append([("⬇️ Đang chạy", "q:active:0"), ("❌ Lỗi", "q:failed:0"), HOME])
+            rows.append([("⏸ Dừng hết", "b:pause_all"), ("▶ Chạy tiếp hết", "b:resume_all")])
+            rows.append([("✖ Huỷ hết", "bc:cancel_all")])
+        rows.append([("⬇️ Đang chạy", "q:active:0"), ("❌ Lỗi", "q:failed:0"), ("✅ Xong", "q:completed:0")])
+        rows.append([HOME])
         return kb(rows)
+
+    def _cb_queue_item(self, chat_id: int, mid: int | None, args: list[str]) -> None:
+        """Màn hình chi tiết 1 mục: đủ tên, trạng thái, lý do lỗi + nút thao tác ghi rõ chữ."""
+        if not args:
+            return
+        sid = args[0]
+        back = args[1:3] or ["active", "0"]
+
+        def go():
+            it = next((x for x in self.app.queue("all", limit=5000).get("items", []) if x.get("shortId") == sid), None)
+            back_btn = ("◀ Quay lại danh sách", f"q:{back[0]}:{back[1]}")
+            if not it:
+                self._show(chat_id, mid, "Mục này không còn trong hàng đợi (đã xoá).", kb([[back_btn], [HOME]]))
+                return
+            act = lambda a: f"qa:{sid}:{a}:{back[0]}:{back[1]}"  # noqa: E731
+            st = it.get("state")
+            rows: list[list[tuple[str, str]]] = []
+            if st == "downloading":
+                rows.append([("⏸ Tạm dừng", act("pause")), ("✖ Huỷ", act("cancel"))])
+            elif st == "queued":
+                rows.append([("✖ Huỷ", act("cancel"))])
+            elif st == "paused":
+                rows.append([("▶ Tiếp tục", act("resume")), ("✖ Huỷ", act("cancel"))])
+            elif st in ("failed", "cancelled"):
+                rows.append([("🔁 Thử lại", act("retry")), ("🗑 Xoá khỏi danh sách", act("remove"))])
+            elif st == "skipped":
+                rows.append([("⬇️ Vẫn tải video này", act("force")), ("🗑 Xoá", act("remove"))])
+            elif st == "completed":
+                rows.append([("📤 Gửi về điện thoại", f"f:{sid}"), ("🗑 Xoá khỏi danh sách", act("remove"))])
+            if "Sửa lỗi tải" in (it.get("error") or ""):
+                rows.append([("🔧 Sửa lỗi tải ngay", "fx")])
+            rows.append([("🔄 Làm mới", f"qi:{sid}:{back[0]}:{back[1]}"), back_btn])
+            self._show(chat_id, mid, fmt.item_detail(it), kb(rows))
+        self._guard(chat_id, mid, go)
 
     def _cb_queue(self, chat_id: int, mid: int | None, args: list[str]) -> None:
         state = args[0] if args else "active"
@@ -284,7 +312,10 @@ class Router:
 
         def go():
             self.app.queue_action(sid, action)
-            self._cb_queue(chat_id, mid, back)
+            if action == "remove":
+                self._cb_queue(chat_id, mid, back)
+            else:  # ở lại màn hình chi tiết, thấy ngay trạng thái mới
+                self._cb_queue_item(chat_id, mid, [sid, *back])
         self._guard(chat_id, mid, go)
 
     def _cb_bulk(self, chat_id: int, mid: int, args: list[str]) -> None:
@@ -322,13 +353,16 @@ class Router:
             if n == 0:
                 self._send(chat_id, "ℹ️ Không thêm mục nào — link đã có trong hàng đợi, đã tải, hoặc trang không hỗ trợ.")
                 return
-            kind = "âm thanh" if audio else "video"
-            lines = [f"✅ Đã thêm <b>{n}</b> {kind} → <code>{fmt.esc(res.get('folder'))}</code>"]
-            lines += [fmt.item_line(it) for it in res.get("items", [])[:10]]
+            items = res.get("items", [])
+            text = fmt.tracked_text(items, res.get("folder"), audio)
             skipped = len(urls) - n
             if skipped > 0:
-                lines.append(f"<i>Bỏ {skipped} link trùng/không hợp lệ.</i>")
-            self._send(chat_id, "\n".join(lines), kb([[("⬇️ Xem tiến độ", "q:active:0"), ("📡 Bảng theo dõi", "bd")]]))
+                text += f"\n<i>Bỏ {skipped} link trùng/không hợp lệ.</i>"
+            sent = self._send(chat_id, text, kb([[("📋 Chi tiết / dừng / huỷ", "q:active:0")]]))
+            # Tin này TỰ CẬP NHẬT tiến độ tới khi tải xong (không gửi thêm tin mới).
+            if sent and self.monitor:
+                self.monitor.track(chat_id, sent["message_id"], [it.get("shortId") for it in items],
+                                   res.get("folder"), audio)
         self._guard(chat_id, None, go)
 
     # ───────────────────────── kênh theo dõi ─────────────────────────
@@ -359,53 +393,79 @@ class Router:
             else:
                 data = self.app.watch()
             items = data.get("items", [])
-            chunk = items[page * PER_PAGE:(page + 1) * PER_PAGE]
-            pages = max(1, -(-len(items) // PER_PAGE))
-            lines = [f"<b>📺 Kênh — {fmt.esc(title)}</b> ({len(items)}) · trang {min(page + 1, pages)}/{pages}", ""]
-            lines += [fmt.channel_line(c) for c in chunk] or ["Không có kênh."]
-            for c in chunk:
-                if c.get("lastError"):
-                    name = fmt.esc(fmt.short(c.get("targetName") or c.get("title"), 25))
-                    lines.append(f"🔴 {name}: <i>{fmt.esc(fmt.short(c['lastError'].split(chr(10))[0], 120))}</i>")
+            pages = fmt.page_count(len(items), PER_PAGE)
+            page_ = min(page, pages - 1)
+            start = page_ * PER_PAGE
+            chunk = items[start:start + PER_PAGE]
+            n_err = sum(1 for c in items if c.get("lastError"))
+            head = f"<b>📺 Kênh — {fmt.esc(title)}</b> · {len(items)} kênh"
+            if n_err and flt != "e":
+                head += f" · 🔴 {n_err} lỗi"
+            lines = [head, f"<i>Trang {page_ + 1}/{pages} — bấm tên kênh để quét, tải thêm, bật/tắt.</i>"]
+            if not chunk:
+                lines.append("\nKhông có kênh.")
             rows: list[list[tuple[str, str]]] = []
-            for c in chunk:
-                name = fmt.short(c.get("targetName") or c.get("title") or c["id"], 18)
-                tog = "⏸" if c.get("enabled") else "▶"
-                rows.append([(f"🔄 {name}", f"wc:{c['id']}:{flt}:{page}"), ("+1", f"wm:{c['id']}:{flt}:{page}"),
-                             (tog, f"we:{c['id']}:{0 if c.get('enabled') else 1}:{flt}:{page}")])
-            nav = [("🔄", f"w:{flt}:{page}")]
-            if page > 0:
-                nav.insert(0, ("◀", f"w:{flt}:{page - 1}"))
-            if page + 1 < pages:
-                nav.append(("▶", f"w:{flt}:{page + 1}"))
-            rows.append(nav)
-            rows.append([("Tất cả", "w:a:0"), ("🔴 Đang lỗi", "w:e:0")])
-            grow = [(fmt.short(g or "Chưa nhóm", 14), f"w:g{i}:0") for i, g in enumerate(groups[:6])]
-            if grow:
-                rows.append(grow[:3])
-                rows.append(grow[3:])
-            qlabel = "▶ Quét " + ("nhóm này" if group is not None else "tất cả")
+            for n, c in enumerate(chunk, start + 1):
+                rows.append([(f"{n}. {fmt.channel_button(c)}", f"wi:{c['id']}:{flt}:{page_}")])
+            rows += nav_row(f"w:{flt}", page_, pages)
+            rows.append([("📋 Tất cả", "w:a:0"), (f"🔴 Đang lỗi ({n_err})" if flt != "e" else "🔴 Đang lỗi", "w:e:0")])
+            grow = [(("✓ " if flt == f"g{i}" else "") + fmt.short(g or "Chưa nhóm", 14), f"w:g{i}:0")
+                    for i, g in enumerate(groups[:9])]
+            rows += [grow[i:i + 3] for i in range(0, len(grow), 3)]
+            qlabel = f"▶ Quét nhóm {fmt.short(group or 'Chưa nhóm', 14)}" if group is not None else "▶ Quét tất cả kênh"
             qdata = f"wq:{flt[1:]}" if group is not None else "wq:a"
-            rows.append([(qlabel, qdata), HOME])
+            rows.append([(qlabel, qdata)])
+            rows.append([HOME])
             self._show(chat_id, mid, "\n".join(lines), kb(rows))
+        self._guard(chat_id, mid, go)
+
+    def _cb_watch_item(self, chat_id: int, mid: int | None, args: list[str], note: str = "") -> None:
+        """Màn hình chi tiết 1 kênh: tình trạng, lỗi đầy đủ + nút ghi rõ chữ."""
+        if not args:
+            return
+        cid = args[0]
+        back = args[1:3] or ["a", "0"]
+
+        def go():
+            self.app.cache.clear("watch")
+            c = next((x for x in self.app.watch().get("items", []) if x.get("id") == cid), None)
+            back_btn = ("◀ Quay lại danh sách", f"w:{back[0]}:{back[1]}")
+            if not c:
+                self._show(chat_id, mid, "Không còn kênh này.", kb([[back_btn], [HOME]]))
+                return
+            tail = f":{back[0]}:{back[1]}"
+            on = c.get("enabled")
+            rows = [
+                [("🔄 Quét ngay", f"wc:{cid}{tail}"), ("➕ Tải thêm 1 video hôm nay", f"wm:{cid}{tail}")],
+                [("⏸ Tắt theo dõi" if on else "▶ Bật theo dõi", f"we:{cid}:{0 if on else 1}{tail}")],
+            ]
+            if c.get("lastError") and "Sửa lỗi tải" in c["lastError"]:
+                rows.append([("🔧 Sửa lỗi tải ngay", "fx")])
+            rows.append([("🔄 Làm mới", f"wi:{cid}{tail}"), back_btn])
+            text = fmt.channel_detail(c)
+            if note:
+                text = note + "\n\n" + text
+            self._show(chat_id, mid, text, kb(rows))
         self._guard(chat_id, mid, go)
 
     def _cb_watch_check(self, chat_id: int, mid: int, args: list[str]) -> None:
         def go():
             self.app.watch_action(args[0], "check")
-            self._cb_watch(chat_id, mid, args[1:3] or ["a", "0"])
+            self._cb_watch_item(chat_id, mid, args, "▶ <b>Đang quét kênh</b> (chạy nền) — có video mới bot sẽ báo.")
         self._guard(chat_id, mid, go)
 
     def _cb_watch_more(self, chat_id: int, mid: int, args: list[str]) -> None:
         def go():
             self.app.watch_action(args[0], "more")
-            self._cb_watch(chat_id, mid, args[1:3] or ["a", "0"])
+            self._cb_watch_item(chat_id, mid, args, "➕ <b>Đang lấy thêm 1 video</b> cho hôm nay (chạy nền).")
         self._guard(chat_id, mid, go)
 
     def _cb_watch_enable(self, chat_id: int, mid: int, args: list[str]) -> None:
         def go():
-            self.app.watch_action(args[0], "enabled", {"enabled": args[1] == "1"})
-            self._cb_watch(chat_id, mid, args[2:4] or ["a", "0"])
+            on = args[1] == "1"
+            self.app.watch_action(args[0], "enabled", {"enabled": on})
+            self._cb_watch_item(chat_id, mid, [args[0], *args[2:4]],
+                                "▶ Đã <b>bật</b> theo dõi." if on else "⏸ Đã <b>tắt</b> theo dõi.")
         self._guard(chat_id, mid, go)
 
     def _cb_watch_check_group(self, chat_id: int, mid: int, args: list[str]) -> None:
@@ -587,16 +647,16 @@ class Router:
             # Lịch sử có cả mục lỗi/huỷ — chỉ hiện mục tải XONG (mới có file để gửi).
             items = [e for e in self.app.history(limit=30).get("items", [])
                      if e.get("status") == "completed"][:10]
-            lines = ["<b>🕘 Tải xong gần đây</b>", ""]
+            lines = ["<b>🕘 Tải xong gần đây</b> (file nằm trên máy tính)",
+                     "<i>Bấm số để gửi video đó về điện thoại.</i>", ""]
             rows = []
-            for e in items:
-                lines.append(f"✅ <code>{fmt.esc(e.get('shortId'))}</code> {fmt.esc(fmt.short(e.get('title'), 55))}"
-                             f" · {fmt.ago(e.get('finishedAt'))}")
-                rows.append([(f"📤 {e.get('shortId')}", f"f:{e.get('shortId')}")])
+            for n, e in enumerate(items, 1):
+                lines.append(f"{n}. {fmt.esc(fmt.short(fmt.title_of(e), 55))} · {fmt.ago(e.get('finishedAt'))}")
+                rows.append((f"📤 {n}", f"f:{e.get('shortId')}"))
             if not items:
                 lines.append("Chưa có.")
-            rows = [sum(rows[i:i + 2], []) for i in range(0, len(rows), 2)]
-            rows.append([("🔄", "h"), HOME])
+            rows = [rows[i:i + 5] for i in range(0, len(rows), 5)]
+            rows.append([("🔄 Làm mới", "h"), HOME])
             self._show(chat_id, mid, "\n".join(lines), kb(rows))
         self._guard(chat_id, mid, go)
 

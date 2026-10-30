@@ -88,15 +88,114 @@ def days_left(epoch: int | None, now: float | None = None) -> float | None:
     return (epoch - (now if now is not None else time.time())) / 86400
 
 
+def page_count(total: int, per_page: int) -> int:
+    return max(1, -(-total // per_page))
+
+
+def title_of(it: dict) -> str:
+    """Tên video; chưa lấy được tên (title vẫn là link) thì ghi rõ thay vì hiện link thô."""
+    t = (it.get("title") or "").strip()
+    if not t or t.startswith(("http://", "https://")):
+        return "(đang lấy tên video…)"
+    return t
+
+
+def first_line(s: str | None, n: int = 160) -> str:
+    return short((s or "").split("\n")[0], n)
+
+
+def progress_line(it: dict) -> str:
+    """Dòng tiến độ — chỉ hiện số liệu ĐANG có (không in thanh trống / '—')."""
+    st = it.get("state")
+    if st == "downloading":
+        pct = it.get("percent")
+        if pct is None:
+            return "⬇️ Đang chuẩn bị tải…"
+        parts = [f"{bar(pct)} {pct:.0f}%"]
+        if it.get("speedBps"):
+            parts.append(speed(it["speedBps"]))
+        if it.get("etaSec"):
+            parts.append(f"còn {eta(it['etaSec'])}")
+        return " · ".join(parts)
+    if st == "queued":
+        err = it.get("error")
+        return "⏳ " + (first_line(err, 140) if err else "Đang chờ tới lượt")
+    if st == "failed":
+        return "❌ " + first_line(it.get("error"), 160)
+    if st == "skipped":
+        return "⏭ " + (first_line(it.get("error"), 140) or "Bỏ qua — video đã tải trước đó")
+    return STATE_ICON.get(st, "•") + " " + STATE_NAME.get(st, st or "")
+
+
+def item_detail(it: dict) -> str:
+    st = it.get("state")
+    lines = [f"<b>{esc(title_of(it))}</b>",
+             f"Trạng thái: {STATE_ICON.get(st, '')} <b>{STATE_NAME.get(st, st)}</b>"
+             f" · mã <code>{esc(it.get('shortId'))}</code>"]
+    if st in ("downloading", "queued"):
+        lines.append(esc(progress_line(it)))
+    if it.get("error") and st != "queued":
+        lines.append("\n<i>" + esc(short(it["error"], 700)) + "</i>")
+    if st == "completed" and it.get("outputPath"):
+        lines.append(f"\n💾 Đã lưu trên máy tính:\n<code>{esc(it['outputPath'])}</code>")
+    elif it.get("saveFolder"):
+        lines.append(f"📁 Lưu vào: <code>{esc(it['saveFolder'])}</code>")
+    lines.append(f"🔗 {esc(it.get('url'))}")
+    return "\n".join(lines)
+
+
+def tracked_text(items: list[dict], folder: str | None, audio: bool) -> str:
+    """Tin 'đã thêm' tự cập nhật đến khi mọi mục xong/lỗi."""
+    done = sum(1 for it in items if it.get("state") == "completed")
+    fail = sum(1 for it in items if it.get("state") in ("failed", "cancelled"))
+    left = len(items) - done - fail - sum(1 for it in items if it.get("state") == "skipped")
+    kind = "âm thanh" if audio else "video"
+    if left > 0:
+        head = f"⬇️ <b>Đang tải {len(items)} {kind}</b> — xong {done}/{len(items)}"
+    else:
+        head = f"✅ <b>Xong</b> — tải được {done}/{len(items)} {kind}" + (f" · ❌ lỗi {fail}" if fail else "")
+    lines = [head]
+    for n, it in enumerate(items[:10], 1):
+        lines.append(f"{n}. {esc(short(title_of(it), 60))}\n    {esc(progress_line(it))}")
+    if len(items) > 10:
+        lines.append(f"… và {len(items) - 10} mục nữa")
+    if folder:
+        lines.append(f"\n💾 Lưu trên máy tính: <code>{esc(folder)}</code>")
+    if left == 0 and done:
+        lines.append("Bấm <b>📤 Gửi về điện thoại</b> nếu muốn xem/lưu trên điện thoại (không bấm thì chỉ nằm trên máy tính).")
+    return "\n".join(lines)
+
+
+def channel_button(c: dict) -> str:
+    icon = "🔴" if c.get("lastError") else ("🟢" if c.get("enabled") else "⏸")
+    name = short(c.get("targetName") or c.get("title") or c.get("url"), 26)
+    return f"{icon} {name} · {c.get('dripCount', 0)}/{c.get('dailyLimit', 1)}"
+
+
+def channel_detail(c: dict) -> str:
+    name = esc(c.get("targetName") or c.get("title") or c.get("url"))
+    lines = [
+        f"<b>📺 {name}</b>" + (f" [{esc(c['group'])}]" if c.get("group") else ""),
+        f"Theo dõi: {'🟢 đang bật' if c.get('enabled') else '⏸ đang tắt'}"
+        f" · tự tải: {'có' if c.get('autoDownload') else 'không'}",
+        f"Hôm nay: {c.get('dripCount', 0)}/{c.get('dailyLimit', 1)} video"
+        + (f" · đang tải {c['downloading']}" if c.get("downloading") else ""),
+        f"Lần quét gần nhất: {ago(c.get('lastChecked'))}"
+        + (f" · {c['lastNewCount']} video mới" if c.get("lastNewCount") else ""),
+        f"Đã làm: {c.get('done', 0)} video",
+    ]
+    if c.get("lastError"):
+        lines.append("\n🔴 <b>Lỗi lần quét trước:</b>\n<i>" + esc(short(c["lastError"], 600)) + "</i>")
+    lines.append(f"\n🔗 {esc(c.get('url'))}")
+    return "\n".join(lines)
+
+
 def item_line(it: dict, with_id: bool = True) -> str:
     icon = STATE_ICON.get(it.get("state"), "•")
-    title = esc(short(it.get("title") or it.get("url"), 55))
+    title = esc(short(title_of(it), 55))
     sid = f" <code>{esc(it.get('shortId'))}</code>" if with_id else ""
     if it.get("state") == "downloading":
-        pct = it.get("percent")
-        p = f"{pct:.0f}%" if pct is not None else "…"
-        return (f"{icon}{sid} {title}\n    {bar(pct)} {p} · {speed(it.get('speedBps'))}"
-                f" · còn {eta(it.get('etaSec'))}")
+        return f"{icon}{sid} {title}\n    {esc(progress_line(it))}"
     return f"{icon}{sid} {title}"
 
 

@@ -41,12 +41,33 @@ fn now_secs() -> u64 {
 }
 
 /// True when we haven't checked within `min_interval` seconds.
-fn should_check(stamp: &Path, min_interval: u64) -> bool {
-    let last = std::fs::read_to_string(stamp)
+/// Bản app nào ghi mốc: thư mục chứa exe (cũng là chỗ yt-dlp sidecar nằm).
+///
+/// LỖI THẬT 30/10/2026: mốc nằm ở thư mục dữ liệu DÙNG CHUNG, còn yt-dlp nằm
+/// cạnh TỪNG exe. Bản cài vừa cập nhật yt-dlp của nó → bản build mới (yt-dlp
+/// cũ trong `binaries/`) tưởng đã cập nhật, bỏ qua 12 giờ → YouTube chặn lượt
+/// tải đầu tiên ("YouTube đang giới hạn"). Nay mốc ghi kèm bản app; khác bản
+/// là phải tự cập nhật ngay.
+fn install_id() -> String {
+    std::env::current_exe()
         .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .unwrap_or(0);
-    now_secs().saturating_sub(last) >= min_interval
+        .and_then(|p| p.parent().map(|d| d.to_string_lossy().to_lowercase()))
+        .unwrap_or_default()
+}
+
+fn stamp_text() -> String {
+    format!("{}\n{}", now_secs(), install_id())
+}
+
+fn should_check(stamp: &Path, min_interval: u64) -> bool {
+    should_check_text(std::fs::read_to_string(stamp).ok().as_deref(), &install_id(), now_secs(), min_interval)
+}
+
+fn should_check_text(text: Option<&str>, install: &str, now: u64, min_interval: u64) -> bool {
+    let mut lines = text.unwrap_or("").lines();
+    let last = lines.next().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0);
+    let owner = lines.next().map(str::trim).unwrap_or("");
+    owner != install || now.saturating_sub(last) >= min_interval
 }
 
 /// Kick off a throttled background yt-dlp self-update. Never blocks the caller;
@@ -69,7 +90,7 @@ pub fn spawn_forced_update(app: AppHandle, data_dir: PathBuf) {
 pub async fn run_update_now(app: &AppHandle, data_dir: Option<PathBuf>) -> Result<String, String> {
     if let Some(dd) = &data_dir {
         let _ = std::fs::create_dir_all(dd);
-        let _ = std::fs::write(stamp_path(dd), now_secs().to_string());
+        let _ = std::fs::write(stamp_path(dd), stamp_text());
     }
     match tokio::time::timeout(UPDATE_TIMEOUT, run_update(app)).await {
         Ok(r) => r,
@@ -85,7 +106,7 @@ fn spawn_update_check_inner(app: AppHandle, data_dir: PathBuf, min_interval: u64
         }
         // Stamp up-front so a crash mid-update doesn't make us retry every launch.
         let _ = std::fs::create_dir_all(&data_dir);
-        let _ = std::fs::write(&stamp, now_secs().to_string());
+        let _ = std::fs::write(&stamp, stamp_text());
 
         match tokio::time::timeout(UPDATE_TIMEOUT, run_update(&app)).await {
             Ok(Ok(msg)) => eprintln!("[ytdlp-update] {msg}"),
@@ -127,4 +148,23 @@ async fn run_update(app: &AppHandle) -> Result<String, String> {
         .unwrap_or("(no output)")
         .trim()
         .to_string())
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    use super::should_check_text;
+
+    #[test]
+    fn other_install_or_old_stamp_forces_check() {
+        let h = 12 * 3600;
+        // Cùng bản, vừa kiểm tra → khỏi.
+        assert!(!should_check_text(Some("1000\nc:/app"), "c:/app", 1100, h));
+        // Bản KHÁC ghi mốc (bản cài vs bản build) → phải tự kiểm tra.
+        assert!(should_check_text(Some("1000\nc:/khac"), "c:/app", 1100, h));
+        // Mốc kiểu cũ (chỉ có số) → kiểm tra 1 lần.
+        assert!(should_check_text(Some("1000"), "c:/app", 1100, h));
+        // Quá hạn → kiểm tra.
+        assert!(should_check_text(Some("1000\nc:/app"), "c:/app", 1000 + h, h));
+        assert!(should_check_text(None, "c:/app", 5, h));
+    }
 }

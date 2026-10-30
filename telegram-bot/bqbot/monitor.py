@@ -52,6 +52,63 @@ class Monitor:
         self._last_expiry_check = -COOKIE_EXPIRY_EVERY
         self._last_channel_check = -CHANNEL_ERR_EVERY
         self._channel_errors: set[str] | None = None
+        # Tin "đã thêm" do người dùng gửi link: (chat, message_id) → mục cần theo.
+        # Monitor SỬA chính tin đó theo tiến độ tới khi mọi mục xong/lỗi.
+        self._tracked: dict[tuple[int, int], dict] = {}
+        self._tracked_lock = threading.Lock()
+
+    # ── tin tự cập nhật cho link người dùng gửi ──
+    def track(self, chat_id: int, message_id: int, short_ids: list[str], folder: str | None, audio: bool) -> None:
+        ids = [s for s in short_ids if s]
+        if not ids:
+            return
+        with self._tracked_lock:
+            self._tracked[(chat_id, message_id)] = {"ids": ids, "folder": folder, "audio": audio, "text": ""}
+
+    def _tracked_ids(self) -> set[str]:
+        with self._tracked_lock:
+            return {sid for t in self._tracked.values() for sid in t["ids"]}
+
+    def _update_tracked(self, items: list[dict]) -> None:
+        with self._tracked_lock:
+            tracked = list(self._tracked.items())
+        if not tracked:
+            return
+        by_id = {it["shortId"]: it for it in items}
+        for (chat, mid), t in tracked:
+            # Mục đã bị xoá khỏi hàng đợi → coi như đã huỷ.
+            cur = [by_id.get(sid) or {"shortId": sid, "state": "cancelled", "title": ""} for sid in t["ids"]]
+            finished = all(it.get("state") in ("completed", "failed", "cancelled", "skipped") for it in cur)
+            text = fmt.tracked_text(cur, t["folder"], t["audio"])
+            if text == t["text"] and not finished:
+                continue
+            t["text"] = text
+            try:
+                self.tg.edit_message(chat, mid, text, self._tracked_markup(cur, finished))
+            except Exception as e:  # noqa: BLE001
+                log.info("Sửa tin tiến độ lỗi: %s", e)
+                if "not found" in str(e).lower() or "can't be edited" in str(e).lower():
+                    finished = True
+            if finished:
+                with self._tracked_lock:
+                    self._tracked.pop((chat, mid), None)
+
+    @staticmethod
+    def _tracked_markup(items: list[dict], finished: bool) -> dict:
+        rows: list[list[tuple[str, str]]] = []
+        if finished:
+            many = len(items) > 1
+            for n, it in enumerate(items[:8], 1):
+                sid = it["shortId"]
+                label = f"{n}. " if many else ""
+                if it.get("state") == "completed":
+                    rows.append([(f"📤 Gửi về điện thoại {label}".strip(), f"f:{sid}")])
+                elif it.get("state") == "failed":
+                    rows.append([(f"🔁 Thử lại {label}".strip(), f"qa:{sid}:retry:failed:0"),
+                                 (f"ℹ️ Xem lỗi {label}".strip(), f"qi:{sid}:failed:0")])
+        else:
+            rows.append([("📋 Chi tiết / dừng / huỷ", "q:active:0")])
+        return _kb(rows) if rows else _kb([[("🏠 Menu", "m")]])
 
     # ── gửi ──
     def _notify(self, text: str, markup: dict | None = None) -> None:
@@ -125,7 +182,9 @@ class Monitor:
         if self._online is False:
             self._notify("✅ App BQHungDown đã chạy lại.")
         self._online = True
-        self._diff(data.get("items", []))
+        items = data.get("items", [])
+        self._diff(items)
+        self._update_tracked(items)
         if now - self._last_digest >= self.cfg.digest_interval_sec:
             self._last_digest = now
             self._flush_digest()
@@ -148,18 +207,22 @@ class Monitor:
         if self._prev is None:  # nhịp đầu: chỉ ghi mốc
             self._prev = cur
             return
+        # Mục có tin tự cập nhật riêng → không báo trùng trong tin tóm tắt.
+        tracked = self._tracked_ids()
         for it in items:
             sid, st = it["shortId"], it.get("state")
             before = self._prev.get(sid)
             if before == st:
                 continue
             if before is None and st in ("queued", "downloading"):
-                if sid not in own:
+                if sid not in own and sid not in tracked:
                     self._events["new"].append(it)
             elif st == "completed":
-                self._events["completed"].append(it)
+                if sid not in tracked:
+                    self._events["completed"].append(it)
             elif st == "failed":
-                self._events["failed"].append(it)
+                if sid not in tracked:
+                    self._events["failed"].append(it)
                 self._maybe_cookie_alert(it)
             elif st == "skipped" and it.get("error"):  # bỏ qua vì live (đã tải rồi thì không có lời báo)
                 self._events["skipped"].append(it)
@@ -176,23 +239,25 @@ class Monitor:
             if len(ev["new"]) > 5:
                 parts.append(f"  … và {len(ev['new']) - 5} mục")
         if ev["completed"] and self.cfg.notify_completed:
-            parts.append(f"✅ <b>Tải xong {len(ev['completed'])}</b>")
-            parts += [f"  <code>{fmt.esc(it['shortId'])}</code> {fmt.esc(fmt.short(it.get('title'), 55))}"
-                      for it in ev["completed"][:8]]
+            parts.append(f"✅ <b>Tải xong {len(ev['completed'])}</b> (đã lưu trên máy tính)")
+            for n, it in enumerate(ev["completed"][:8], 1):
+                parts.append(f"  {n}. {fmt.esc(fmt.short(fmt.title_of(it), 55))}")
+                if n <= 4:
+                    rows.append([(f"📤 Gửi về điện thoại {n}", f"f:{it['shortId']}")])
             if len(ev["completed"]) > 8:
                 parts.append(f"  … và {len(ev['completed']) - 8} video")
         if ev["failed"] and self.cfg.notify_failed:
             parts.append(f"❌ <b>Lỗi {len(ev['failed'])}</b>")
-            for it in ev["failed"][:5]:
-                reason = fmt.short((it.get("error") or "").split("\n")[0], 110)
-                parts.append(f"  <code>{fmt.esc(it['shortId'])}</code> {fmt.esc(fmt.short(it.get('title'), 45))}"
-                             f"\n    <i>{fmt.esc(reason)}</i>")
-                rows.append([(f"🔁 Thử lại {it['shortId']}", f"qa:{it['shortId']}:retry:failed:0")])
+            for n, it in enumerate(ev["failed"][:5], 1):
+                reason = fmt.first_line(it.get("error"), 110)
+                parts.append(f"  {n}. {fmt.esc(fmt.short(fmt.title_of(it), 45))}\n    <i>{fmt.esc(reason)}</i>")
+                rows.append([(f"🔁 Thử lại {n}", f"qa:{it['shortId']}:retry:failed:0"),
+                             (f"ℹ️ Xem lỗi {n}", f"qi:{it['shortId']}:failed:0")])
             rows.append([("❌ Xem tất cả lỗi", "q:failed:0"), ("🔁 Thử lại hết", "b:retry_failed")])
         if ev["skipped"] and self.cfg.notify_failed:
             parts.append(f"⏭ <b>Bỏ qua {len(ev['skipped'])}</b> (video live/chờ live)")
         if parts:
-            self._notify("\n".join(parts), _kb(rows[:6]) if rows else None)
+            self._notify("\n".join(parts), _kb(rows[:12]) if rows else None)
 
     def _maybe_cookie_alert(self, it: dict) -> None:
         err = (it.get("error") or "").lower()

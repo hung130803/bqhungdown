@@ -438,7 +438,64 @@ class RouterTests(NoNetworkCase):
         self.run_task(task)
         body = [b for m, p, b in app.requests if p == "/api/enqueue"][0]
         self.assertEqual(body["urls"], ["https://youtu.be/a", "https://youtu.be/b"])
-        self.assertIn("Đã thêm", tg.texts()[-1])
+        self.assertIn("Đang tải", tg.texts()[-1])
+        self.assertIn("Lưu trên máy tính", tg.texts()[-1])
+
+    def test_sent_link_message_updates_itself_until_done(self):
+        """Gửi link → 1 tin TỰ CẬP NHẬT tới khi xong, có nút gửi về điện thoại;
+        không gửi thêm tin 'tải xong' trùng."""
+        tg = FakeTG()
+        state = {"s": "queued"}
+        app = FakeApp({
+            "/api/enqueue": {"ok": True, "added": 1, "folder": "D:\\Video",
+                             "items": [{"shortId": "v1", "title": "https://youtu.be/a", "state": "queued"}]},
+            "/api/queue": lambda _b: {"ok": True, "items": [
+                {"shortId": "v1", "title": "Phim hay", "state": state["s"], "percent": 40.0,
+                 "outputPath": "D:\\Video\\Phim hay.mp4"}]},
+            "/api/cookies": {"ok": True, "sites": []}, "/api/watch": {"ok": True, "items": []}})
+        mon = Monitor(tg, app, cfg())
+        r = Router(tg, app, cfg(), mon)
+        mon.tick()  # mốc
+        self.run_task(r.route_message({"chat": {"id": CHAT}, "text": "https://youtu.be/a"}))
+        self.assertIn("đang lấy tên video", tg.texts()[-1], "chưa có tên thì không hiện link thô")
+        sent_mid = tg._mid
+        state["s"] = "downloading"
+        mon.tick()
+        self.assertEqual(tg.calls[-1][0], "edit")
+        self.assertEqual(tg.calls[-1][4], sent_mid)
+        self.assertIn("40%", tg.calls[-1][2])
+        state["s"] = "completed"
+        mon.tick()
+        last = tg.calls[-1]
+        self.assertEqual((last[0], last[4]), ("edit", sent_mid))
+        self.assertIn("Xong", last[2])
+        buttons = [b["callback_data"] for row in last[3]["inline_keyboard"] for b in row]
+        self.assertIn("f:v1", buttons)
+        self.assertEqual(sum(1 for c in tg.calls if c[0] == "send"), 1, "không gửi thêm tin trùng")
+        mon.tick()
+        self.assertEqual(tg.calls[-1], last, "xong rồi thì thôi theo dõi")
+
+    def test_item_and_channel_detail_screens(self):
+        tg = FakeTG()
+        app = FakeApp({
+            "/api/queue": {"ok": True, "items": [{"shortId": "q1", "title": "Video A", "state": "failed",
+                                                  "error": "⚠️ Tải thất bại. Sửa lỗi tải ngay"}], "total": 1},
+            "/api/watch": {"ok": True, "items": [{"id": "c1", "title": "Kênh X", "enabled": True,
+                                                  "lastError": "lỗi quét", "dailyLimit": 1}]}})
+        r = Router(tg, app, cfg())
+        cb = {"id": "c", "message": {"chat": {"id": CHAT}, "message_id": 5}}
+        self.run_task(r.route_callback({**cb, "data": "q:failed:0"}))
+        labels = [b["text"] for row in tg.calls[-1][3]["inline_keyboard"] for b in row]
+        self.assertTrue(any("Video A" in t for t in labels), "nút mang tên video, không phải mã")
+        self.run_task(r.route_callback({**cb, "data": "qi:q1:failed:0"}))
+        labels = [b["text"] for row in tg.calls[-1][3]["inline_keyboard"] for b in row]
+        self.assertIn("🔁 Thử lại", labels)
+        self.assertIn("🔧 Sửa lỗi tải ngay", labels)
+        self.run_task(r.route_callback({**cb, "data": "wi:c1:a:0"}))
+        labels = [b["text"] for row in tg.calls[-1][3]["inline_keyboard"] for b in row]
+        self.assertIn("🔄 Quét ngay", labels)
+        self.assertIn("⏸ Tắt theo dõi", labels)
+        self.assertIn("lỗi quét", tg.calls[-1][2])
 
     def test_audio_command(self):
         tg = FakeTG()
@@ -519,8 +576,11 @@ class RouterTests(NoNetworkCase):
             {"shortId": "bad1", "title": "Hong", "status": "failed"}]}})
         r = Router(tg, app, cfg())
         self.run_task(r.route_message({"chat": {"id": CHAT}, "text": "/history"}))
-        self.assertIn("ok1", tg.texts()[-1])
-        self.assertNotIn("bad1", tg.texts()[-1])
+        self.assertIn("Xong", tg.texts()[-1])
+        self.assertNotIn("Hong", tg.texts()[-1])
+        buttons = [b["callback_data"] for row in tg.calls[-1][3]["inline_keyboard"] for b in row]
+        self.assertIn("f:ok1", buttons)
+        self.assertNotIn("f:bad1", buttons)
 
     def test_callback_data_fits_telegram_limit(self):
         tg = FakeTG()
