@@ -48,3 +48,6 @@
   `handlers.py` (xem `telegram-bot/README.md`). `COOKIE_SITES` phải khớp ở
   `control_api.rs`, `handlers.py` và `SITE_COOKIE_SLOTS` (SettingsPage.tsx).
   Test bot: `cd telegram-bot && python -m unittest discover -s tests`.
+  App tự bật bot (`bot_launcher.rs`, đọc `<config>/telegram_bot.json` do bot tự
+  ghi) và bot mở được app từ xa (`/openapp`). Chỉ 1 bot chạy (khoá
+  `logs/bot.lock`, mã thoát 4) — 2 bot cùng token bị Telegram báo 409.

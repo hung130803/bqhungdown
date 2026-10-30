@@ -31,6 +31,8 @@ class Config:
     notify_new: bool = True
     # Bot API thường chỉ gửi được file ≤ 50 MB.
     max_send_file_mb: int = 49
+    # Đường dẫn app để nút "Mở app" bấm từ điện thoại; trống = tự tìm bản cài.
+    app_exe: str | None = None
     workers: int = 3
 
 

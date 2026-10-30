@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from . import compress, fmt
+from . import compress, fmt, launcher
 from .app_client import AppClient, AppError, AppOffline
 from .dispatcher import Dispatcher, Task
 
@@ -52,6 +52,7 @@ BOT_COMMANDS = [
     ("board", "Bảng theo dõi tự cập nhật"),
     ("settings", "Cài đặt nhanh"),
     ("fix", "Sửa lỗi bộ tải (cập nhật yt-dlp)"),
+    ("openapp", "Mở app trên máy tính (khi app đang tắt)"),
     ("help", "Hướng dẫn"),
 ]
 
@@ -120,6 +121,7 @@ class Router:
             "settings": (self._cmd_settings, True),
             "fix": (self._cmd_fix, True),
             "id": (self._cmd_id, False),
+            "openapp": (self._cmd_openapp, True),
         }
 
     # ───────────────────────── định tuyến ─────────────────────────
@@ -166,6 +168,7 @@ class Router:
             "ck": self._cb_cookies, "cs": self._cb_cookie_set, "s": self._cb_settings, "sa": self._cb_set_auto,
             "sc": self._cb_set_conc, "si": self._cb_set_interval, "fx": self._cb_fix, "bd": self._cb_board,
             "bx": self._cb_board_stop, "h": self._cb_history, "f": self._cb_file, "x": self._cb_noop,
+            "oa": self._cb_openapp,
         }.get(verb)
         if not handler:
             return None
@@ -193,8 +196,10 @@ class Router:
     def _guard(self, chat_id: int, mid: int | None, fn: Callable[[], None]) -> None:
         try:
             fn()
-        except AppOffline as e:
-            self._show(chat_id, mid, f"⚠️ {fmt.esc(e)}", kb([[("🔄 Thử lại", "st"), HOME]]))
+        except AppOffline:
+            self._show(chat_id, mid, "⚠️ <b>App BQHungDown trên máy tính đang tắt.</b>\n"
+                                     "Bấm <b>▶ Mở app</b> để bật app từ xa (máy tính phải đang mở).",
+                       kb([[("▶ Mở app trên máy tính", "oa")], [("🔄 Thử lại", "st"), HOME]]))
         except AppError as e:
             self._show(chat_id, mid, f"❌ {fmt.esc(e)}", kb([[HOME]]))
 
@@ -706,6 +711,43 @@ class Router:
             self._job(f"gửi file {sid}",
                       lambda: self.tg.send_file(chat_id, path, fmt.esc(fmt.short(title, 200)), as_video), done)
         self._guard(chat_id, mid, go)
+
+    # ───────────────────────── mở app từ xa ─────────────────────────
+    def _cmd_openapp(self, chat_id: int, _arg: str) -> None:
+        self._cb_openapp(chat_id, None, [])
+
+    def _cb_openapp(self, chat_id: int, mid: int | None, _args: list[str],
+                    wait_s: float = 45, sleep: Callable[[float], None] = time.sleep) -> None:
+        """Bật app trên máy tính từ điện thoại, chờ cổng điều khiển lên rồi báo."""
+        try:
+            self.app.ping()
+            self._show(chat_id, mid, "✅ App đang chạy rồi.", main_menu())
+            return
+        except (AppOffline, AppError):
+            pass
+        exe = launcher.find_app(self.cfg.app_exe)
+        if not exe:
+            self._show(chat_id, mid, "❌ Không tìm thấy app BQHungDown trên máy tính. "
+                                     "Điền <code>app_exe</code> trong config.json của bot.", kb([[HOME]]))
+            return
+        try:
+            launcher.open_app(exe)
+        except OSError as e:
+            self._show(chat_id, mid, f"❌ Không mở được app: {fmt.esc(e)}", kb([[HOME]]))
+            return
+        self._show(chat_id, mid, "⏳ Đang mở app trên máy tính…")
+        waited = 0.0
+        while waited < wait_s:
+            sleep(1.5)
+            waited += 1.5
+            try:
+                self.app.ping()
+                self._show(chat_id, mid, "✅ <b>Đã mở app</b> trên máy tính — dùng bình thường được rồi.", main_menu())
+                return
+            except (AppOffline, AppError):
+                continue
+        self._show(chat_id, mid, "⚠️ Đã gửi lệnh mở app nhưng app chưa trả lời sau 45 giây. "
+                                 "Thử lại sau ít phút.", kb([[("🔄 Kiểm tra", "st"), ("▶ Mở lại", "oa")]]))
 
     def _send_compressed(self, chat_id: int, path: str, title: str, mb: float) -> None:
         """File quá 50 MB (giới hạn Telegram cho bot): nén thành bản xem thử rồi gửi.

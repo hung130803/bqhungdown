@@ -35,6 +35,7 @@ pub mod bookmarks_store;
 pub mod queue;
 pub mod commands;
 pub mod control_api;
+pub mod bot_launcher;
 
 use std::sync::Arc;
 
@@ -283,6 +284,9 @@ pub fn run() {
                 let cfg = crate::control_api::load_or_create_config(&config_dir);
                 crate::control_api::spawn(handle.clone(), cfg);
             }
+            // Bot Telegram đã đăng ký (bot chạy lần đầu tự ghi) → app tự bật
+            // bot chạy ngầm + bật lại nếu văng. Chưa đăng ký thì không làm gì.
+            crate::bot_launcher::spawn_supervisor(config_dir.clone());
 
             // System tray: lets the app keep running in the background (so it
             // resumes rate-limited downloads) after the window is closed.
