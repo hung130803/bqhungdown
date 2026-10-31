@@ -208,7 +208,8 @@ class Router:
             "b": self._cb_bulk, "bc": self._cb_bulk_confirm, "w": self._cb_watch, "wc": self._cb_watch_check,
             "wq": self._cb_watch_check_group, "wm": self._cb_watch_more, "we": self._cb_watch_enable,
             "wgm": self._cb_group_more_confirm, "wgx": self._cb_group_more,
-            "ck": self._cb_cookies, "cs": self._cb_cookie_set, "s": self._cb_settings, "sa": self._cb_set_auto,
+            "ck": self._cb_cookies, "cs": self._cb_cookie_set, "cf": self._cb_cookie_firefox,
+            "cfo": self._cb_open_firefox, "s": self._cb_settings, "sa": self._cb_set_auto,
             "sc": self._cb_set_conc, "si": self._cb_set_interval, "fx": self._cb_fix, "bd": self._cb_board,
             "bx": self._cb_board_stop, "h": self._cb_history, "f": self._cb_file, "x": self._cb_noop,
             "oa": self._cb_openapp, "qx": self._cb_closeapp, "qf": self._cb_force_close,
@@ -677,8 +678,39 @@ class Router:
     def _cb_cookies(self, chat_id: int, mid: int | None, _args: list[str]) -> None:
         def go():
             self.app.cache.clear("cookies")
-            self._show(chat_id, mid, fmt.cookies_text(self.app.cookies()), kb([[("🔄 Làm mới", "ck"), HOME]]))
+            data = self.app.cookies()
+            yt = next((s for s in data.get("sites", []) if s.get("site") == "youtube"), {})
+            rows = []
+            if yt.get("browser") != "firefox":
+                rows.append([("🦊 YouTube tự lấy từ Firefox (khỏi xuất file)", "cf:youtube")])
+            rows.append([("🦊 Mở Firefox để đăng nhập YouTube", "cfo")])
+            rows.append([("🔄 Làm mới", "ck"), HOME])
+            self._show(chat_id, mid, fmt.cookies_text(data), kb(rows))
         self._guard(chat_id, mid, go)
+
+    def _cb_cookie_firefox(self, chat_id: int, mid: int | None, args: list[str]) -> None:
+        """Ô cookie của trang → lấy THẲNG từ Firefox mỗi lần tải: không cần xuất
+        file, không bao giờ cũ (miễn Firefox còn đăng nhập)."""
+        site = args[0] if args and args[0] in COOKIE_SITES else "youtube"
+
+        def go():
+            self.app.set_cookie_browser(site, "firefox")
+            self.app.cache.clear("cookies")
+            self._show(chat_id, mid,
+                       f"✅ <b>{fmt.esc(site)}</b> giờ <b>tự lấy cookie từ Firefox</b> mỗi lần tải — "
+                       "không cần gửi file cookie nữa.\n\n"
+                       "Việc duy nhất: <b>đăng nhập YouTube trên Firefox 1 lần</b> (tài khoản đã xác minh "
+                       "18+). Sau đó không cần mở Firefox khi tải; chỉ đừng đăng xuất.",
+                       kb([[("🦊 Mở Firefox để đăng nhập", "cfo")], [("🍪 Cookie", "ck"), HOME]]))
+        self._guard(chat_id, mid, go)
+
+    def _cb_open_firefox(self, chat_id: int, mid: int | None, _args: list[str]) -> None:
+        ok = launcher.open_firefox()
+        self._show(chat_id, mid,
+                   ("🦊 Đã mở Firefox trên máy tính ở trang đăng nhập YouTube. Đăng nhập xong là xong — "
+                    "app tự lấy cookie, không cần bấm gì thêm.") if ok else
+                   "❌ Không thấy Firefox trên máy tính. Cài Firefox (mozilla.org) rồi bấm lại.",
+                   kb([[("🍪 Cookie", "ck"), HOME]]))
 
     def _on_document(self, chat_id: int, msg: dict) -> None:
         doc = msg["document"]

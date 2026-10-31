@@ -812,10 +812,24 @@ async fn cookies_set(app: &AppHandle, site: &str, body: Value) -> ApiResult {
             COOKIE_SITES.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ")
         ))
     })?;
+    // Nguồn TỰ ĐỘNG: đọc thẳng cookie từ trình duyệt mỗi lần tải → không bao giờ
+    // cũ. Chỉ nhận Firefox: Chrome/Edge trên Windows bị khoá mã hoá (app-bound),
+    // yt-dlp xác nhận gần như hỏng vĩnh viễn (yt-dlp issue #10927).
+    if let Some(browser) = body.get("browser").and_then(|v| v.as_str()) {
+        if browser != "firefox" {
+            return Err(bad("Chỉ hỗ trợ lấy cookie tự động từ Firefox (Chrome/Edge trên Windows bị khoá mã hoá)."));
+        }
+        let settings = app.state::<Arc<SettingsStore>>();
+        let mut map = settings.get().site_cookies.clone();
+        map.insert(site.to_string(), SiteCookie { file: None, browser: Some(browser.to_string()) });
+        let patch = SettingsPatch { site_cookies: Some(map), ..Default::default() };
+        crate::commands::update_settings(patch, app.state(), app.state(), app.clone()).await?;
+        return Ok(json!({ "ok": true, "site": site, "browser": browser }));
+    }
     let content = body
         .get("content")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| bad("Thiếu nội dung file cookie ('content')"))?;
+        .ok_or_else(|| bad("Thiếu nội dung file cookie ('content') hoặc nguồn trình duyệt ('browser')"))?;
     let now = chrono::Utc::now().timestamp();
     let check = inspect_cookie_text(content, domains, now);
     if check.matching == 0 {

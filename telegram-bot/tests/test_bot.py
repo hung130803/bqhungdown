@@ -723,6 +723,30 @@ class RouterTests(NoNetworkCase):
         self.assertIn("đã thêm 1 video", tg.texts()[-1])
         self.assertIn("1 kênh hết video", tg.texts()[-1])
 
+    def test_cookie_firefox_auto_source(self):
+        tg = FakeTG()
+        app = FakeApp({"/api/cookies": {"ok": True, "sites": [{"site": "youtube", "label": "YouTube"}]},
+                       "/api/cookies/youtube": lambda b: {"ok": True, "site": "youtube", "browser": b["browser"]}})
+        r = Router(tg, app, cfg())
+        cb = {"id": "x", "message": {"chat": {"id": CHAT}, "message_id": 4}}
+        self.run_task(r.route_callback({**cb, "data": "ck"}))
+        buttons = [b["callback_data"] for row in tg.calls[-1][3]["inline_keyboard"] for b in row]
+        self.assertIn("cf:youtube", buttons)
+        self.run_task(r.route_callback({**cb, "data": "cf:youtube"}))
+        self.assertIn(("POST", "/api/cookies/youtube", {"browser": "firefox"}), app.requests)
+        self.assertIn("tự lấy cookie từ Firefox", tg.texts()[-1])
+        with mock.patch("bqbot.launcher.open_firefox", return_value=True) as op:
+            self.run_task(r.route_callback({**cb, "data": "cfo"}))
+            op.assert_called_once()
+
+    def test_cookie_alert_for_firefox_says_login_again(self):
+        tg = FakeTG()
+        app = FakeApp({"/api/cookies": {"ok": True, "sites": [{"site": "youtube", "browser": "firefox"}]}})
+        m = Monitor(tg, app, cfg())
+        m._maybe_cookie_alert({"extractor": "youtube",
+                               "error": "🍪 x\n(Chi tiết kỹ thuật: ERROR: Sign in to confirm your age)"})
+        self.assertIn("Firefox chưa đăng nhập", tg.texts()[-1])
+
     def test_history_shows_only_completed(self):
         tg = FakeTG()
         app = FakeApp({"/api/history": {"ok": True, "items": [

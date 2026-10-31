@@ -87,6 +87,29 @@ def open_app(exe: str) -> None:
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+YOUTUBE_LOGIN_URL = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/"
+
+
+def find_firefox() -> str | None:
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"), os.environ.get("LOCALAPPDATA")):
+        if base:
+            p = Path(base) / "Mozilla Firefox" / "firefox.exe"
+            if p.is_file():
+                return str(p)
+    return None
+
+
+def open_firefox(url: str = YOUTUBE_LOGIN_URL) -> bool:
+    """Mở Firefox trên máy tính ở trang đăng nhập YouTube (người dùng tự đăng nhập)."""
+    import subprocess
+    exe = find_firefox()
+    if not exe:
+        return False
+    subprocess.Popen([exe, url], close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, creationflags=0x00000008 if os.name == "nt" else 0)
+    return True
+
+
 def force_kill_app() -> bool:
     """Buộc tắt app (chỉ dùng khi app treo / bản cũ không có lệnh đóng êm)."""
     import subprocess

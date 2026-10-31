@@ -310,6 +310,18 @@ class Monitor:
         if now - self._cookie_alert.get(site, -COOKIE_ALERT_EVERY) < COOKIE_ALERT_EVERY:
             return
         self._cookie_alert[site] = now
+        browser = None
+        try:
+            browser = next((s.get("browser") for s in self.app.cookies().get("sites", [])
+                            if s.get("site") == site), None)
+        except (AppOffline, AppError):
+            pass
+        if browser == "firefox":
+            # Ô lấy cookie tự động từ Firefox → lỗi đăng nhập = Firefox đã đăng xuất.
+            self._notify(f"🦊 <b>Firefox chưa đăng nhập {fmt.esc(site)}</b> (hoặc đã đăng xuất) — video cần "
+                         "đăng nhập (giới hạn tuổi…) chưa tải được. Đăng nhập lại trên Firefox là app tự lấy.",
+                         _kb([[("🦊 Mở Firefox để đăng nhập", "cfo")]]))
+            return
         self._notify(f"🍪 <b>Cookie {fmt.esc(site)} có vẻ đã hỏng/hết hạn</b> — "
                      f"gửi file cookies.txt mới vào đây (chú thích: <code>{fmt.esc(site)}</code>).",
                      _kb([[("🍪 Xem cookie", "ck")]]))

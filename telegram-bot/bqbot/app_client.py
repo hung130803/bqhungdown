@@ -166,6 +166,10 @@ class AppClient:
     def set_cookie(self, site: str, content: str) -> dict:
         return self.post(f"/api/cookies/{site}", {"content": content})
 
+    def set_cookie_browser(self, site: str, browser: str = "firefox") -> dict:
+        """Ô cookie của trang lấy THẲNG từ trình duyệt mỗi lần tải (không cần file)."""
+        return self.post(f"/api/cookies/{site}", {"browser": browser})
+
     def settings(self, **patch: Any) -> dict:
         return self.post("/api/settings", patch)
 
