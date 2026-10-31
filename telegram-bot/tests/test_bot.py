@@ -668,6 +668,43 @@ class RouterTests(NoNetworkCase):
             self.assertEqual(r.send_welcome_once(state), 0, "khởi động lại bot không gửi lại")
         self.assertEqual(sum(1 for c in tg.calls if c[0] == "send"), 2)
 
+    def test_close_app_asks_then_closes_quietly(self):
+        tg = FakeTG()
+        app = FakeApp({"/api/status": {**STATUS, "counts": {"downloading": 2, "queued": 1}},
+                       "/api/app/quit": {"ok": True, "quitting": True, "activeDownloads": 3}})
+        mon = Monitor(tg, app, cfg())
+        r = Router(tg, app, cfg(), mon)
+        self.run_task(r.route_message({"chat": {"id": CHAT}, "text": "⏹ Đóng app"}))
+        self.assertIn("Đóng app trên máy tính?", tg.texts()[-1])
+        self.assertIn("<b>3</b>", tg.texts()[-1], "báo số video đang tải sẽ bị dừng")
+        self.assertEqual([p for _, p, _ in app.requests if p == "/api/app/quit"], [], "chưa xác nhận thì chưa đóng")
+
+        calls = {"n": 0}
+        orig = app._fake
+
+        def fake(method, path, body, timeout):
+            if path == "/api/ping":
+                calls["n"] += 1
+                raise AppOffline("tắt")  # app đã tắt sau lệnh đóng
+            return orig(method, path, body, timeout)
+        app._transport = fake
+        mon._online = True
+        r._cb_closeapp(CHAT, 7, [], sleep=lambda s: None)
+        self.assertIn(("POST", "/api/app/quit", {}), app.requests)
+        self.assertIn("Đã đóng app", tg.texts()[-1])
+        app.offline = True
+        n = len(tg.texts())
+        mon.tick()
+        self.assertEqual(len(tg.texts()), n, "chủ động đóng thì không báo 'app đã tắt' trùng")
+
+    def test_close_app_on_old_app_offers_force(self):
+        tg = FakeTG()
+        app = FakeApp({"/api/app/quit": {"ok": False, "error": "Không có lệnh POST /api/app/quit"}})
+        r = Router(tg, app, cfg())
+        r._cb_closeapp(CHAT, 7, [], sleep=lambda s: None)
+        buttons = [b["callback_data"] for row in tg.calls[-1][3]["inline_keyboard"] for b in row]
+        self.assertIn("qf", buttons)
+
     def test_history_shows_only_completed(self):
         tg = FakeTG()
         app = FakeApp({"/api/history": {"ok": True, "items": [

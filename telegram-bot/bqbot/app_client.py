@@ -169,5 +169,8 @@ class AppClient:
     def settings(self, **patch: Any) -> dict:
         return self.post("/api/settings", patch)
 
+    def quit_app(self) -> dict:
+        return self.post("/api/app/quit", timeout=15)
+
     def fix_engine(self) -> dict:
         return self.post("/api/engine/fix", timeout=600)

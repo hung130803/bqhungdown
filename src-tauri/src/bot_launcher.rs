@@ -2,11 +2,13 @@
 //!
 //! Bot (`telegram-bot/`, Python) chạy lần đầu sẽ ghi `<config>/telegram_bot.json`
 //! (thư mục bot + pythonw.exe). Từ đó mỗi lần mở app, app bật bot chạy NGẦM
-//! (không cửa sổ) và canh: bot văng thì bật lại sau 15 giây.
+//! (không cửa sổ) và CANH SUỐT ĐỜI APP: cứ `CHECK_EVERY` xem khoá
+//! `<bot>/logs/bot.lock` — còn ai giữ khoá = bot đang sống (dù do app, do
+//! run-bot.bat hay do lần mở app trước bật); khoá trống = bot đã chết → bật lại.
 //!
-//! Bot tự giữ khoá "chỉ 1 bản" — đã có bot chạy (bật tay bằng run-bot.bat)
-//! thì bản app bật thoát ngay với mã 4 → app thôi, không bật lại vòng vòng.
-//! Mã 3 = lỗi cấu hình (thiếu/sai token) → cũng thôi, chờ người dùng sửa.
+//! LỖI CŨ (31/10/2026): thấy "đã có bot" (mã 4) là app THÔI canh luôn → bot
+//! đó văng sau (máy ngủ dậy, phiên terminal đóng…) thì không ai bật lại.
+//! Mã 3 = lỗi cấu hình (thiếu/sai token) → thử lại thưa (5 phút), chờ người dùng sửa.
 //! Tắt tự bật: sửa `"enabled": false` trong telegram_bot.json.
 //!
 //! Tắt app KHÔNG tắt bot — bot còn chạy để báo "app đã tắt" lên Telegram.
@@ -21,6 +23,8 @@ const EXIT_CONFIG_ERROR: i32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(15);
 /// Văng liên tục (vd máy mất mạng lúc khởi động bot) thì nghỉ lâu hơn.
 const MAX_RESTART_DELAY: Duration = Duration::from_secs(300);
+/// Nhịp kiểm tra bot còn sống (đọc khoá file — gần như không tốn gì).
+const CHECK_EVERY: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct BotRegistration {
@@ -49,18 +53,39 @@ pub fn read_registration(config_dir: &Path) -> Option<BotRegistration> {
     Some(reg)
 }
 
-/// Quyết định sau khi bot thoát: Some(chờ bao lâu rồi bật lại) / None = thôi.
-fn next_delay(exit_code: Option<i32>, prev: Duration, ran_for: Duration) -> Option<Duration> {
+/// Chờ bao lâu rồi xét lại sau khi bot (do app bật) thoát. App KHÔNG bao giờ
+/// thôi canh — chỉ giãn nhịp.
+fn next_delay(exit_code: Option<i32>, prev: Duration, ran_for: Duration) -> Duration {
     match exit_code {
-        Some(EXIT_ALREADY_RUNNING) | Some(EXIT_CONFIG_ERROR) => None,
+        // Có bot khác đang chạy → quay về canh khoá theo nhịp thường.
+        Some(EXIT_ALREADY_RUNNING) => CHECK_EVERY,
+        // Sai/thiếu token: thử thưa, người dùng sửa config xong là tự lên.
+        Some(EXIT_CONFIG_ERROR) => MAX_RESTART_DELAY,
         _ => {
             // Chạy ổn được lâu rồi mới văng → bật lại nhanh; văng ngay → giãn dần.
             if ran_for > Duration::from_secs(600) {
-                Some(RESTART_DELAY)
+                RESTART_DELAY
             } else {
-                Some((prev * 2).clamp(RESTART_DELAY, MAX_RESTART_DELAY))
+                (prev * 2).clamp(RESTART_DELAY, MAX_RESTART_DELAY)
             }
         }
+    }
+}
+
+/// Bot còn sống không? Bot (Python) khoá byte đầu `logs/bot.lock` suốt đời
+/// tiến trình. Thử khoá cả file: được = không ai giữ = bot đã chết (nhả ngay).
+fn bot_alive(reg: &BotRegistration) -> bool {
+    let path = reg.dir.join("logs").join("bot.lock");
+    let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(&path) else {
+        return false; // chưa từng chạy / đã dọn
+    };
+    match f.try_lock() {
+        Ok(()) => {
+            let _ = f.unlock();
+            false
+        }
+        Err(std::fs::TryLockError::WouldBlock) => true,
+        Err(_) => false,
     }
 }
 
@@ -76,13 +101,22 @@ fn spawn_once(reg: &BotRegistration) -> std::io::Result<std::process::Child> {
     cmd.spawn()
 }
 
-/// Gọi 1 lần lúc mở app. Không có đăng ký → không làm gì.
+/// Gọi 1 lần lúc mở app; canh tới khi app tắt.
 pub fn spawn_supervisor(config_dir: PathBuf) {
     std::thread::spawn(move || {
         let mut delay = RESTART_DELAY;
         loop {
-            // Đọc lại mỗi vòng: người dùng tắt "enabled" / dời thư mục bot thì theo.
-            let Some(reg) = read_registration(&config_dir) else { return };
+            // Đọc lại mỗi vòng: người dùng tắt "enabled" / dời thư mục bot /
+            // bot đăng ký lần đầu sau khi app đã mở — đều theo được.
+            let Some(reg) = read_registration(&config_dir) else {
+                std::thread::sleep(CHECK_EVERY);
+                continue;
+            };
+            if bot_alive(&reg) {
+                delay = RESTART_DELAY;
+                std::thread::sleep(CHECK_EVERY);
+                continue;
+            }
             let started = std::time::Instant::now();
             let code = match spawn_once(&reg) {
                 Ok(mut child) => child.wait().ok().and_then(|s| s.code()),
@@ -91,13 +125,8 @@ pub fn spawn_supervisor(config_dir: PathBuf) {
                     None
                 }
             };
-            match next_delay(code, delay, started.elapsed()) {
-                Some(d) => {
-                    delay = d;
-                    std::thread::sleep(d);
-                }
-                None => return,
-            }
+            delay = next_delay(code, delay, started.elapsed());
+            std::thread::sleep(delay);
         }
     });
 }
@@ -129,13 +158,41 @@ mod tests {
     }
 
     #[test]
-    fn restart_policy() {
+    fn restart_policy_never_gives_up() {
         let s = Duration::from_secs(1);
-        assert_eq!(next_delay(Some(EXIT_ALREADY_RUNNING), RESTART_DELAY, s), None, "đã có bot → thôi");
-        assert_eq!(next_delay(Some(EXIT_CONFIG_ERROR), RESTART_DELAY, s), None, "sai cấu hình → thôi");
-        assert_eq!(next_delay(Some(1), RESTART_DELAY, s), Some(RESTART_DELAY * 2), "văng ngay → giãn dần");
-        assert_eq!(next_delay(Some(1), MAX_RESTART_DELAY, s), Some(MAX_RESTART_DELAY));
-        assert_eq!(next_delay(None, MAX_RESTART_DELAY, Duration::from_secs(3600)), Some(RESTART_DELAY),
+        assert_eq!(next_delay(Some(EXIT_ALREADY_RUNNING), RESTART_DELAY, s), CHECK_EVERY,
+                   "đã có bot → vẫn canh tiếp theo nhịp thường");
+        assert_eq!(next_delay(Some(EXIT_CONFIG_ERROR), RESTART_DELAY, s), MAX_RESTART_DELAY,
+                   "sai cấu hình → thử thưa, không bỏ hẳn");
+        assert_eq!(next_delay(Some(1), RESTART_DELAY, s), RESTART_DELAY * 2, "văng ngay → giãn dần");
+        assert_eq!(next_delay(Some(1), MAX_RESTART_DELAY, s), MAX_RESTART_DELAY);
+        assert_eq!(next_delay(None, MAX_RESTART_DELAY, Duration::from_secs(3600)), RESTART_DELAY,
                    "chạy lâu rồi mới văng → bật lại nhanh");
+    }
+
+    /// Khoá của bot Python (msvcrt.locking 1 byte) phải làm `bot_alive` trả true.
+    #[test]
+    fn detects_python_bot_lock() {
+        let dir = std::env::temp_dir().join(format!("bqd-botlock-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("logs")).unwrap();
+        let reg = BotRegistration { enabled: true, dir: dir.clone(), python: dir.clone(), script: "bot.py".into() };
+        assert!(!bot_alive(&reg), "chưa có file khoá → bot chưa chạy");
+        let lock = dir.join("logs").join("bot.lock");
+        std::fs::write(&lock, "").unwrap();
+        assert!(!bot_alive(&reg), "có file nhưng không ai giữ → bot đã chết");
+        let script = "import msvcrt,sys,time\nf=open(sys.argv[1],'a+');f.seek(0);msvcrt.locking(f.fileno(),msvcrt.LK_NBLCK,1)\nprint('LOCKED',flush=True);time.sleep(8)\n";
+        let py = std::process::Command::new("python").args(["-c", script]).arg(&lock)
+            .stdout(std::process::Stdio::piped()).spawn();
+        let Ok(mut child) = py else { return }; // máy không có Python → bỏ qua phần này
+        let mut out = child.stdout.take().unwrap();
+        let mut buf = [0u8; 6];
+        use std::io::Read;
+        if out.read_exact(&mut buf).is_ok() && &buf == b"LOCKED" {
+            assert!(bot_alive(&reg), "bot Python đang giữ khoá → còn sống");
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(!bot_alive(&reg), "bot tắt → khoá trống");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
