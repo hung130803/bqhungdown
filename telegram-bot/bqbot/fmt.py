@@ -348,18 +348,42 @@ def channel_line(c: dict) -> str:
             f" · quét {ago(c.get('lastChecked'))}")
 
 
-def cookies_text(data: dict, now: float | None = None) -> str:
-    lines = ["<b>🍪 Cookie theo trang</b>"]
-    for s in data.get("sites", []):
+def firefox_block(check, now_wall: float | None = None) -> list[str]:
+    """Khối YouTube-từ-Firefox: trạng thái THẬT từ lần kiểm tra gần nhất."""
+    lines = ["<b>▶️ YouTube</b> — 🦊 <b>TỰ ĐỘNG lấy cookie từ Firefox</b> mỗi lần tải"]
+    if check is None:
+        lines.append("⚪ Chưa kiểm tra — bấm <b>🧪 Kiểm tra ngay</b> (mất 10–30 giây).")
+        return lines
+    when = time.strftime("%H:%M %d/%m", time.localtime(check.at))
+    if check.status == "ok":
+        lines += ["🟢 <b>ĐANG HOẠT ĐỘNG</b> — Firefox đã đăng nhập, tải được cả video 18+.",
+                  f"<i>Kiểm tra lúc {when} · bot tự kiểm tra mỗi 6 giờ, hỏng là báo ngay.</i>",
+                  "✅ Anh <b>không cần làm gì</b>. Đừng đăng xuất YouTube trên Firefox là được."]
+    else:
+        lines += [f"🔴 <b>CHƯA DÙNG ĐƯỢC</b> — {esc(check.detail)}",
+                  f"<i>Kiểm tra lúc {when}.</i>",
+                  "👉 Bấm <b>🦊 Mở Firefox</b> → đăng nhập YouTube → bấm <b>🧪 Kiểm tra ngay</b>."]
+    return lines
+
+
+def cookies_text(data: dict, now: float | None = None, check=None) -> str:
+    lines = ["<b>🍪 Cookie</b>", ""]
+    sites = data.get("sites", [])
+    yt = next((s for s in sites if s.get("site") == "youtube"), None)
+    if yt and yt.get("browser") == "firefox":
+        lines += firefox_block(check) + ["", "<b>Trang khác</b> (chỉ cần khi tải video phải đăng nhập):"]
+    for s in sites:
         label = esc(s.get("label"))
         if s.get("browser"):
+            if s is yt and s.get("browser") == "firefox":
+                continue
             lines.append(f"🌐 {label}: lấy từ trình duyệt {esc(s['browser'])}")
             continue
         if not s.get("file"):
             lines.append(f"▫️ {label}: chưa đặt (dùng ô chung)")
             continue
         if not s.get("exists"):
-            lines.append(f"🔴 {label}: file không còn trên máy")
+            lines.append(f"🔴 {label}: file cookie đã bị xoá khỏi máy — gửi file mới nếu cần")
             continue
         dl = days_left(s.get("earliestExpiry"), now)
         if s.get("cookies") == 0:
@@ -371,8 +395,8 @@ def cookies_text(data: dict, now: float | None = None) -> str:
         else:
             state = "🟢 ổn" + (f" (còn {dl:.0f} ngày)" if dl is not None else "")
         lines.append(f"{state} — {label} · {s.get('cookies')} cookie")
-    lines += ["", "Đổi cookie: gửi file <b>cookies.txt</b> vào đây (ghi tên trang ở chú thích,"
-              " vd <code>youtube</code>, hoặc để bot tự nhận)."]
+    lines += ["", "<i>Trang khác: gửi file <b>cookies.txt</b> vào đây (ghi tên trang ở chú thích,"
+              " vd <code>douyin</code>, hoặc để bot tự nhận).</i>"]
     return "\n".join(lines)
 
 

@@ -24,6 +24,7 @@ from typing import Callable
 
 from . import fmt
 from .app_client import AppClient, AppError, AppOffline
+from .cookie_check import OK as CK_OK, CookieChecker
 
 log = logging.getLogger("bqbot.monitor")
 
@@ -38,6 +39,11 @@ NOT_COOKIE_HINTS = ("not a bot", "http error 403", "decompressing", "timed out",
 ACTIVE_OR_DONE = ("queued", "downloading", "completed", "failed", "skipped")
 COOKIE_EXPIRY_EVERY = 12 * 3600
 CHANNEL_ERR_EVERY = 600
+# Tự kiểm tra cookie YouTube lấy từ Firefox: lần đầu ~1 phút sau khi bot chạy,
+# sau đó mỗi 6 giờ. Hỏng → báo ngay; vẫn hỏng thì nhắc lại mỗi 24 giờ.
+FIREFOX_CHECK_FIRST = 60
+FIREFOX_CHECK_EVERY = 6 * 3600
+FIREFOX_REMIND_EVERY = 24 * 3600
 
 
 def _kb(rows):
@@ -54,6 +60,9 @@ class Monitor:
         # shortId do CHÍNH bot thêm (người dùng gửi link) → không báo "mục mới".
         self._own: dict[str, float] = {}
         self._own_lock = threading.Lock()
+        self.cookie_checker = CookieChecker()
+        self._ff_next = clock() + FIREFOX_CHECK_FIRST
+        self._ff_last_alert = float("-inf")
         self._online: bool | None = None
         self._boards: dict[int, int] = {}
         self._boards_lock = threading.Lock()
@@ -280,6 +289,40 @@ class Monitor:
         if now - self._last_channel_check >= CHANNEL_ERR_EVERY:
             self._last_channel_check = now
             self._check_channel_errors()
+        if now >= self._ff_next:
+            self._ff_next = now + FIREFOX_CHECK_EVERY
+            threading.Thread(target=self.firefox_check, name="kiem-cookie-firefox", daemon=True).start()
+
+    def firefox_check(self) -> None:
+        """Chạy ở luồng riêng (mất 5–30 giây). Chỉ khi ô YouTube đang lấy từ Firefox."""
+        try:
+            sites = self.app.cookies().get("sites", [])
+        except (AppOffline, AppError):
+            return
+        if not any(s.get("site") == "youtube" and s.get("browser") == "firefox" for s in sites):
+            return
+        prev = self.cookie_checker.latest()
+        res = self.cookie_checker.check_now()
+        if res is None:
+            return
+        log.info("Kiểm tra cookie Firefox: %s (%s)", res.status, res.detail)
+        self.report_firefox(res, prev)
+
+    def report_firefox(self, res, prev) -> None:
+        """Báo khi ĐỔI trạng thái (hỏng ↔ ổn); vẫn hỏng thì nhắc lại mỗi 24 giờ."""
+        now = self.clock()
+        was_ok = prev is None or prev.status == CK_OK
+        if res.status == CK_OK:
+            if prev is not None and prev.status != CK_OK:
+                self._notify("🟢 <b>Cookie YouTube đã hoạt động lại</b> — app tự lấy từ Firefox, "
+                             "tải được video 18+. Anh không cần làm gì thêm.")
+            return
+        if was_ok or now - self._ff_last_alert >= FIREFOX_REMIND_EVERY:
+            self._ff_last_alert = now
+            self._notify("🔴 <b>Cookie YouTube đang hỏng</b>\n" + fmt.esc(res.detail) +
+                         "\n\nVideo thường vẫn tải bình thường; chỉ video cần đăng nhập (18+…) bị lỗi.\n"
+                         "👉 Mở Firefox trên máy tính, đăng nhập YouTube, rồi bấm <b>🧪 Kiểm tra lại</b>.",
+                         _kb([[("🦊 Mở Firefox để đăng nhập", "cfo")], [("🧪 Kiểm tra lại", "ckt")]]))
 
     def _diff(self, items: list[dict]) -> None:
         cur = {it["shortId"]: it.get("state", "") for it in items}
@@ -404,7 +447,7 @@ class Monitor:
             # Ô lấy cookie tự động từ Firefox → lỗi đăng nhập = Firefox đã đăng xuất.
             self._notify(f"🦊 <b>Firefox chưa đăng nhập {fmt.esc(site)}</b> (hoặc đã đăng xuất) — video cần "
                          "đăng nhập (giới hạn tuổi…) chưa tải được. Đăng nhập lại trên Firefox là app tự lấy.",
-                         _kb([[("🦊 Mở Firefox để đăng nhập", "cfo")]]))
+                         _kb([[("🦊 Mở Firefox để đăng nhập", "cfo")], [("🧪 Kiểm tra lại", "ckt")]]))
             return
         self._notify(f"🍪 <b>Cookie {fmt.esc(site)} có vẻ đã hỏng/hết hạn</b> — "
                      f"gửi file cookies.txt mới vào đây (chú thích: <code>{fmt.esc(site)}</code>).",

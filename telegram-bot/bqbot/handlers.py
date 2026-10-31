@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from . import compress, fmt, launcher
 from .app_client import AppClient, AppError, AppOffline
+from .cookie_check import CookieChecker
 from .dispatcher import Dispatcher, Task
 
 log = logging.getLogger("bqbot.handlers")
@@ -137,6 +138,7 @@ class Router:
         self.dispatcher: Dispatcher | None = None
         self._pending_cookie: dict[str, tuple[float, str]] = {}
         self._pending_lock = threading.Lock()
+        self.cookie_checker = monitor.cookie_checker if monitor else CookieChecker()
         self._group_lock = threading.Lock()
         self._group_running: set[str] = set()
         self.commands: dict[str, tuple[Callable[[dict, str], None], bool]] = {
@@ -210,7 +212,7 @@ class Router:
             "b": self._cb_bulk, "bc": self._cb_bulk_confirm, "w": self._cb_watch, "wc": self._cb_watch_check,
             "wq": self._cb_watch_check_group, "wm": self._cb_watch_more, "we": self._cb_watch_enable,
             "wgm": self._cb_group_more_confirm, "wgx": self._cb_group_more,
-            "ck": self._cb_cookies, "cs": self._cb_cookie_set, "cf": self._cb_cookie_firefox,
+            "ck": self._cb_cookies, "ckt": self._cb_cookie_test, "cs": self._cb_cookie_set, "cf": self._cb_cookie_firefox,
             "cfo": self._cb_open_firefox, "s": self._cb_settings, "sa": self._cb_set_auto,
             "sc": self._cb_set_conc, "si": self._cb_set_interval, "fx": self._cb_fix, "bd": self._cb_board,
             "bx": self._cb_board_stop, "h": self._cb_history, "f": self._cb_file, "x": self._cb_noop,
@@ -701,10 +703,30 @@ class Router:
             rows = []
             if yt.get("browser") != "firefox":
                 rows.append([("🦊 YouTube tự lấy từ Firefox (khỏi xuất file)", "cf:youtube")])
-            rows.append([("🦊 Mở Firefox để đăng nhập YouTube", "cfo")])
+            else:
+                rows.append([("🧪 Kiểm tra ngay", "ckt"), ("🦊 Mở Firefox", "cfo")])
             rows.append([("🔄 Làm mới", "ck"), HOME])
-            self._show(chat_id, mid, fmt.cookies_text(data), kb(rows))
+            self._show(chat_id, mid, fmt.cookies_text(data, check=self.cookie_checker.latest()), kb(rows))
         self._guard(chat_id, mid, go)
+
+    def _cb_cookie_test(self, chat_id: int, mid: int | None, _args: list[str]) -> None:
+        """Kiểm tra THẬT: bộ tải của app lấy cookie Firefox thử 1 video 18+."""
+        self._show(chat_id, mid, "🧪 <b>Đang kiểm tra cookie YouTube từ Firefox…</b>\n"
+                                 "<i>Thử lấy 1 video giới hạn tuổi, mất 10–30 giây.</i>")
+
+        def work():
+            res = self.cookie_checker.check_now()
+            # Có lượt kiểm tra tự động đang chạy → đợi nó xong rồi dùng kết quả đó.
+            while res is None:
+                time.sleep(1)
+                res = self.cookie_checker.check_now()
+            return res
+
+        def done(_res: Any, _err: BaseException | None) -> None:
+            # Kết quả nằm trong cookie_checker (dùng chung với monitor) → màn
+            # Cookie hiện ngay; lần tự kiểm tra sau so với kết quả này, không báo trùng.
+            self._cb_cookies(chat_id, mid, [])
+        self._job("kiểm tra cookie Firefox", work, done)
 
     def _cb_cookie_firefox(self, chat_id: int, mid: int | None, args: list[str]) -> None:
         """Ô cookie của trang → lấy THẲNG từ Firefox mỗi lần tải: không cần xuất
@@ -725,10 +747,10 @@ class Router:
     def _cb_open_firefox(self, chat_id: int, mid: int | None, _args: list[str]) -> None:
         ok = launcher.open_firefox()
         self._show(chat_id, mid,
-                   ("🦊 Đã mở Firefox trên máy tính ở trang đăng nhập YouTube. Đăng nhập xong là xong — "
-                    "app tự lấy cookie, không cần bấm gì thêm.") if ok else
+                   ("🦊 Đã mở Firefox trên máy tính ở trang đăng nhập YouTube.\n"
+                    "Đăng nhập xong bấm <b>🧪 Kiểm tra ngay</b> để chắc chắn app đã lấy được.") if ok else
                    "❌ Không thấy Firefox trên máy tính. Cài Firefox (mozilla.org) rồi bấm lại.",
-                   kb([[("🍪 Cookie", "ck"), HOME]]))
+                   kb([[("🧪 Kiểm tra ngay", "ckt")], [("🍪 Cookie", "ck"), HOME]]))
 
     def _on_document(self, chat_id: int, msg: dict) -> None:
         doc = msg["document"]
