@@ -26,6 +26,11 @@ from .app_client import AppClient, AppError, AppOffline
 log = logging.getLogger("bqbot.monitor")
 
 COOKIE_ALERT_EVERY = 3600
+# Dấu hiệu lỗi ĐĂNG NHẬP thật (khớp error.rs::is_login_related) — chỉ những lỗi
+# này mới đáng nhắc thay cookie.
+LOGIN_ERROR_HINTS = ("sign in", "log in", "login", "confirm your age", "age-restricted",
+                     "members-only", "join this channel", "private video", "use --cookies",
+                     "http error 403", "cookie cần nạp lại")
 # Mục đổi sang các trạng thái này thì vào đợt tải (kể cả mục có từ trước khi bot bật).
 ACTIVE_OR_DONE = ("queued", "downloading", "completed", "failed", "skipped")
 COOKIE_EXPIRY_EVERY = 12 * 3600
@@ -295,6 +300,10 @@ class Monitor:
         # Chỉ lời báo CHÍNH XÁC về cookie của app (error.rs::friendly_reason_for)
         # — câu chặn-bot cũng nhắc "thêm cookie" nhưng không phải cookie hỏng.
         if not ("cookie cần nạp lại" in err or "no longer valid" in err or err.startswith("🍪")):
+            return
+        # …và lỗi gốc PHẢI là lỗi đăng nhập. App bản cũ gắn nhãn cookie cho cả lỗi
+        # mạng ("Error -3 while decompressing data") → bot từng bắt thay cookie oan.
+        if not any(k in err for k in LOGIN_ERROR_HINTS):
             return
         site = (it.get("extractor") or "").lower() or "chung"
         now = self.clock()

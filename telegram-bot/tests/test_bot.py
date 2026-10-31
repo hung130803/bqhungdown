@@ -813,6 +813,10 @@ class MonitorTests(NoNetworkCase):
         m = Monitor(tg, FakeApp(), cfg())
         m._maybe_cookie_alert({"extractor": "youtube", "error": "🚫 YouTube đang chặn tải… thêm cookie (Cài đặt → Cookie)"})
         self.assertEqual(tg.texts(), [])
+        # Lỗi mạng bị app cũ gắn nhãn cookie → KHÔNG nhắc thay cookie.
+        m._maybe_cookie_alert({"extractor": "youtube", "error": "🍪 Bộ tải báo phiên cookie YouTube…\n(Chi tiết kỹ thuật: "
+                                                                 "YouTube cookies are no longer valid. ERROR: Error -3 while decompressing data)"})
+        self.assertEqual(tg.texts(), [])
         m._maybe_cookie_alert({"extractor": "youtube", "error": "x\n👉 Cookie cần nạp lại là của trang YouTube"})
         self.assertIn("Cookie youtube", tg.texts()[-1])
         m._maybe_cookie_alert({"extractor": "youtube", "error": "👉 Cookie cần nạp lại"})

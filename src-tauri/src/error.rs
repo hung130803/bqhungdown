@@ -47,6 +47,21 @@ pub enum AppError {
 
 pub type AppResult<T> = Result<T, AppError>;
 
+/// Lỗi đòi ĐĂNG NHẬP / quyền tài khoản — chỉ những lỗi này mới có thể do cookie.
+pub fn is_login_related(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    l.contains("sign in")
+        || l.contains("log in")
+        || l.contains("login")
+        || l.contains("confirm your age")
+        || l.contains("age-restricted")
+        || l.contains("members-only")
+        || l.contains("join this channel")
+        || l.contains("private video")
+        || l.contains("use --cookies")
+        || l.contains("http error 403")
+}
+
 /// Authentication or account eligibility is required to view this video.
 pub fn is_age_restricted_error(msg: &str) -> bool {
     let l = msg.to_lowercase();
@@ -180,7 +195,11 @@ pub fn best_error_line(stderr: &str) -> String {
     if let Some(idx) = idx {
         // Dòng ERROR + các dòng sau nó (gợi ý VPN/proxy/cookie) — gộp lại, bỏ cảnh báo.
         let error = lines[idx..].iter().filter(|l| !is_warning(l)).copied().collect::<Vec<_>>().join(" ");
-        if cookie_expired {
+        // CHỈ gắn "cookie hết hạn" khi lỗi THẬT SỰ là lỗi đăng nhập. Cảnh báo
+        // "cookies are no longer valid" hiện ở RẤT nhiều lượt (YouTube xoay
+        // cookie liên tục) — gắn vào cả lỗi mạng ("Error -3 while decompressing
+        // data") là bắt người dùng thay cookie oan (lỗi thật 31/10/2026).
+        if cookie_expired && is_login_related(&error) {
             return format!("YouTube cookies are no longer valid. {error}");
         }
         return error;
@@ -718,6 +737,14 @@ mod warning_tests {
         // Không có dòng ERROR: không được lấy dòng WARNING làm lý do.
         let only_warn = "WARNING: retrying fragment, error 503\nkilled";
         assert!(!best_error_line(only_warn).contains("WARNING"));
+    }
+
+    #[test]
+    fn cookie_warning_not_blamed_for_network_errors() {
+        let stderr = "WARNING: [youtube] The provided YouTube account cookies are no longer valid. They have likely been rotated\nERROR: Error -3 while decompressing data: incorrect header check";
+        let line = best_error_line(stderr);
+        assert!(!line.contains("cookies are no longer valid"), "lỗi mạng không được đổ cho cookie");
+        assert!(!friendly_reason(&line).starts_with("🍪"));
     }
 
     #[test]
