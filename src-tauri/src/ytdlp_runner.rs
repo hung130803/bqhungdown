@@ -535,6 +535,7 @@ impl YtDlpRunner {
         const HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
         let child_pid = child.pid();
+        lower_download_priority(child_pid);
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
@@ -789,6 +790,49 @@ fn kill_process_tree(pid: u32) {
     #[cfg(not(windows))]
     {
         let _ = pid; // Unix: kill() của tauri-shell đủ (SIGKILL nhóm mặc định).
+    }
+}
+
+/// Hạ ưu tiên lượt tải xuống "chạy nền": CPU BELOW_NORMAL + I/O ổ đĩa LOW.
+/// Anh Hùng báo máy đơ khi tải: 5 lượt cùng ghi + ffmpeg ghép lên ổ HDD (D:)
+/// làm ổ bận 100%, hàng chờ ~5 → cả máy giật. Ưu tiên thấp = Windows cho
+/// phần mềm khác (trình duyệt, Zalo, Explorer) đi trước, tải chỉ dùng phần
+/// dư — tốc độ tải gần như không đổi vì nút thắt là mạng/ổ chứ không phải CPU.
+/// Gọi NGAY sau spawn, trước khi yt-dlp (PyInstaller) đẻ tiến trình con thật
+/// và ffmpeg: tiến trình con KẾ THỪA cả 2 mức (đã đo trên máy: con ra
+/// BelowNormal + IoPriority=1). Lỗi thì bỏ qua — tải vẫn chạy như cũ.
+fn lower_download_priority(pid: u32) {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+            fn SetPriorityClass(h: isize, class: u32) -> i32;
+            fn CloseHandle(h: isize) -> i32;
+        }
+        #[link(name = "ntdll")]
+        extern "system" {
+            fn NtSetInformationProcess(h: isize, class: u32, info: *const u32, len: u32) -> i32;
+        }
+        const PROCESS_SET_INFORMATION: u32 = 0x0200;
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x4000;
+        const PROCESS_IO_PRIORITY: u32 = 33;
+        const IO_PRIORITY_LOW: u32 = 1;
+        // SAFETY: FFI Win32 thuần; handle kiểm khác 0 và đóng ngay sau khi dùng.
+        unsafe {
+            let h = OpenProcess(PROCESS_SET_INFORMATION, 0, pid);
+            if h == 0 {
+                return;
+            }
+            SetPriorityClass(h, BELOW_NORMAL_PRIORITY_CLASS);
+            let io = IO_PRIORITY_LOW;
+            NtSetInformationProcess(h, PROCESS_IO_PRIORITY, &io, 4);
+            CloseHandle(h);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
     }
 }
 
