@@ -105,7 +105,9 @@ fn friendly_fetch_error(raw: &str) -> String {
                 loại sang Shorts, kênh trống thật thì tắt theo dõi."
             .into();
     }
-    if l.contains("private") || l.contains("members-only") {
+    // Câu authcheck của yt-dlp có chữ "private content" nhưng KHÔNG nói kênh
+    // riêng tư — để rơi xuống dòng lỗi gốc, đừng đoán.
+    if (l.contains("private") || l.contains("members-only")) && !l.contains("authcheck") {
         return "🔒 Kênh/nội dung này ở chế độ riêng tư hoặc chỉ dành cho thành viên.".into();
     }
     // Fallback: giữ dòng lỗi gốc để chẩn đoán.
@@ -780,8 +782,13 @@ async fn run_flat_fetch_attempt(
         // - approximate_date: ngày upload (đỡ phải probe per-video)
         // - approximate_view_count: view dạng round-off ("1.2M views")
         // Newer yt-dlp recognises both; older versions ignore safely.
+        // `skip=authcheck`: có cookie đăng nhập (Firefox) thì yt-dlp gặp kênh
+        // 404 lại báo "Playlists that require authentication… private content"
+        // → app xếp nhầm "riêng tư". Bỏ bước kiểm tra đó thì ra đúng "HTTP
+        // Error 404" (đo thật 31/10/2026, @LibertyPatrolMedia; kênh thường vẫn
+        // lấy đủ video).
         "--extractor-args".into(),
-        "youtubetab:approximate_date,approximate_view_count".into(),
+        "youtubetab:approximate_date,approximate_view_count;skip=authcheck".into(),
     ];
     if limit > 0 {
         args.push("--playlist-end".into());
@@ -1477,6 +1484,12 @@ mod tests {
         assert!(friendly_fetch_error("Không có video nào trên kênh").starts_with("📭"));
         assert!(friendly_fetch_error("ERROR: Sign in to confirm you're not a bot").starts_with("🤖"));
         assert!(friendly_fetch_error("HTTP Error 429: Too Many Requests").starts_with("⏳"));
+        // Câu authcheck (có cookie, kênh 404) KHÔNG được xếp "riêng tư".
+        let auth = friendly_fetch_error("ERROR: [youtube:tab] @LibertyPatrolMedia: Playlists that require \
+            authentication may not extract correctly without a successful webpage download. If you are not \
+            downloading private content, or your cookies are only for the first account and channel, pass \
+            \"--extractor-args youtubetab:skip=authcheck\" to skip this check");
+        assert!(!auth.starts_with("🔒"), "{auth}");
         let la = friendly_fetch_error("ERROR: something new");
         assert!(la.contains("something new"), "lỗi lạ phải giữ dòng gốc");
         // Mọi câu đều được nhận diện → watcher/commands KHÔNG bọc thành "Tải thất bại".
