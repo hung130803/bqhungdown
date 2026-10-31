@@ -188,7 +188,8 @@ def watch_result(action: str, res: dict | None, err: BaseException | None) -> st
     return "ℹ️ <b>Không có video mới</b> kể từ lần quét trước."
 
 
-ACTIVE_STATES = ("queued", "downloading")
+# "paused" = chưa xong (người dùng tạm dừng) — đợt tải chưa được coi là hoàn tất.
+ACTIVE_STATES = ("queued", "downloading", "paused")
 
 
 def batch_text(items: list[dict], started: str, finished: bool) -> str:
@@ -242,9 +243,18 @@ def today_count(c: dict, today: str | None = None) -> int:
     return int(c.get("dripCount") or 0) if c.get("dripDate") == today else 0
 
 
+def daily_limit(c: dict) -> int:
+    """Hạn mức/ngày như app thật dùng (watcher kẹp 1..3) — file cấu hình lạ
+    (0, 10, chữ) không làm bot hiện số khác với app."""
+    try:
+        return max(1, min(3, int(c.get("dailyLimit") or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
 def day_status(c: dict, today: str | None = None) -> str:
     """Chữ rõ nghĩa cho hạn mức ngày: 'đủ 1/1 hôm nay' / 'chưa tải 0/1'."""
-    n, lim = today_count(c, today), int(c.get("dailyLimit") or 1)
+    n, lim = today_count(c, today), daily_limit(c)
     if c.get("downloading"):
         return f"⬇️ đang tải {n}/{lim}"
     if n >= lim:
@@ -264,7 +274,7 @@ def channel_detail(c: dict) -> str:
         f"<b>📺 {name}</b>" + (f" [{esc(c['group'])}]" if c.get("group") else ""),
         f"Theo dõi: {'🟢 đang bật' if c.get('enabled') else '⏸ đang tắt'}"
         f" · tự tải: {'có' if c.get('autoDownload') else 'không'}",
-        f"Hôm nay: {day_status(c)} (hạn mức {c.get('dailyLimit', 1)} video/ngày, sang ngày mới tự về 0)",
+        f"Hôm nay: {day_status(c)} (hạn mức {daily_limit(c)} video/ngày, sang ngày mới tự về 0)",
         f"Lần quét gần nhất: {ago(c.get('lastChecked'))}"
         + (f" · {c['lastNewCount']} video mới" if c.get("lastNewCount") else ""),
         f"Đã làm: {c.get('done', 0)} video"

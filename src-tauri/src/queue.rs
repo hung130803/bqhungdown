@@ -1187,7 +1187,7 @@ impl QueueManager {
             let map = self.items.read().unwrap();
             map.get(&id).map(|it| it.request.url.clone()).unwrap_or_default()
         };
-        let friendly = crate::error::friendly_reason_for(&reason, &failed_url);
+        let friendly = crate::error::friendly_reason_with(&reason, &failed_url, &settings_snapshot);
         if is_bot {
             // YouTube vá kiểu chặn mới ở yt-dlp nightly trong vài giờ-vài ngày
             // → ép check update ngay (throttle 1h) để lần retry chạy binary mới.

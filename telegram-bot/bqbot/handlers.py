@@ -137,6 +137,8 @@ class Router:
         self.dispatcher: Dispatcher | None = None
         self._pending_cookie: dict[str, tuple[float, str]] = {}
         self._pending_lock = threading.Lock()
+        self._group_lock = threading.Lock()
+        self._group_running: set[str] = set()
         self.commands: dict[str, tuple[Callable[[dict, str], None], bool]] = {
             # tên: (hàm, nặng?)
             "start": (self._cmd_start, False),
@@ -221,6 +223,10 @@ class Router:
         # mất màn hình người dùng đang thao tác.
         if self.monitor and verb not in ("bx", "bd") and self.monitor.boards().get(chat_id) == mid:
             self.monitor.remove_board(chat_id)
+        # Tin đợt tải / tin link tự gửi vẫn đang được monitor TỰ SỬA → màn hình
+        # mới gửi thành tin riêng (mid=None), kẻo vài giây sau bị tiến độ đè mất.
+        if self.monitor and verb != "x" and self.monitor.is_live_message(chat_id, mid):
+            mid = None
         light = verb in ("m", "x")
         # Thao tác trên 1 mục/kênh: khoá theo đối tượng đó → bấm liên tục vẫn làm lần lượt.
         key = f"obj:{args[0]}" if verb in ("qa", "wc", "wm", "we") and args else f"chat:{chat_id}"
@@ -448,10 +454,9 @@ class Router:
 
     # ───────────────────────── kênh theo dõi ─────────────────────────
     def _groups(self) -> list[str]:
-        try:
-            return list(self.app.status().get("watch", {}).get("groups") or [])
-        except (AppError, AppOffline):
-            return []
+        # KHÔNG nuốt AppOffline/AppError: người gọi đều nằm trong _guard → báo
+        # đúng "app đang tắt" thay vì "không có nhóm" gây hiểu lầm.
+        return list(self.app.status().get("watch", {}).get("groups") or [])
 
     def _cmd_channels(self, chat_id: int, _arg: str) -> None:
         self._cb_watch(chat_id, None, ["a", "0"])
@@ -483,9 +488,9 @@ class Router:
             if n_err and flt != "e":
                 head += f" · 🔴 {n_err} lỗi"
             on = [c for c in items if c.get("enabled")]
-            done_today = sum(1 for c in on if fmt.today_count(c) >= int(c.get("dailyLimit") or 1))
+            done_today = sum(1 for c in on if fmt.today_count(c) >= fmt.daily_limit(c))
             lines = [head,
-                     f"Hôm nay: ✅ {done_today} kênh đã đủ · ⏳ {len(on) - done_today} kênh chưa tải",
+                     f"Hôm nay: ✅ {done_today} kênh đã đủ · ⏳ {len(on) - done_today} kênh chưa đủ",
                      "<i>Số trên nút = video đã tải HÔM NAY / hạn mức mỗi ngày (qua 0 giờ tự về 0).</i>",
                      f"<i>Trang {page_ + 1}/{pages} — bấm tên kênh để quét, tải thêm, bật/tắt.</i>"]
             if not chunk:
@@ -599,18 +604,25 @@ class Router:
     def _cb_group_more(self, chat_id: int, mid: int, args: list[str]) -> None:
         """Mỗi kênh bật trong nhóm: 'Tải thêm 1 video hôm nay' — lần lượt từng kênh
         (đỡ bị YouTube chặn), sửa 1 tin tiến độ, cuối cùng báo tổng kết."""
-        group = self._group_by_index(args[0] if args else "")
-        if group is None:
-            return
         try:
+            group = self._group_by_index(args[0] if args else "")
+            if group is None:
+                self._show(chat_id, mid, "Không thấy nhóm này nữa.", kb([[("📺 Kênh", "w:a:0")]]))
+                return
             chans = [c for c in self.app.watch(group=group).get("items", []) if c.get("enabled")]
         except (AppOffline, AppError) as e:
             self._show(chat_id, mid, f"⚠️ {fmt.esc(e)}", kb([[("▶ Mở app", "oa")]]))
             return
+        with self._group_lock:
+            if group in self._group_running:
+                self._show(chat_id, mid, f"⏳ Nhóm {fmt.esc(group)} đang được lấy thêm video rồi — đợi lượt đó xong.",
+                           kb([[("⬇️ Xem tiến độ", "q:active:0")]]))
+                return
+            self._group_running.add(group)
         self._show(chat_id, mid, f"➕ Đang lấy thêm video cho {len(chans)} kênh nhóm {fmt.esc(group)}… (0/{len(chans)})")
 
         def work() -> dict:
-            res = {"added": [], "empty": [], "error": []}
+            res = {"added": [], "empty": [], "error": [], "left": 0}
             for n, c in enumerate(chans, 1):
                 name = c.get("targetName") or c.get("title") or c["id"]
                 try:
@@ -619,6 +631,7 @@ class Router:
                 except (AppOffline, AppError) as e:
                     res["error"].append(f"{name}: {e}")
                     if isinstance(e, AppOffline):
+                        res["left"] = len(chans) - n  # app tắt giữa chừng
                         break
                 if n % 5 == 0 or n == len(chans):
                     try:
@@ -629,10 +642,15 @@ class Router:
             return res
 
         def done(res: Any, err: BaseException | None) -> None:
+            with self._group_lock:
+                self._group_running.discard(group)
             if err or not res:
                 self._show(chat_id, mid, f"❌ Lỗi: {fmt.esc(err)}", kb([[("📺 Kênh", "w:a:0")]]))
                 return
             lines = [f"✅ <b>Nhóm {fmt.esc(group)}: đã thêm {len(res['added'])} video</b> vào hàng đợi."]
+            if res.get("left"):
+                lines.append(f"⚠️ App tắt giữa chừng — còn <b>{res['left']} kênh</b> chưa làm. "
+                             "Mở app rồi bấm lại nút nhóm (kênh đã làm sẽ được tính đúng).")
             if res["empty"]:
                 lines.append(f"ℹ️ {len(res['empty'])} kênh hết video chưa tải: " +
                              fmt.esc(", ".join(fmt.short(x, 20) for x in res["empty"][:10])))
@@ -898,13 +916,21 @@ class Router:
 
     def _cb_openapp(self, chat_id: int, mid: int | None, _args: list[str],
                     wait_s: float = 45, sleep: Callable[[float], None] = time.sleep) -> None:
-        """Bật app trên máy tính từ điện thoại, chờ cổng điều khiển lên rồi báo."""
+        """Bật app trên máy tính từ điện thoại. Phần CHỜ app lên chạy ở luồng việc
+        dài — không giữ khoá chat 45 giây (các nút khác vẫn bấm được)."""
         try:
             self.app.ping()
             self._show(chat_id, mid, "✅ App đang chạy rồi.", main_menu())
             return
-        except (AppOffline, AppError):
+        except AppOffline:
             pass
+        except AppError as e:
+            # App CÓ chạy nhưng không trả lời (treo / sai khoá) — mở thêm bản nữa
+            # chỉ đụng khoá 1-phiên của app, không giúp gì.
+            self._show(chat_id, mid, f"⚠️ App đang chạy nhưng chưa trả lời ({fmt.esc(e)}).\n"
+                                     "Đợi chút rồi kiểm tra lại, hoặc buộc tắt rồi mở lại.",
+                       kb([[("🔄 Kiểm tra", "st"), ("⛔ Buộc tắt", "qf")]]))
+            return
         exe = launcher.find_app(self.cfg.app_exe)
         if not exe:
             self._show(chat_id, mid, "❌ Không tìm thấy app BQHungDown trên máy tính. "
@@ -915,19 +941,30 @@ class Router:
         except OSError as e:
             self._show(chat_id, mid, f"❌ Không mở được app: {fmt.esc(e)}", kb([[HOME]]))
             return
+        if self.monitor:
+            self.monitor.quiet_back_online(wait_s + 30)  # khỏi báo trùng "app đã chạy lại"
         self._show(chat_id, mid, "⏳ Đang mở app trên máy tính…")
-        waited = 0.0
-        while waited < wait_s:
-            sleep(1.5)
-            waited += 1.5
-            try:
-                self.app.ping()
-                self._show(chat_id, mid, "✅ <b>Đã mở app</b> trên máy tính — dùng bình thường được rồi.", main_menu())
-                return
-            except (AppOffline, AppError):
-                continue
-        self._show(chat_id, mid, "⚠️ Đã gửi lệnh mở app nhưng app chưa trả lời sau 45 giây. "
-                                 "Thử lại sau ít phút.", kb([[("🔄 Kiểm tra", "st"), ("▶ Mở lại", "oa")]]))
+
+        def wait_up() -> bool:
+            waited = 0.0
+            while waited < wait_s:
+                sleep(1.5)
+                waited += 1.5
+                try:
+                    self.app.ping()
+                    return True
+                except (AppOffline, AppError):
+                    continue
+            return False
+
+        def done(ok: Any, _err: BaseException | None) -> None:
+            if ok:
+                self._show(chat_id, mid, "✅ <b>Đã mở app</b> trên máy tính — dùng bình thường được rồi.",
+                           main_menu())
+            else:
+                self._show(chat_id, mid, "⚠️ Đã gửi lệnh mở app nhưng app chưa trả lời sau 45 giây. "
+                                         "Thử lại sau ít phút.", kb([[("🔄 Kiểm tra", "st"), ("▶ Mở lại", "oa")]]))
+        self._job("chờ app mở", wait_up, done)
 
     # ───────────────────────── đóng app từ xa ─────────────────────────
     def _cmd_closeapp(self, chat_id: int, _arg: str) -> None:
@@ -948,8 +985,6 @@ class Router:
 
     def _cb_closeapp(self, chat_id: int, mid: int | None, _args: list[str],
                      wait_s: float = 20, sleep: Callable[[float], None] = time.sleep) -> None:
-        if self.monitor:
-            self.monitor.expect_offline(90)
         try:
             self.app.quit_app()
         except AppOffline:
@@ -961,25 +996,38 @@ class Router:
                                      "Có thể app là bản cũ — <b>buộc tắt</b> sẽ dừng ngay mọi lượt tải.",
                        kb([[("⛔ Buộc tắt", "qf"), ("Không", "m")]]))
             return
+        # Chỉ im lặng "app đã tắt" khi lệnh đóng ĐÃ được nhận (lỡ app sập thật thì vẫn báo).
+        if self.monitor:
+            self.monitor.expect_offline(90)
         self._show(chat_id, mid, "⏳ Đang đóng app (lưu hàng đợi, dừng lượt tải)…")
-        waited = 0.0
-        while waited < wait_s:
-            sleep(1.0)
-            waited += 1.0
-            try:
-                self.app.ping()
-            except (AppOffline, AppError):
+
+        def wait_down() -> bool:
+            waited = 0.0
+            while waited < wait_s:
+                sleep(1.0)
+                waited += 1.0
+                try:
+                    self.app.ping()
+                except AppOffline:
+                    return True
+                except AppError:
+                    continue
+            return False
+
+        def done(ok: Any, _err: BaseException | None) -> None:
+            if ok:
                 self._show(chat_id, mid, "✅ <b>Đã đóng app</b> trên máy tính. Bot vẫn chạy.",
                            kb([[("▶ Mở lại app", "oa")]]))
-                return
-        self._show(chat_id, mid, "⚠️ App chưa tắt sau 20 giây (có thể đang dừng lượt tải).",
-                   kb([[("⛔ Buộc tắt", "qf"), ("🔄 Kiểm tra", "st")]]))
+            else:
+                self._show(chat_id, mid, "⚠️ App chưa tắt sau 20 giây (có thể đang dừng lượt tải).",
+                           kb([[("⛔ Buộc tắt", "qf"), ("🔄 Kiểm tra", "st")]]))
+        self._job("chờ app đóng", wait_down, done)
 
     def _cb_force_close(self, chat_id: int, mid: int | None, _args: list[str]) -> None:
         if self.monitor:
             self.monitor.expect_offline(90)
         ok = launcher.force_kill_app()
-        self._show(chat_id, mid, "✅ Đã buộc tắt app." if ok else "ℹ️ Không thấy app nào đang chạy.",
+        self._show(chat_id, mid, "✅ Đã buộc tắt app (bot vẫn chạy)." if ok else "ℹ️ Không thấy app nào đang chạy.",
                    kb([[("▶ Mở lại app", "oa")]]))
 
     def _send_compressed(self, chat_id: int, path: str, title: str, mb: float) -> None:

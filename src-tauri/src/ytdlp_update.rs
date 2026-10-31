@@ -40,7 +40,6 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// True when we haven't checked within `min_interval` seconds.
 /// Bản app nào ghi mốc: thư mục chứa exe (cũng là chỗ yt-dlp sidecar nằm).
 ///
 /// LỖI THẬT 30/10/2026: mốc nằm ở thư mục dữ liệu DÙNG CHUNG, còn yt-dlp nằm
@@ -59,6 +58,7 @@ fn stamp_text() -> String {
     format!("{}\n{}", now_secs(), install_id())
 }
 
+/// True khi BẢN APP NÀY chưa kiểm tra cập nhật trong `min_interval` giây.
 fn should_check(stamp: &Path, min_interval: u64) -> bool {
     should_check_text(std::fs::read_to_string(stamp).ok().as_deref(), &install_id(), now_secs(), min_interval)
 }

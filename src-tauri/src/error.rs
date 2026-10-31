@@ -59,7 +59,6 @@ pub fn is_login_related(msg: &str) -> bool {
         || l.contains("join this channel")
         || l.contains("private video")
         || l.contains("use --cookies")
-        || l.contains("http error 403")
 }
 
 /// Authentication or account eligibility is required to view this video.
@@ -169,6 +168,11 @@ pub fn is_cookie_decrypt_error(msg: &str) -> bool {
         || l.contains("unable to decrypt")
         || l.contains("could not copy")
         || (l.contains("cookie") && l.contains("decrypt"))
+        // Ô cookie lấy từ trình duyệt mà máy không có hồ sơ (Firefox chưa cài /
+        // chưa mở lần nào) → coi như không đọc được: các đường thử lại KHÔNG
+        // cookie sẽ chạy, video công khai vẫn tải được.
+        || l.contains("could not find firefox cookies database")
+        || (l.contains("cookies database") && l.contains("could not find"))
 }
 
 /// Trích "lý do" tốt nhất từ stderr của yt-dlp để đưa cho `friendly_reason`.
@@ -334,11 +338,52 @@ pub fn friendly_reason(raw: &str) -> String {
     format!("{hint}\n(Chi tiết kỹ thuật: {detail})")
 }
 
-/// True khi thông báo đang nói về cookie — dùng để biết có nên chỉ đích danh
-/// TRANG nào hay không.
+/// True khi CÂU HƯỚNG DẪN CHÍNH là về cookie (🍪 cookie hỏng / 🔒 cần quyền tài
+/// khoản) — chỉ khi đó mới chỉ đích danh ô cookie của trang.
+///
+/// LỖI CŨ: dò chữ "cookie" ở BẤT KỲ đâu — câu chặn-bot 🚫 có gợi ý "thêm
+/// cookie", dòng chi tiết kỹ thuật có "--cookies" → lỗi 403 thường cũng bị gắn
+/// "👉 Cookie cần nạp lại", bot bắt người dùng thay cookie oan.
 fn mentions_cookie(msg: &str) -> bool {
-    let l = msg.to_lowercase();
-    l.contains("cookie")
+    let hint = msg.split("\n(Chi tiết kỹ thuật:").next().unwrap_or(msg);
+    hint.starts_with('🍪') || hint.starts_with('🔒')
+}
+
+/// Như `friendly_reason_for`, thêm hiểu biết về NGUỒN cookie của ô trang đó:
+/// ô đang lấy THẲNG từ trình duyệt (Firefox) thì cookie hỏng nghĩa là trình
+/// duyệt đã đăng xuất — bảo đăng nhập lại, KHÔNG bảo xuất/thay file.
+pub fn friendly_reason_with(raw: &str, url: &str, settings: &crate::models::Settings) -> String {
+    let msg = friendly_reason_for(raw, url);
+    let from_browser = crate::args_builder::settings_for_url(settings, url)
+        .and_then(|s| if s.cookies_file.is_none() { s.cookies_browser } else { None });
+    let Some(browser) = from_browser else { return msg };
+    let site = crate::args_builder::cookie_site_key(url)
+        .map(crate::args_builder::cookie_site_label)
+        .unwrap_or_else(|| "trang này".into());
+    let browser_label = if browser == "firefox" { "Firefox".to_string() } else { browser.clone() };
+    let mut out = msg.clone();
+    if msg.starts_with('🔞') {
+        // Firefox đăng xuất KHÔNG sinh cảnh báo "cookie không còn hợp lệ" — lỗi ra
+        // là "confirm your age". Với ô lấy từ trình duyệt, đó chính là dấu hiệu.
+        let rest = msg.split_once("\n(Chi tiết kỹ thuật:").map(|(_, r)| r).unwrap_or("");
+        return format!(
+            "🔞 Video giới hạn tuổi — app lấy cookie {site} từ {browser_label} nhưng {browser_label} chưa đăng nhập \
+             {site} (hoặc tài khoản chưa xác minh 18+). Mở {browser_label}, đăng nhập {site} rồi bấm Thử lại.\
+             \n(Chi tiết kỹ thuật:{rest}"
+        );
+    }
+    if msg.starts_with("🍪 Bộ tải báo phiên cookie") {
+        let rest = msg.split_once("\n(Chi tiết kỹ thuật:").map(|(_, r)| r).unwrap_or("");
+        out = format!(
+            "🍪 Phiên đăng nhập {site} trong {browser_label} không còn hợp lệ — app đang tự lấy cookie từ \
+             {browser_label}. Mở {browser_label}, đăng nhập lại {site}, rồi bấm Thử lại (không cần xuất file).\
+             \n(Chi tiết kỹ thuật:{rest}"
+        );
+    }
+    out.replace(
+        &format!("👉 Cookie cần nạp lại là của trang {site} — mở Cài đặt → Cookie → ô \"{site}\"."),
+        &format!("👉 Ô {site} đang tự lấy cookie từ {browser_label} — chỉ cần đăng nhập lại {site} trên {browser_label}."),
+    )
 }
 
 /// Như `friendly_reason`, nhưng CHỈ ĐÍCH DANH TRANG khi lỗi liên quan cookie.
@@ -729,6 +774,40 @@ mod tests_bao_dung_trang_cookie {
 #[cfg(test)]
 mod warning_tests {
     use super::*;
+
+    const YT: &str = "https://www.youtube.com/watch?v=abc";
+
+    #[test]
+    fn bot_wall_and_403_are_not_cookie_problems() {
+        for raw in ["ERROR: [youtube] abc: Sign in to confirm you're not a bot",
+                    "ERROR: unable to download video data: HTTP Error 403: Forbidden"] {
+            let m = friendly_reason_for(raw, YT);
+            assert!(!m.contains("Cookie cần nạp lại"), "chặn bot / 403 không phải lỗi cookie: {m}");
+            assert!(!is_login_related(raw) || raw.contains("Sign in"), "403 không tính là lỗi đăng nhập");
+        }
+        // Lỗi cookie THẬT vẫn chỉ đích danh ô YouTube.
+        let m = friendly_reason_for("YouTube cookies are no longer valid. ERROR: Sign in to confirm you're not a bot", YT);
+        assert!(m.contains("Cookie cần nạp lại là của trang YouTube"), "{m}");
+    }
+
+    #[test]
+    fn firefox_slot_says_log_in_again_not_export_file() {
+        let mut s = crate::models::Settings::default();
+        s.site_cookies.insert("youtube".into(), crate::models::SiteCookie { file: None, browser: Some("firefox".into()) });
+        let age = friendly_reason_with("ERROR: [youtube] abc: Sign in to confirm your age.", YT, &s);
+        assert!(age.contains("Firefox chưa đăng nhập"), "{age}");
+        let rot = friendly_reason_with("YouTube cookies are no longer valid. ERROR: Sign in to confirm you're not a bot", YT, &s);
+        assert!(rot.contains("đăng nhập lại") && !rot.contains("xuất lại cookie"), "{rot}");
+        // Ô dùng FILE thì giữ hướng dẫn cũ.
+        let plain = crate::models::Settings::default();
+        assert_eq!(friendly_reason_with("ERROR: x: Video unavailable", YT, &plain),
+                   friendly_reason_for("ERROR: x: Video unavailable", YT));
+    }
+
+    #[test]
+    fn missing_firefox_profile_falls_back_to_no_cookies() {
+        assert!(is_cookie_decrypt_error("ERROR: could not find firefox cookies database in C:\\x"));
+    }
 
     #[test]
     fn warnings_never_become_the_error_reason() {

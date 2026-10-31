@@ -294,13 +294,15 @@ pub fn run() {
 
             // Cổng điều khiển cục bộ cho bot Telegram — mở SAU khi mọi state
             // đã manage (handler gọi app.state::<…>()).
-            {
-                let cfg = crate::control_api::load_or_create_config(&config_dir);
-                crate::control_api::spawn(handle.clone(), cfg);
-            }
+            let control_cfg = crate::control_api::load_or_create_config(&config_dir);
+            let control_enabled = control_cfg.enabled;
+            crate::control_api::spawn(handle.clone(), control_cfg);
             // Bot Telegram đã đăng ký (bot chạy lần đầu tự ghi) → app tự bật
             // bot chạy ngầm + bật lại nếu văng. Chưa đăng ký thì không làm gì.
-            crate::bot_launcher::spawn_supervisor(config_dir.clone());
+            // Cổng điều khiển bị tắt thì bot vô dụng — không bật.
+            if control_enabled {
+                crate::bot_launcher::spawn_supervisor(config_dir.clone());
+            }
 
             // System tray: lets the app keep running in the background (so it
             // resumes rate-limited downloads) after the window is closed.

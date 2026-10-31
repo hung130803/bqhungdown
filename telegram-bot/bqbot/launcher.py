@@ -111,11 +111,15 @@ def open_firefox(url: str = YOUTUBE_LOGIN_URL) -> bool:
 
 
 def force_kill_app() -> bool:
-    """Buộc tắt app (chỉ dùng khi app treo / bản cũ không có lệnh đóng êm)."""
+    """Buộc tắt app (chỉ dùng khi app treo / bản cũ không có lệnh đóng êm).
+
+    KHÔNG dùng `/T` (giết cả cây con): bot do app bật LÀ con của app — `/T` từng
+    giết luôn chính bot, mất điều khiển từ xa. yt-dlp/ffmpeg mồ côi thì lần mở
+    app sau tự dọn (app giết tiến trình tải mồ côi lúc khởi động)."""
     import subprocess
     if os.name != "nt":
         return False
-    r = subprocess.run(["taskkill", "/IM", "bqhungdown.exe", "/F", "/T"], capture_output=True,
+    r = subprocess.run(["taskkill", "/IM", "bqhungdown.exe", "/F"], capture_output=True,
                        creationflags=0x08000000)
     return r.returncode == 0
 

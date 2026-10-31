@@ -510,6 +510,9 @@ impl YtDlpRunner {
         // nhưng đa số API tauri-plugin-shell version mới yêu cầu mut. Giữ nguyên.
 
         let mut stderr_tail = String::new();
+        // Cảnh báo 'cookie không còn hợp lệ' in ở ĐẦU lượt; stderr dài bị cắt còn
+        // 4 KB có thể mất nó trước dòng ERROR → nhớ riêng bằng cờ.
+        let mut cookie_warning_seen = false;
         let mut last_emit: Option<std::time::Instant> = None;
         let mut output_path: Option<std::path::PathBuf> = None;
         let mut resolved_title: Option<String> = None;
@@ -637,6 +640,9 @@ impl YtDlpRunner {
                         }
                         CommandEvent::Stderr(bytes) => {
                             let text = String::from_utf8_lossy(&bytes);
+                            if text.to_lowercase().contains("cookies are no longer valid") {
+                                cookie_warning_seen = true;
+                            }
                             stderr_tail.push_str(&text);
                             if stderr_tail.len() > 8192 {
                                 let mut drop = stderr_tail.len() - 4096;
@@ -672,6 +678,9 @@ impl YtDlpRunner {
                 channel: resolved_channel,
             }),
             code => {
+                if cookie_warning_seen && !stderr_tail.to_lowercase().contains("cookies are no longer valid") {
+                    stderr_tail.insert_str(0, "WARNING: [youtube] The provided YouTube account cookies are no longer valid.\n");
+                }
                 let last = crate::error::best_error_line(&stderr_tail);
                 Ok(RunOutcome::Failed { reason: format!("(exit {code}) {last}") })
             }

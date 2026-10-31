@@ -15,9 +15,11 @@ Nhịp đầu tiên chỉ ghi mốc (không báo những gì đã có sẵn).
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 from . import fmt
@@ -27,10 +29,11 @@ log = logging.getLogger("bqbot.monitor")
 
 COOKIE_ALERT_EVERY = 3600
 # Dấu hiệu lỗi ĐĂNG NHẬP thật (khớp error.rs::is_login_related) — chỉ những lỗi
-# này mới đáng nhắc thay cookie.
-LOGIN_ERROR_HINTS = ("sign in", "log in", "login", "confirm your age", "age-restricted",
-                     "members-only", "join this channel", "private video", "use --cookies",
-                     "http error 403", "cookie cần nạp lại")
+# này mới đáng nhắc thay cookie. KHÔNG gồm chặn-bot ("not a bot") / 403: đó là
+# YouTube chặn theo IP, thay cookie không giải quyết được.
+LOGIN_ERROR_HINTS = ("sign in to view", "log in", "login", "confirm your age", "age-restricted",
+                     "members-only", "join this channel", "private video", "use --cookies")
+NOT_COOKIE_HINTS = ("not a bot", "http error 403", "decompressing", "timed out", "connection")
 # Mục đổi sang các trạng thái này thì vào đợt tải (kể cả mục có từ trước khi bot bật).
 ACTIVE_OR_DONE = ("queued", "downloading", "completed", "failed", "skipped")
 COOKIE_EXPIRY_EVERY = 12 * 3600
@@ -71,10 +74,65 @@ class Monitor:
         self._batch_started: str | None = None
         self._batch_text = ""
         self._batch_last_edit = float("-inf")
+        self._quiet_online_until = float("-inf")
+        # Nơi lưu id các tin đang tự cập nhật — bot khởi động lại thì chốt chúng
+        # (không để tin "đang tải" đứng hình vĩnh viễn). None = không lưu (test).
+        self.state_path: Path | None = None
 
     def expect_offline(self, seconds: float = 60) -> None:
         """Gọi khi người dùng CHỦ ĐỘNG đóng app — không báo 'app đã tắt' trùng."""
         self._expect_offline_until = self.clock() + seconds
+
+    def quiet_back_online(self, seconds: float = 90) -> None:
+        """Người dùng vừa mở app bằng bot (đã có tin "Đã mở app") — khỏi báo trùng."""
+        self._quiet_online_until = self.clock() + seconds
+
+    def is_live_message(self, chat_id: int, message_id: int | None) -> bool:
+        """Tin này đang được bot TỰ SỬA (đợt tải / tin link tự gửi)? Bấm nút trên
+        nó thì màn hình mới phải gửi thành tin MỚI, kẻo vài giây sau bị đè."""
+        if message_id is None:
+            return False
+        with self._tracked_lock:
+            if (chat_id, message_id) in self._tracked:
+                return True
+        return self._batch_msgs.get(chat_id) == message_id
+
+    # ── chốt tin tự cập nhật khi bot khởi động lại ──
+    def _save_live(self) -> None:
+        if not self.state_path:
+            return
+        with self._tracked_lock:
+            tracked = [list(k) for k in self._tracked]
+        data = {"batch": [[c, m] for c, m in self._batch_msgs.items()], "tracked": tracked}
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(json.dumps(data), encoding="utf-8")
+        except OSError:
+            pass
+
+    def close_stale_live_messages(self) -> int:
+        """Gọi lúc bot khởi động: các tin tự cập nhật của lần chạy trước không ai
+        sửa nữa → ghi chú cho người dùng biết, rồi quên chúng."""
+        if not self.state_path or not self.state_path.exists():
+            return 0
+        try:
+            data = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        n = 0
+        for chat, mid in (data.get("batch") or []) + (data.get("tracked") or []):
+            try:
+                self.tg.edit_message(chat, mid, "⏹ <i>Bot vừa khởi động lại — tin này thôi tự cập nhật. "
+                                                "Xem tiến độ: nút ⬇️ Đang tải.</i>",
+                                     _kb([[("⬇️ Đang tải", "q:active:0"), ("✅ Xong", "q:completed:0")]]))
+                n += 1
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            self.state_path.unlink()
+        except OSError:
+            pass
+        return n
 
     # ── tin tự cập nhật cho link người dùng gửi ──
     def track(self, chat_id: int, message_id: int, short_ids: list[str], folder: str | None, audio: bool) -> None:
@@ -83,6 +141,7 @@ class Monitor:
             return
         with self._tracked_lock:
             self._tracked[(chat_id, message_id)] = {"ids": ids, "folder": folder, "audio": audio, "text": ""}
+        self._save_live()
 
     def _tracked_ids(self) -> set[str]:
         with self._tracked_lock:
@@ -111,6 +170,7 @@ class Monitor:
             if finished:
                 with self._tracked_lock:
                     self._tracked.pop((chat, mid), None)
+                self._save_live()
 
     @staticmethod
     def _tracked_markup(items: list[dict], finished: bool) -> dict:
@@ -189,7 +249,7 @@ class Monitor:
     def tick(self) -> None:
         now = self.clock()
         try:
-            data = self.app.queue("all", limit=5000)
+            data = self.app.queue("all", limit=2000)
         except AppOffline:
             # Người dùng vừa đóng app bằng bot → đã có tin "Đã đóng app", khỏi báo trùng.
             if self._online and self.clock() < self._expect_offline_until:
@@ -204,7 +264,7 @@ class Monitor:
         except AppError as e:
             log.warning("Đọc hàng đợi lỗi: %s", e)
             return
-        if self._online is False:
+        if self._online is False and self.clock() >= self._quiet_online_until:
             self._notify("✅ App BQHungDown đã chạy lại.")
         self._online = True
         items = data.get("items", [])
@@ -243,6 +303,12 @@ class Monitor:
                 continue
             # Mọi mục mới / đổi trạng thái (do quét kênh, chạy nhóm, tải trên máy…)
             # gom vào ĐỢT TẢI hiện tại → 1 tin tự cập nhật thay vì nhiều tin rời.
+            # Mục lần đầu thấy đã ở trạng thái KẾT THÚC (vd bị Bỏ qua ngay vì live)
+            # chỉ gộp vào đợt ĐANG mở — không tự mở đợt mới (từng sinh 1 tin
+            # "Xong đợt tải" cho mỗi mục bỏ qua).
+            first_seen_done = before is None and st not in fmt.ACTIVE_STATES
+            if first_seen_done and not self._batch_ids:
+                continue
             if sid not in self._batch_set and (before is None or st in ACTIVE_OR_DONE):
                 self._batch_ids.append(sid)
                 self._batch_set.add(sid)
@@ -254,11 +320,26 @@ class Monitor:
     def _update_batch(self, items: list[dict], force: bool = False) -> None:
         if not self._batch_ids:
             return
+        # Link người dùng tự gửi có thể lọt vào đợt khi tick chạy ĐÚNG lúc app đang
+        # thêm dần từng link (trước khi bot kịp mark_own) → loại ra, tránh tin trùng.
+        with self._own_lock:
+            own = set(self._own)
+        excl = own | self._tracked_ids()
+        if excl & self._batch_set:
+            self._batch_ids = [x for x in self._batch_ids if x not in excl]
+            self._batch_set -= excl
+            if not self._batch_ids:
+                return
         by_id = {it["shortId"]: it for it in items}
         cur = [by_id.get(s) or {"shortId": s, "state": "cancelled", "title": ""} for s in self._batch_ids]
         finished = not any(it.get("state") in fmt.ACTIVE_STATES for it in cur)
         now = self.clock()
         if not finished and not force and now - self._batch_last_edit < self.cfg.board_interval_sec:
+            return
+        if finished and not self._batch_msgs and all(it.get("state") in ("skipped", "cancelled") for it in cur):
+            # Đợt chỉ toàn mục bị bỏ qua/huỷ và chưa từng gửi tin → khỏi báo.
+            self._batch_ids, self._batch_set = [], set()
+            self._batch_started, self._batch_text = None, ""
             return
         text = fmt.batch_text(cur, self._batch_started or "", finished)
         markup = self._batch_markup(cur, finished)
@@ -272,6 +353,7 @@ class Monitor:
                         sent = self.tg.send_message(chat, text, markup)
                         if sent:
                             self._batch_msgs[chat] = sent["message_id"]
+                            self._save_live()
                     else:
                         self.tg.edit_message(chat, mid, text, markup)
                 except Exception as e:  # noqa: BLE001
@@ -279,6 +361,7 @@ class Monitor:
         if finished:
             self._batch_ids, self._batch_set, self._batch_msgs = [], set(), {}
             self._batch_started, self._batch_text = None, ""
+            self._save_live()
 
     @staticmethod
     def _batch_markup(items: list[dict], finished: bool) -> dict:
@@ -290,32 +373,33 @@ class Monitor:
             return _kb(rows)
         rows = []
         if any(it.get("state") == "completed" for it in items):
-            rows.append([("📤 Gửi video về điện thoại", "q:completed:0")])
+            rows.append([("📤 Chọn video gửi về điện thoại", "q:completed:0")])
         if failed:
-            rows.append([("❌ Xem lỗi", "q:failed:0"), ("🔁 Thử lại lỗi", "b:retry_failed")])
+            rows.append([("❌ Xem lỗi", "q:failed:0"), ("🔁 Thử lại mọi mục lỗi", "b:retry_failed")])
         return _kb(rows or [[("🏠 Menu", "m")]])
 
     def _maybe_cookie_alert(self, it: dict) -> None:
         err = (it.get("error") or "").lower()
-        # Chỉ lời báo CHÍNH XÁC về cookie của app (error.rs::friendly_reason_for)
-        # — câu chặn-bot cũng nhắc "thêm cookie" nhưng không phải cookie hỏng.
-        if not ("cookie cần nạp lại" in err or "no longer valid" in err or err.startswith("🍪")):
-            return
-        # …và lỗi gốc PHẢI là lỗi đăng nhập. App bản cũ gắn nhãn cookie cho cả lỗi
-        # mạng ("Error -3 while decompressing data") → bot từng bắt thay cookie oan.
-        if not any(k in err for k in LOGIN_ERROR_HINTS):
-            return
         site = (it.get("extractor") or "").lower() or "chung"
-        now = self.clock()
-        if now - self._cookie_alert.get(site, -COOKIE_ALERT_EVERY) < COOKIE_ALERT_EVERY:
+        # Lỗi gốc PHẢI là lỗi đăng nhập; chặn-bot/403/lỗi mạng KHÔNG phải lỗi cookie
+        # (app cũ từng gắn nhãn 🍪 cho cả "Error -3 while decompressing data").
+        if any(k in err for k in NOT_COOKIE_HINTS) or not any(k in err for k in LOGIN_ERROR_HINTS):
             return
-        self._cookie_alert[site] = now
         browser = None
         try:
             browser = next((s.get("browser") for s in self.app.cookies().get("sites", [])
                             if s.get("site") == site), None)
         except (AppOffline, AppError):
             pass
+        is_cookie_msg = err.startswith("🍪") or "no longer valid" in err
+        # Ô lấy cookie từ Firefox: Firefox đăng xuất KHÔNG sinh cảnh báo "cookie
+        # hết hạn" — lỗi ra là "🔞 giới hạn tuổi". Nên xét cả trường hợp đó.
+        if not (is_cookie_msg or (browser == "firefox" and err.startswith("🔞"))):
+            return
+        now = self.clock()
+        if now - self._cookie_alert.get(site, -COOKIE_ALERT_EVERY) < COOKIE_ALERT_EVERY:
+            return
+        self._cookie_alert[site] = now
         if browser == "firefox":
             # Ô lấy cookie tự động từ Firefox → lỗi đăng nhập = Firefox đã đăng xuất.
             self._notify(f"🦊 <b>Firefox chưa đăng nhập {fmt.esc(site)}</b> (hoặc đã đăng xuất) — video cần "

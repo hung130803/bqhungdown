@@ -117,7 +117,12 @@ pub fn spawn(app: AppHandle, cfg: ControlConfig) {
         // Cổng bận (vd tiến trình cũ chưa nhả) → THỬ LẠI mỗi 5 giây thay vì bỏ
         // cuộc: bỏ cuộc là app chạy mà bot không bao giờ điều khiển được.
         let listener = loop {
-            match tokio::net::TcpListener::bind(addr).await {
+            // std tạo socket với WSA_FLAG_NO_HANDLE_INHERIT NGAY TỪ ĐẦU (tokio/mio
+            // thì không) — không còn khe hở giữa lúc tạo và lúc gỡ cờ kế thừa.
+            let bound = std::net::TcpListener::bind(addr)
+                .and_then(|l| l.set_nonblocking(true).map(|_| l))
+                .and_then(tokio::net::TcpListener::from_std);
+            match bound {
                 Ok(l) => break l,
                 Err(e) => {
                     eprintln!("[control-api] chưa mở được cổng {addr}: {e} — thử lại sau 5s");
@@ -692,13 +697,12 @@ pub struct CookieCheck {
     pub total: usize,
     pub matching: usize,
     pub expired: usize,
-    /// Hạn sớm nhất (epoch giây) của cookie CÓ hạn thuộc đúng trang; None = chỉ
-    /// toàn cookie phiên.
+    /// Hạn THẬT của phiên (epoch giây): hạn sớm nhất của cookie ĐĂNG NHẬP; không
+    /// có cookie đăng nhập thì của cookie sống ≥ 1 ngày. Mọi cookie đăng nhập đã
+    /// hết hạn → mốc trong QUÁ KHỨ (để báo "đã hết hạn"). None = toàn cookie phiên.
     pub earliest_expiry: Option<i64>,
 }
 
-/// Đọc file cookies.txt dạng Netscape (7 cột tách tab), đếm cookie thuộc đúng
-/// trang. Hàm THUẦN để unit-test.
 /// Cookie ĐĂNG NHẬP của các trang — hạn của chúng mới là hạn thật của "phiên".
 /// Cookie phụ như `CONSISTENCY`/`ST-…` của YouTube sống vài phút và tự làm mới;
 /// tính cả chúng thì vừa xuất file đã báo "sắp hết hạn (0 ngày)" — báo nhầm (31/10/2026).
@@ -712,9 +716,12 @@ const LOGIN_COOKIES: &[&str] = &[
 /// Không có cookie đăng nhập nào thì bỏ qua cookie sống dưới 1 ngày khi tính hạn.
 const SHORT_LIVED_SECS: i64 = 86_400;
 
+/// Đọc file cookies.txt dạng Netscape (7 cột tách tab), đếm cookie thuộc đúng
+/// trang. Hàm THUẦN để unit-test.
 pub fn inspect_cookie_text(text: &str, domains: &[&str], now: i64) -> CookieCheck {
     let mut out = CookieCheck::default();
     let mut login_min: Option<i64> = None;
+    let mut login_expired_max: Option<i64> = None;
     let mut long_min: Option<i64> = None;
     for raw in text.lines() {
         let line = raw.trim_end_matches('\r');
@@ -736,10 +743,13 @@ pub fn inspect_cookie_text(text: &str, domains: &[&str], now: i64) -> CookieChec
         out.matching += 1;
         let exp: i64 = cols[4].trim().parse().unwrap_or(0);
         if exp > 0 {
+            let name = cols[5].trim();
             if exp < now {
                 out.expired += 1;
+                if LOGIN_COOKIES.contains(&name) {
+                    login_expired_max = Some(login_expired_max.map_or(exp, |e| e.max(exp)));
+                }
             } else {
-                let name = cols[5].trim();
                 if LOGIN_COOKIES.contains(&name) {
                     login_min = Some(login_min.map_or(exp, |e| e.min(exp)));
                 } else if exp - now >= SHORT_LIVED_SECS {
@@ -748,8 +758,19 @@ pub fn inspect_cookie_text(text: &str, domains: &[&str], now: i64) -> CookieChec
             }
         }
     }
-    out.earliest_expiry = login_min.or(long_min);
+    // Có cookie đăng nhập nhưng TẤT CẢ đã hết hạn → phiên đã chết, đừng báo
+    // "còn 180 ngày" theo cookie phụ (VISITOR_INFO1_LIVE…).
+    out.earliest_expiry = login_min.or(login_expired_max).or(long_min);
     out
+}
+
+/// Firefox đã có ít nhất 1 hồ sơ chứa cookies.sqlite (yt-dlp cần file này).
+fn firefox_has_profile() -> bool {
+    let Some(base) = std::env::var_os("APPDATA") else { return false };
+    let dir = std::path::Path::new(&base).join("Mozilla").join("Firefox").join("Profiles");
+    std::fs::read_dir(dir)
+        .map(|it| it.flatten().any(|e| e.path().join("cookies.sqlite").is_file()))
+        .unwrap_or(false)
 }
 
 fn site_domains(site: &str) -> Option<&'static [&'static str]> {
@@ -818,6 +839,14 @@ async fn cookies_set(app: &AppHandle, site: &str, body: Value) -> ApiResult {
     if let Some(browser) = body.get("browser").and_then(|v| v.as_str()) {
         if browser != "firefox" {
             return Err(bad("Chỉ hỗ trợ lấy cookie tự động từ Firefox (Chrome/Edge trên Windows bị khoá mã hoá)."));
+        }
+        // Đường HTTP riêng của Douyin/Bilibili chỉ đọc FILE cookie — chưa hỗ trợ
+        // nguồn trình duyệt, nên giới hạn ở YouTube (đi hoàn toàn qua yt-dlp).
+        if site != "youtube" {
+            return Err(bad("Lấy cookie tự động từ Firefox hiện chỉ dùng cho YouTube."));
+        }
+        if !firefox_has_profile() {
+            return Err(bad("Máy chưa có Firefox (hoặc chưa mở Firefox lần nào) — cài/mở Firefox, đăng nhập YouTube rồi bấm lại."));
         }
         let settings = app.state::<Arc<SettingsStore>>();
         let mut map = settings.get().site_cookies.clone();
@@ -920,6 +949,17 @@ mod tests {
         assert_eq!(c.matching, 3);
         assert_eq!(c.expired, 1);
         assert_eq!(c.earliest_expiry, Some(2_000_000_000), "hạn = cookie đăng nhập SID");
+    }
+
+    #[test]
+    fn expired_login_cookies_report_session_dead() {
+        let now = 1_000_000_000;
+        let text = format!(
+            ".youtube.com\tTRUE\t/\tTRUE\t{}\tSID\ty\n.youtube.com\tTRUE\t/\tTRUE\t{}\tVISITOR_INFO1_LIVE\tz\n",
+            now - 10, now + 180 * 86_400
+        );
+        let c = inspect_cookie_text(&text, YT, now);
+        assert!(c.earliest_expiry.unwrap() < now, "SID đã hết hạn → phiên chết, không báo 'còn 180 ngày'");
     }
 
     #[test]

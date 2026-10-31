@@ -841,10 +841,72 @@ class MonitorTests(NoNetworkCase):
         m._maybe_cookie_alert({"extractor": "youtube", "error": "🍪 Bộ tải báo phiên cookie YouTube…\n(Chi tiết kỹ thuật: "
                                                                  "YouTube cookies are no longer valid. ERROR: Error -3 while decompressing data)"})
         self.assertEqual(tg.texts(), [])
-        m._maybe_cookie_alert({"extractor": "youtube", "error": "x\n👉 Cookie cần nạp lại là của trang YouTube"})
+        # Chặn-bot kèm chữ "sign in" vẫn KHÔNG phải lỗi cookie (thay cookie không giúp).
+        m._maybe_cookie_alert({"extractor": "youtube", "error": "🍪 x\n(Chi tiết kỹ thuật: Sign in to confirm "
+                                                                 "you're not a bot)"})
+        self.assertEqual(tg.texts(), [])
+        # 🔞 khi ô cookie là FILE → không nhắc (video giới hạn tuổi thật, không phải cookie hỏng).
+        m._maybe_cookie_alert({"extractor": "youtube", "error": "🔞 Video giới hạn tuổi\n(Chi tiết kỹ thuật: "
+                                                                 "Sign in to confirm your age)"})
+        self.assertEqual(tg.texts(), [])
+        m._maybe_cookie_alert({"extractor": "youtube", "error": "🍪 Bộ tải báo phiên cookie YouTube hết hạn\n"
+                                                                 "(Chi tiết kỹ thuật: cookies are no longer valid. "
+                                                                 "Sign in to confirm your age)"})
         self.assertIn("Cookie youtube", tg.texts()[-1])
-        m._maybe_cookie_alert({"extractor": "youtube", "error": "👉 Cookie cần nạp lại"})
+        m._maybe_cookie_alert({"extractor": "youtube", "error": "🍪 lại\n(Chi tiết kỹ thuật: Sign in to view)"})
         self.assertEqual(len(tg.texts()), 1, "tối đa 1 lần/giờ/trang")
+
+    def test_cookie_alert_firefox_slot_age_error(self):
+        tg = FakeTG()
+        app = FakeApp({"/api/cookies": {"ok": True, "sites": [{"site": "youtube", "browser": "firefox"}]}})
+        m = Monitor(tg, app, cfg())
+        m._maybe_cookie_alert({"extractor": "youtube", "error": "🔞 Firefox chưa đăng nhập\n"
+                                                                 "(Chi tiết kỹ thuật: Sign in to confirm your age)"})
+        self.assertEqual(len(tg.texts()), 1)
+
+    def test_quiet_back_online_after_open_from_phone(self):
+        tg = FakeTG()
+        app = FakeApp({"/api/queue": {"ok": True, "items": []}, "/api/cookies": {"ok": True, "sites": []},
+                       "/api/watch": {"ok": True, "items": []}})
+        m = Monitor(tg, app, cfg())
+        m.tick()
+        app.offline = True
+        m.tick()
+        n = len(tg.texts())
+        m.quiet_back_online(60)
+        app.offline = False
+        m.tick()
+        self.assertEqual(len(tg.texts()), n, "đã có tin 'Đã mở app' — không báo trùng")
+
+    def test_live_message_detection_and_stale_close(self):
+        import tempfile
+        tg = FakeTG()
+        m = Monitor(tg, FakeApp(), cfg())
+        with tempfile.TemporaryDirectory() as d:
+            m.state_path = Path(d) / "live.json"
+            m.track(CHAT, 77, ["a1"], None, False)
+            self.assertTrue(m.is_live_message(CHAT, 77))
+            self.assertFalse(m.is_live_message(CHAT, 78))
+            self.assertFalse(m.is_live_message(CHAT, None))
+            m2 = Monitor(tg, FakeApp(), cfg())
+            m2.state_path = m.state_path
+            self.assertEqual(m2.close_stale_live_messages(), 1)
+            self.assertFalse(m.state_path.exists())
+
+    def test_first_seen_skipped_item_does_not_open_batch(self):
+        tg = FakeTG()
+        items = [{"shortId": "a", "state": "queued", "title": "A"}]
+        app = FakeApp({"/api/queue": {"ok": True, "items": items}, "/api/cookies": {"ok": True, "sites": []},
+                       "/api/watch": {"ok": True, "items": []}})
+        m = Monitor(tg, app, cfg())
+        m.tick()
+        items[0]["state"] = "completed"
+        m.tick()
+        sends = sum(1 for c in tg.calls if c[0] == "send")
+        items.append({"shortId": "live1", "state": "skipped", "title": "Live"})
+        m.tick()
+        m.tick()
+        self.assertEqual(sum(1 for c in tg.calls if c[0] == "send"), sends, "mục bỏ qua ngay không sinh tin mới")
 
     def test_board_is_edited_not_resent(self):
         tg = FakeTG()

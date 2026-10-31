@@ -356,7 +356,7 @@ pub async fn check_channel(
             // mỗi-trang-một-ô, báo "cookie hỏng" mà không nói trang nào thì
             // không biết nạp lại vào ô nào. Trước đây chỗ này lưu NGUYÊN VĂN
             // lỗi tiếng Anh của yt-dlp.
-            let msg = crate::error::friendly_reason_for(&format!("{e}"), &channel.url);
+            let msg = crate::error::friendly_reason_with(&format!("{e}"), &channel.url, &settings);
             let _ = store.update(id, |c| {
                 c.last_checked = Some(Utc::now());
                 c.last_error = Some(msg.clone());
