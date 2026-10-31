@@ -63,6 +63,11 @@ fn is_cancelled(my_gen: u64) -> bool {
 /// not an empty channel.
 fn friendly_fetch_error(raw: &str) -> String {
     let l = raw.to_lowercase();
+    if crate::error::is_firefox_missing(raw) {
+        return "🍪 Không đọc được cookie: máy chưa có Firefox (hoặc chưa mở Firefox lần nào). \
+                Cài/mở Firefox và đăng nhập, hoặc đổi ô cookie sang file trong Cài đặt → Cookie."
+            .into();
+    }
     if crate::error::is_cookie_decrypt_error(raw) {
         return "🍪 Không đọc được cookie từ trình duyệt (Windows mã hoá DPAPI). \
                 Vào Cài đặt → tắt \"Lấy cookies từ trình duyệt\" (để trống). \
@@ -90,16 +95,13 @@ fn friendly_fetch_error(raw: &str) -> String {
         || l.contains("has been terminated")
         || l.contains("this channel is not available")
     {
-        return "❌ Kênh KHÔNG CÒN trên YouTube (YouTube báo 404: kênh đã bị xoá, bị khoá hoặc đổi tên @). \
+        return "❌ Kênh KHÔNG CÒN (trang báo 404: kênh đã bị xoá, bị khoá hoặc đổi tên). \
                 Mở link kênh trên trình duyệt để kiểm tra — mất thật thì tắt theo dõi kênh này."
             .into();
     }
     // Kênh CÒN nhưng mục đang theo dõi TRỐNG — đo thật (@fafoauditandnews):
     // "This channel does not have a videos tab" (cả shorts/streams cũng không có).
-    if l.contains("this channel does not have")
-        || l.contains("không có video nào trên kênh")
-        || l.contains("not found")
-    {
+    if l.contains("this channel does not have") || l.contains("không có video nào trên kênh") {
         return "📭 Kênh còn nhưng HẾT VIDEO ở mục đang theo dõi (chủ kênh đã xoá/ẩn hết, hoặc kênh \
                 chỉ đăng loại khác). Mở kênh trên trình duyệt để xem; nếu kênh chỉ còn Shorts thì đổi \
                 loại sang Shorts, kênh trống thật thì tắt theo dõi."
@@ -1490,6 +1492,12 @@ mod tests {
             downloading private content, or your cookies are only for the first account and channel, pass \
             \"--extractor-args youtubetab:skip=authcheck\" to skip this check");
         assert!(!auth.starts_with("🔒"), "{auth}");
+        let ff = friendly_fetch_error("ERROR: could not find firefox cookies database in C:\\x");
+        assert!(ff.contains("chưa có Firefox") && is_channel_fetch_message(&ff), "{ff}");
+        assert!(!friendly_fetch_error("ERROR: [TikTok] user: HTTP Error 404: Not Found").contains("YouTube"),
+                "404 của trang khác không được gắn chữ YouTube");
+        assert!(crate::error::friendly_reason("ERROR: could not find firefox cookies database in C:\\x")
+            .contains("chưa có Firefox"));
         let la = friendly_fetch_error("ERROR: something new");
         assert!(la.contains("something new"), "lỗi lạ phải giữ dòng gốc");
         // Mọi câu đều được nhận diện → watcher/commands KHÔNG bọc thành "Tải thất bại".

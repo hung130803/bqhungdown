@@ -285,7 +285,14 @@ def batch_report(items: list[dict], channels: list[dict], started: str, t0: floa
             lines.append(f"… và {len(failed) - 5} lỗi nữa")
     if c["completed"]:
         lines.append("\n💾 Video đã lưu trên máy tính (thư mục từng kênh).")
-    return "\n".join(lines)
+    return clip_message("\n".join(lines))
+
+
+def clip_message(text: str, limit: int = 3900) -> str:
+    """Telegram từ chối tin > 4096 ký tự (mất luôn tin) → cắt gọn theo dòng."""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit("\n", 1)[0] + "\n…"
 
 
 def today_count(c: dict, today: str | None = None) -> int:
@@ -347,10 +354,9 @@ def local_day(iso: str | None) -> str | None:
     """Ngày (giờ máy, YYYY-MM-DD) của mốc ISO UTC app trả về."""
     if not iso:
         return None
-    from datetime import datetime
     try:
-        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
-    except ValueError:
+        return time.strftime("%Y-%m-%d", time.localtime(parse_time(iso)))
+    except (ValueError, OverflowError, OSError):
         return None
 
 

@@ -131,6 +131,86 @@ class AutoSendTests(unittest.TestCase):
             self.assertEqual(len([t for t in tg.texts() if "BÁO CÁO NGÀY" in t]), 1, "bot bật lại không gửi trùng")
 
 
+class ReviewRegressionTests(unittest.TestCase):
+    """Các lỗi do rà soát độc lập 31/10/2026 tìm ra — giữ để không tái phát."""
+
+    def test_nano_seconds_timestamp_parses(self):
+        self.assertEqual(fmt.local_day("2026-10-31T02:03:50.617210400Z")[:7], "2026-10")
+        self.assertIsNone(fmt.local_day("rác"))
+
+    def test_expired_cookie_with_bot_wall_still_alerts(self):
+        from test_bot import FakeApp, FakeTG, cfg
+        from bqbot.monitor import Monitor
+        tg = FakeTG()
+        m = Monitor(tg, FakeApp({"/api/cookies": {"ok": True, "sites": []}}), cfg())
+        m._maybe_cookie_alert({"extractor": "youtube", "error": "🍪 Bộ tải báo phiên cookie YouTube…\n(Chi tiết "
+                               "kỹ thuật: YouTube cookies are no longer valid. ERROR: Sign in to confirm "
+                               "you're not a bot)"})
+        self.assertEqual(len(tg.texts()), 1)
+
+    def test_bot_wall_is_not_logged_out(self):
+        import subprocess
+        r = cc.run_check("yt.exe", lambda cmd, **k: subprocess.CompletedProcess(
+            cmd, 1, "", "ERROR: [youtube] x: Sign in to confirm you're not a bot"))
+        self.assertEqual(r.status, cc.ERROR)
+
+    def test_wait_result_reuses_running_check(self):
+        import threading
+        import time as _t
+        calls = []
+        gate = threading.Event()
+
+        def slow():
+            calls.append(1)
+            gate.wait(2)
+            return cc.CheckResult(cc.OK, 1.0)
+        ch = cc.CookieChecker(check=slow)
+        th = threading.Thread(target=ch.check_now)
+        th.start()
+        _t.sleep(0.05)
+        threading.Timer(0.1, gate.set).start()
+        self.assertTrue(ch.wait_result(timeout=3).ok)
+        th.join()
+        self.assertEqual(len(calls), 1, "không chạy chồng lượt thứ 2")
+
+    def test_removed_items_are_not_counted_cancelled(self):
+        from test_bot import FakeApp, FakeTG, cfg
+        from bqbot.monitor import Monitor
+        items = [{"shortId": "a", "state": "queued", "title": "A"}]
+        tg = FakeTG()
+        m = Monitor(tg, FakeApp({"/api/queue": {"ok": True, "items": items},
+                                 "/api/cookies": {"ok": True, "sites": []},
+                                 "/api/watch": {"ok": True, "items": []}}), cfg())
+        m.tick()
+        items.append({"shortId": "b", "state": "queued", "title": "B"})
+        m.tick()
+        items[0]["state"] = "completed"
+        del items[1]  # người dùng xoá mục B khỏi hàng đợi
+        m.tick()
+        report_txt = tg.calls[-1][2]
+        self.assertIn("ĐÃ XONG ĐỢT TẢI", report_txt)
+        self.assertNotIn("Huỷ", report_txt)
+
+    def test_old_saved_batch_is_dropped(self):
+        import json
+        import tempfile
+        import time as _t
+        from test_bot import FakeApp, FakeTG, cfg
+        from bqbot.monitor import Monitor
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "live.json"
+            p.write_text(json.dumps({"batch_ids": ["a"], "batch": [[1, 5]], "batch_t0": _t.time() - 86400}))
+            m = Monitor(FakeTG(), FakeApp(), cfg())
+            m.state_path = p
+            self.assertEqual(m.restore_live_messages(), 0)
+
+    def test_batch_report_fits_telegram(self):
+        items = [{"shortId": str(i), "state": "failed", "title": "x" * 80, "error": "y" * 200,
+                  "saveFolder": f"D:\\g{i}"} for i in range(400)]
+        chans = [{"id": str(i), "group": f"Nhóm {i}", "destDir": f"D:\\g{i}", "enabled": True} for i in range(400)]
+        self.assertLessEqual(len(fmt.batch_report(items, chans, "10:00", None)), 4096)
+
+
 class KeyboardTests(unittest.TestCase):
     def test_report_button_on_keyboard_and_menu(self):
         from bqbot.handlers import KEYBOARD_COMMANDS, main_menu, reply_keyboard

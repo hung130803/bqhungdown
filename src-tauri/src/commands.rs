@@ -1307,6 +1307,7 @@ pub async fn add_watched_channel(
         id: id.clone(),
         url: url.clone(),
         live_hold: Default::default(),
+        live_hold_n: Default::default(),
         title: None,
         enabled: true,
         tab: tab.unwrap_or_else(|| "all".into()),

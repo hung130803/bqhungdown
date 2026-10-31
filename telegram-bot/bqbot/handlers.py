@@ -643,6 +643,15 @@ class Router:
                            kb([[("⬇️ Xem tiến độ", "q:active:0")]]))
                 return
             self._group_running.add(group)
+        try:
+            self._start_group_more(chat_id, mid, args, group, chans)
+        except Exception:
+            with self._group_lock:
+                self._group_running.discard(group)
+            raise
+
+    def _start_group_more(self, chat_id: int, mid: int | None, args: list[str], group: str,
+                          chans: list[dict]) -> None:
         self._show(chat_id, mid, f"➕ Đang lấy thêm video cho {len(chans)} kênh nhóm {fmt.esc(group)}… (0/{len(chans)})")
 
         def work() -> dict:
@@ -739,12 +748,8 @@ class Router:
                                  "<i>Thử lấy 1 video giới hạn tuổi, mất 10–30 giây.</i>")
 
         def work():
-            res = self.cookie_checker.check_now()
             # Có lượt kiểm tra tự động đang chạy → đợi nó xong rồi dùng kết quả đó.
-            while res is None:
-                time.sleep(1)
-                res = self.cookie_checker.check_now()
-            return res
+            return self.cookie_checker.wait_result()
 
         def done(_res: Any, _err: BaseException | None) -> None:
             # Kết quả nằm trong cookie_checker (dùng chung với monitor) → màn

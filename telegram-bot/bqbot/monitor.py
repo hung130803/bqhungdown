@@ -34,7 +34,8 @@ COOKIE_ALERT_EVERY = 3600
 # YouTube chặn theo IP, thay cookie không giải quyết được.
 LOGIN_ERROR_HINTS = ("sign in to view", "log in", "login", "confirm your age", "age-restricted",
                      "members-only", "join this channel", "private video", "use --cookies")
-NOT_COOKIE_HINTS = ("not a bot", "http error 403", "decompressing", "timed out", "connection")
+NOT_COOKIE_HINTS = ("not a bot", "http error 403")
+NETWORK_HINTS = ("decompressing", "timed out", "connection")
 # Mục đổi sang các trạng thái này thì vào đợt tải (kể cả mục có từ trước khi bot bật).
 ACTIVE_OR_DONE = ("queued", "downloading", "completed", "failed", "skipped")
 COOKIE_EXPIRY_EVERY = 12 * 3600
@@ -44,6 +45,8 @@ CHANNEL_ERR_EVERY = 600
 FIREFOX_CHECK_FIRST = 60
 FIREFOX_CHECK_EVERY = 6 * 3600
 FIREFOX_REMIND_EVERY = 24 * 3600
+# Đợt tải lưu lại từ lần chạy trước chỉ nhận lại nếu chưa quá ngần này giây.
+RESTORE_MAX_AGE = 6 * 3600
 
 
 def _kb(rows):
@@ -64,6 +67,9 @@ class Monitor:
         self._ff_next = clock() + FIREFOX_CHECK_FIRST
         self._ff_last_alert = float("-inf")
         self._report_sent: str | None = None
+        self._report_retry_at = float("-inf")
+        self._save_lock = threading.Lock()
+        self._saved_text = ""
         self._online: bool | None = None
         self._boards: dict[int, int] = {}
         self._boards_lock = threading.Lock()
@@ -113,17 +119,24 @@ class Monitor:
     def _save_live(self) -> None:
         if not self.state_path:
             return
-        with self._tracked_lock:
-            tracked = [{"chat": c, "mid": m, "ids": t["ids"], "folder": t["folder"], "audio": t["audio"]}
-                       for (c, m), t in self._tracked.items()]
-        data = {"batch": [[c, m] for c, m in self._batch_msgs.items()], "tracked": tracked,
-                "batch_ids": list(self._batch_ids), "batch_started": self._batch_started,
-                "batch_t0": self._batch_t0}
-        try:
-            self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            self.state_path.write_text(json.dumps(data), encoding="utf-8")
-        except OSError:
-            pass
+        with self._save_lock:
+            with self._tracked_lock:
+                tracked = [{"chat": c, "mid": m, "ids": list(t["ids"]), "folder": t["folder"],
+                            "audio": t["audio"]} for (c, m), t in list(self._tracked.items())]
+            data = {"batch": [[c, m] for c, m in list(self._batch_msgs.items())], "tracked": tracked,
+                    "batch_ids": list(self._batch_ids), "batch_started": self._batch_started,
+                    "batch_t0": self._batch_t0}
+            text = json.dumps(data)
+            if text == self._saved_text:
+                return  # không đổi → khỏi ghi đĩa mỗi nhịp
+            try:
+                self.state_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self.state_path.with_suffix(".tmp")
+                tmp.write_text(text, encoding="utf-8")
+                tmp.replace(self.state_path)
+                self._saved_text = text
+            except OSError:
+                pass
 
     def restore_live_messages(self) -> int:
         """Gọi lúc bot khởi động: NHẬN LẠI đợt tải + tin tự cập nhật của lần chạy
@@ -137,6 +150,9 @@ class Monitor:
             return 0
         n = 0
         ids = [str(x) for x in data.get("batch_ids") or []]
+        t0 = data.get("batch_t0")
+        if ids and t0 and time.time() - float(t0) > RESTORE_MAX_AGE:
+            ids = []  # bot tắt quá lâu → đợt đó đã cũ, khỏi báo cáo sai
         if ids:
             self._batch_ids, self._batch_set = ids, set(ids)
             self._batch_msgs = {int(c): int(m) for c, m in data.get("batch") or []}
@@ -311,7 +327,7 @@ class Monitor:
         if lt.tm_hour < getattr(self.cfg, "daily_report_hour", 23):
             return
         today = time.strftime("%Y-%m-%d", lt)
-        if self._report_sent == today:
+        if self._report_sent == today or self.clock() < self._report_retry_at:
             return
         path = self.state_path.parent / "daily_report.json" if self.state_path else None
         if self._report_sent is None and path and path.exists():
@@ -321,20 +337,23 @@ class Monitor:
                 pass
             if self._report_sent == today:
                 return
-        self._report_sent = today
-        if path:
-            try:
-                path.write_text(json.dumps({"sent": today}), encoding="utf-8")
-            except OSError:
-                pass
+        self._report_sent = today  # chặn tick sau mở thêm luồng trong lúc đang gửi
 
         def send():
             try:
                 text, markup = report.build(self.app, self.cookie_checker.latest())
             except (AppOffline, AppError) as e:
+                # Chưa gửi được (app tắt…) → 10 phút sau thử lại, KHÔNG mất báo cáo hôm nay.
                 log.info("Báo cáo ngày lỗi: %s", e)
+                self._report_sent = None
+                self._report_retry_at = self.clock() + 600
                 return
             self._notify(text, markup)
+            if path:
+                try:
+                    path.write_text(json.dumps({"sent": today}), encoding="utf-8")
+                except OSError:
+                    pass
         threading.Thread(target=send, name="bao-cao-ngay", daemon=True).start()
 
     def firefox_check(self) -> None:
@@ -432,7 +451,18 @@ class Monitor:
             if not self._batch_ids:
                 return
         by_id = {it["shortId"]: it for it in items}
-        cur = [by_id.get(s) or {"shortId": s, "state": "cancelled", "title": ""} for s in self._batch_ids]
+        # Mục đã bị XOÁ khỏi hàng đợi (người dùng dọn danh sách) → bỏ khỏi đợt,
+        # KHÔNG tính là "huỷ" (từng ra báo cáo "🚫 Huỷ N" sai).
+        gone = [s for s in self._batch_ids if s not in by_id]
+        if gone:
+            self._batch_ids = [s for s in self._batch_ids if s in by_id]
+            self._batch_set -= set(gone)
+            if not self._batch_ids:
+                self._batch_msgs, self._batch_started, self._batch_text = {}, None, ""
+                self._batch_t0, self._batch_done_since = None, None
+                self._save_live()
+                return
+        cur = [by_id[s] for s in self._batch_ids]
         finished = not any(it.get("state") in fmt.ACTIVE_STATES for it in cur)
         now = self.clock()
         if finished:
@@ -511,7 +541,13 @@ class Monitor:
         site = (it.get("extractor") or "").lower() or "chung"
         # Lỗi gốc PHẢI là lỗi đăng nhập; chặn-bot/403/lỗi mạng KHÔNG phải lỗi cookie
         # (app cũ từng gắn nhãn 🍪 cho cả "Error -3 while decompressing data").
-        if any(k in err for k in NOT_COOKIE_HINTS) or not any(k in err for k in LOGIN_ERROR_HINTS):
+        # App ĐÃ kết luận là cookie hỏng (🍪 / "no longer valid" — kể cả khi kèm
+        # "not a bot") → tin theo app. Còn lại: phải là lỗi đăng nhập thật.
+        if any(k in err for k in NETWORK_HINTS):
+            return  # lỗi mạng (app cũ từng dán nhãn 🍪 oan) — thay cookie không giúp
+        expired = "no longer valid" in err  # yt-dlp nói thẳng cookie hết hạn
+        if not expired and (any(k in err for k in NOT_COOKIE_HINTS)
+                            or not any(k in err for k in LOGIN_ERROR_HINTS)):
             return
         browser = None
         try:

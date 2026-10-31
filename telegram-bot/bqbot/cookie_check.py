@@ -51,6 +51,8 @@ def classify(returncode: int, out: str) -> tuple[str, str]:
         return OK, "Firefox đang đăng nhập YouTube — tải được cả video 18+."
     if "could not find firefox" in low or "firefox cookies database" in low:
         return NO_FIREFOX, "Không thấy Firefox (hoặc chưa mở Firefox lần nào) trên máy tính."
+    if "not a bot" in low or "http error 429" in low:
+        return ERROR, "YouTube đang chặn tạm (kiểm tra robot) — không phải lỗi cookie, lát nữa tự kiểm tra lại."
     if ("sign in to confirm your age" in low or "no longer valid" in low
             or "sign in to confirm" in low or "login required" in low):
         return LOGGED_OUT, "Firefox đã bị đăng xuất YouTube (hoặc phiên hết hạn)."
@@ -96,6 +98,16 @@ class CookieChecker:
             return res
         finally:
             self._busy.release()
+
+    def wait_result(self, timeout: float = 120) -> CheckResult | None:
+        """Kiểm tra ngay; nếu đang có lượt khác chạy thì ĐỢI lượt đó xong rồi
+        trả kết quả của nó (không chạy chồng thêm 1 lượt nữa)."""
+        res = self.check_now()
+        if res is not None:
+            return res
+        if self._busy.acquire(timeout=timeout):
+            self._busy.release()
+        return self.latest()
 
     def latest(self) -> CheckResult | None:
         with self._lock:

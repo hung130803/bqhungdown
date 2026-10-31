@@ -302,10 +302,22 @@ async fn douyin_cookie_header_auto(app: &tauri::AppHandle, settings: &Settings) 
     douyin_cookie_header(settings)
 }
 
-/// Cache cookie lấy từ trình duyệt: (trình duyệt, tên miền) → (lúc lấy, header).
-type BrowserCookieCache = std::collections::HashMap<(String, String), (std::time::Instant, String)>;
+/// Cache cookie lấy từ trình duyệt: (trình duyệt, tên miền) → (lúc lấy, header
+/// hoặc None = lần lấy HỎNG). Nhớ cả lần hỏng để mỗi lượt quét Douyin không
+/// chạy lại yt-dlp tới 60 giây khi Firefox chưa có cookie Douyin.
+type BrowserCookieCache = std::collections::HashMap<(String, String), (std::time::Instant, Option<String>)>;
 static BROWSER_COOKIES: std::sync::Mutex<Option<BrowserCookieCache>> = std::sync::Mutex::new(None);
 const BROWSER_COOKIE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+const BROWSER_COOKIE_FAIL_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// Mỗi lúc chỉ 1 lượt xuất cookie (các lượt quét song song đợi rồi dùng cache).
+static EXPORT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn cached_browser_cookie(key: &(String, String)) -> Option<Option<String>> {
+    let g = BROWSER_COOKIES.lock().ok()?;
+    let (at, h) = g.as_ref()?.get(key)?;
+    let ttl = if h.is_some() { BROWSER_COOKIE_TTL } else { BROWSER_COOKIE_FAIL_TTL };
+    (at.elapsed() < ttl).then(|| h.clone())
+}
 
 /// Lấy cookie của `domain` từ trình duyệt bằng CHÍNH yt-dlp của app:
 /// `--cookies-from-browser <b> --cookies <file tạm>` không kèm link → yt-dlp
@@ -313,19 +325,19 @@ const BROWSER_COOKIE_TTL: std::time::Duration = std::time::Duration::from_secs(3
 /// Đọc phần của `domain` xong XOÁ file tạm ngay.
 async fn browser_cookie_header(app: &tauri::AppHandle, browser: &str, domain: &str) -> Option<String> {
     let key = (browser.to_string(), domain.to_string());
-    if let Ok(g) = BROWSER_COOKIES.lock() {
-        if let Some((at, h)) = g.as_ref().and_then(|m| m.get(&key)) {
-            if at.elapsed() < BROWSER_COOKIE_TTL {
-                return Some(h.clone());
-            }
-        }
+    if let Some(hit) = cached_browser_cookie(&key) {
+        return hit;
     }
-    let header = export_browser_cookies(app, browser, domain).await?;
+    let _one = EXPORT_LOCK.lock().await;
+    if let Some(hit) = cached_browser_cookie(&key) {
+        return hit; // lượt khác vừa lấy xong trong lúc mình đợi
+    }
+    let header = export_browser_cookies(app, browser, domain).await;
     if let Ok(mut g) = BROWSER_COOKIES.lock() {
         g.get_or_insert_with(Default::default)
             .insert(key, (std::time::Instant::now(), header.clone()));
     }
-    Some(header)
+    header
 }
 
 async fn export_browser_cookies(app: &tauri::AppHandle, browser: &str, domain: &str) -> Option<String> {
@@ -333,6 +345,15 @@ async fn export_browser_cookies(app: &tauri::AppHandle, browser: &str, domain: &
     use tauri_plugin_shell::ShellExt;
     let dir = app.path().app_config_dir().ok()?.join("ytdlp-temp");
     std::fs::create_dir_all(&dir).ok()?;
+    // Dọn file xuất SÓT của lượt trước (app tắt ngang / quá giờ): file này chứa
+    // cookie MỌI trang — không được để nằm lại. An toàn vì đang giữ EXPORT_LOCK.
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with("bck-") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -344,13 +365,24 @@ async fn export_browser_cookies(app: &tauri::AppHandle, browser: &str, domain: &
         .sidecar("yt-dlp")
         .ok()?
         .args(["--ignore-config", "--no-warnings", "--cookies-from-browser", browser, "--cookies", &tmp_s]);
-    let out = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output()).await;
-    let raw = std::fs::read_to_string(&tmp).ok();
-    let _ = std::fs::remove_file(&tmp);
-    if out.is_err() {
+    let (mut rx, child) = cmd.spawn().ok()?;
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        while let Some(ev) = rx.recv().await {
+            if matches!(ev, tauri_plugin_shell::process::CommandEvent::Terminated(_)) {
+                break;
+            }
+        }
+    })
+    .await;
+    if waited.is_err() {
+        // Quá giờ: GIẾT yt-dlp trước khi xoá file — kẻo nó ghi file SAU khi xoá.
+        let _ = child.kill();
+        let _ = std::fs::remove_file(&tmp);
         eprintln!("[cookie] lấy cookie từ {browser} quá 60 giây — bỏ");
         return None;
     }
+    let raw = std::fs::read_to_string(&tmp).ok();
+    let _ = std::fs::remove_file(&tmp);
     netscape_to_cookie_header(&raw?, domain)
 }
 

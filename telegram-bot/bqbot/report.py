@@ -9,7 +9,7 @@ cứ lúc nào). Hàm `daily_report` thuần dữ liệu → test được khôn
 from __future__ import annotations
 
 import time
-from datetime import date, datetime
+from datetime import date
 
 from . import fmt
 from .app_client import AppClient, AppError, AppOffline
@@ -20,12 +20,8 @@ TELEGRAM_LIMIT = 3900
 
 
 def _local_date(iso: str | None) -> date | None:
-    if not iso:
-        return None
-    try:
-        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().date()
-    except ValueError:
-        return None
+    d = fmt.local_day(iso)  # parse_time: đọc được cả 9 chữ số lẻ giây của chrono
+    return date.fromisoformat(d) if d else None
 
 
 def _name(c: dict) -> str:

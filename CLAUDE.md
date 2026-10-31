@@ -42,9 +42,12 @@
   RSS không có trạng thái live nên bộ lọc lúc quét không đủ bảo vệ.
   Video bị cổng tải chặn vì live (qua RSS) được GIỮ TẠM 6 giờ
   (`WatchedChannel.live_hold`, `watcher::LIVE_HOLD_SECS`): nằm trong seen nên
-  không chiếm suất mỗi lượt quét, hết hạn thì gỡ khỏi seen để xét lại — KHÔNG
-  được cho vào skipped_ids: buổi công chiếu (premiere) phát xong thành video
-  thường và phải tải được.
+  không chiếm suất mỗi lượt quét, hết hạn thì gỡ khỏi seen để xét lại — lần
+  1..3 KHÔNG cho vào skipped_ids: buổi công chiếu (premiere) phát xong thành
+  video thường và phải tải được. Bị chặn đủ `watcher::LIVE_HOLD_MAX` (4) lần
+  (~1 ngày, đếm ở `WatchedChannel.live_hold_n`) thì BỎ HẲN vào skipped_ids —
+  vì từ khi chặn was_live, bản phát lại live bị chặn mãi, không đếm là lặp
+  nạp–chặn–giữ vô tận mỗi 6 giờ.
 - **BOT TELEGRAM + CỔNG ĐIỀU KHIỂN (30/10/2026):** `src-tauri/src/control_api.rs`
   mở HTTP `127.0.0.1:<port>` (khoá trong `<config>/control_api.json`) cho bot
   `telegram-bot/` (Python). Route CHỈ gọi lại `commands::*` — không viết lại

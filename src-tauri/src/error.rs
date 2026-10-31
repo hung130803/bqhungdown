@@ -302,6 +302,9 @@ pub fn friendly_reason(raw: &str) -> String {
     } else if is_format_error(raw) {
         "⚠️ Không lấy được định dạng video (YouTube vừa đổi cách phát). \
          Cách sửa: mở Cài đặt → bấm \"Sửa lỗi tải ngay\" → rồi bấm Thử lại."
+    } else if is_firefox_missing(raw) {
+        "🍪 Không đọc được cookie: máy chưa có Firefox (hoặc chưa mở Firefox lần nào). \
+         Cách sửa: cài/mở Firefox và đăng nhập trang đó, hoặc đổi ô cookie sang file trong Cài đặt → Cookie."
     } else if is_cookie_decrypt_error(raw) {
         "🍪 Không đọc được cookie từ trình duyệt (Chrome/Edge mã hoá kiểu mới). \
          Cách sửa: xuất file cookies.txt (từ cửa sổ ẩn danh) rồi chọn file đó trong Cài đặt → Cookie."
@@ -346,7 +349,14 @@ pub fn friendly_reason(raw: &str) -> String {
 /// "👉 Cookie cần nạp lại", bot bắt người dùng thay cookie oan.
 fn mentions_cookie(msg: &str) -> bool {
     let hint = msg.split("\n(Chi tiết kỹ thuật:").next().unwrap_or(msg);
-    hint.starts_with('🍪') || hint.starts_with('🔒')
+    hint.starts_with('🍪') || hint.starts_with('🔒') || hint.starts_with('🔑')
+}
+
+/// Ô cookie lấy từ Firefox nhưng máy không có hồ sơ Firefox.
+pub fn is_firefox_missing(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    l.contains("could not find firefox cookies database")
+        || (l.contains("firefox") && l.contains("cookies database") && l.contains("could not find"))
 }
 
 /// Như `friendly_reason_for`, thêm hiểu biết về NGUỒN cookie của ô trang đó:

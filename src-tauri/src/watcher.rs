@@ -32,6 +32,33 @@ const STARTUP_DELAY: Duration = Duration::from_secs(60);
 /// Giữ video đang live/chờ live bao lâu trước khi cho xét lại (6 giờ): đủ cho
 /// đa số buổi live/công chiếu kết thúc; còn live thì lại bị chặn + giữ tiếp.
 const LIVE_HOLD_SECS: i64 = 6 * 3600;
+/// Bị cổng live chặn đủ ngần này lần (cách nhau ≥ LIVE_HOLD_SECS ≈ 1 ngày) thì
+/// BỎ HẲN: lúc đó chắc chắn là live/bản phát lại live, không phải premiere.
+const LIVE_HOLD_MAX: u32 = 4;
+
+/// Video vừa bị cổng live chặn: giữ tạm (lần 1..MAX-1) hoặc bỏ hẳn (lần MAX).
+/// Trả `true` khi đã bỏ hẳn. Hàm thuần để unit-test.
+fn hold_or_skip_live(c: &mut crate::models::WatchedChannel, vid: String, now_ts: i64) -> bool {
+    if !c.seen_ids.contains(&vid) {
+        c.seen_ids.push(vid.clone());
+    }
+    let n = {
+        let e = c.live_hold_n.entry(vid.clone()).or_insert(0);
+        *e += 1;
+        *e
+    };
+    if n >= LIVE_HOLD_MAX {
+        c.live_hold_n.remove(&vid);
+        c.live_hold.remove(&vid);
+        if !c.skipped_ids.contains(&vid) {
+            c.skipped_ids.push(vid);
+        }
+        true
+    } else {
+        c.live_hold.insert(vid, now_ts);
+        false
+    }
+}
 
 fn video_id_of(url: &str) -> String {
     crate::channel_fetcher::extract_video_id(url).unwrap_or_else(|| url.to_string())
@@ -137,18 +164,17 @@ pub fn reconcile_all(
             for vid in pending {
                 if done_hist.contains(&vid) {
                     if !c.done_ids.contains(&vid) {
+                        c.live_hold_n.remove(&vid);
                         c.done_ids.push(vid); // chốt đã làm
                     }
                     vua_xong += 1;
                 } else if live.contains(&vid) {
                     c.dl_pending.push(vid); // vẫn đang tải/chờ/retry
                 } else if live_now.contains(&vid) {
-                    // ĐANG live/chờ live: giữ trong seen (không chiếm suất lượt
-                    // sau), trả suất hôm nay, hẹn xét lại sau LIVE_HOLD_SECS.
-                    if !c.seen_ids.contains(&vid) {
-                        c.seen_ids.push(vid.clone());
-                    }
-                    c.live_hold.insert(vid, now_ts);
+                    // ĐANG live/chờ live/phát lại live: giữ trong seen (không
+                    // chiếm suất lượt sau), trả suất hôm nay, hẹn xét lại sau
+                    // LIVE_HOLD_SECS; bị chặn đủ LIVE_HOLD_MAX lần thì bỏ hẳn.
+                    hold_or_skip_live(c, vid, now_ts);
                     if c.drip_date.as_deref() == Some(today.as_str()) && c.drip_count > 0 {
                         c.drip_count -= 1;
                     }
@@ -1212,6 +1238,25 @@ async fn enqueue_new(
 
 #[cfg(test)]
 mod tests {
+    /// Bản phát lại live (bị chặn MÃI) không được nạp lại–chặn–giữ vô tận:
+    /// lần 1..3 giữ tạm (premiere còn cơ hội), lần 4 bỏ hẳn.
+    #[test]
+    fn live_bi_chan_mai_thi_bo_han_khong_lap_vo_tan() {
+        let mut c = super::tests::chan(vec![], 1, vec![]);
+        for lan in 1..super::LIVE_HOLD_MAX {
+            assert!(!super::hold_or_skip_live(&mut c, "v1".into(), 100), "lần {lan} còn giữ tạm");
+            assert!(c.live_hold.contains_key("v1"));
+            assert!(c.seen_ids.contains(&"v1".to_string()));
+            assert!(!c.skipped_ids.contains(&"v1".to_string()));
+            c.live_hold.remove("v1"); // hết hạn giữ
+            c.seen_ids.retain(|s| s != "v1");
+        }
+        assert!(super::hold_or_skip_live(&mut c, "v1".into(), 100), "lần cuối bỏ hẳn");
+        assert!(c.skipped_ids.contains(&"v1".to_string()));
+        assert!(c.seen_ids.contains(&"v1".to_string()));
+        assert!(!c.live_hold.contains_key("v1") && !c.live_hold_n.contains_key("v1"));
+    }
+
     use super::*;
 
     #[test]
@@ -1353,6 +1398,7 @@ mod tests {
             id: "t".into(),
             url: "https://youtube.com/@t".into(),
             live_hold: Default::default(),
+            live_hold_n: Default::default(),
             title: None,
             enabled: true,
             tab: "all".into(),

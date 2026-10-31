@@ -226,6 +226,12 @@ pub struct WatchedChannel {
     /// live thật thành `was_live` thì cổng tải lại chặn (từ 31/10/2026).
     #[serde(default)]
     pub live_hold: std::collections::BTreeMap<String, i64>,
+    /// Số lần MỘT video bị cổng live chặn. Từ khi chặn cả `was_live`
+    /// (31/10/2026), bản phát lại live bị chặn MÃI → không đếm thì cứ 6 giờ
+    /// lại nạp lại–chặn–giữ, vô tận. Đủ `watcher::LIVE_HOLD_MAX` lần (~1 ngày)
+    /// thì bỏ hẳn (skipped_ids); premiere thật đã thành video thường từ trước.
+    #[serde(default)]
+    pub live_hold_n: std::collections::BTreeMap<String, u32>,
     // MỌI trường (trừ id/url định danh) đều CÓ default: bản mới thêm trường mới
     // thì watchlist.json CŨ (thiếu trường đó) VẪN đọc được. Thiếu default =
     // parse hỏng = load() trả rỗng = MẤT SẠCH kênh khi cập nhật (bug đã gặp:
