@@ -699,8 +699,23 @@ pub struct CookieCheck {
 
 /// Đọc file cookies.txt dạng Netscape (7 cột tách tab), đếm cookie thuộc đúng
 /// trang. Hàm THUẦN để unit-test.
+/// Cookie ĐĂNG NHẬP của các trang — hạn của chúng mới là hạn thật của "phiên".
+/// Cookie phụ như `CONSISTENCY`/`ST-…` của YouTube sống vài phút và tự làm mới;
+/// tính cả chúng thì vừa xuất file đã báo "sắp hết hạn (0 ngày)" — báo nhầm (31/10/2026).
+const LOGIN_COOKIES: &[&str] = &[
+    "SID", "__Secure-1PSID", "__Secure-3PSID", "SAPISID", "LOGIN_INFO", // YouTube/Google
+    "sessionid", "sessionid_ss", "sid_tt", "sid_guard",                 // TikTok/Douyin/Instagram
+    "c_user", "xs",                                                     // Facebook
+    "SESSDATA",                                                         // Bilibili
+    "auth_token", "ct0",                                                // X
+];
+/// Không có cookie đăng nhập nào thì bỏ qua cookie sống dưới 1 ngày khi tính hạn.
+const SHORT_LIVED_SECS: i64 = 86_400;
+
 pub fn inspect_cookie_text(text: &str, domains: &[&str], now: i64) -> CookieCheck {
     let mut out = CookieCheck::default();
+    let mut login_min: Option<i64> = None;
+    let mut long_min: Option<i64> = None;
     for raw in text.lines() {
         let line = raw.trim_end_matches('\r');
         // `#HttpOnly_.youtube.com` là cookie thật (yt-dlp hiểu), không phải chú thích.
@@ -724,10 +739,16 @@ pub fn inspect_cookie_text(text: &str, domains: &[&str], now: i64) -> CookieChec
             if exp < now {
                 out.expired += 1;
             } else {
-                out.earliest_expiry = Some(out.earliest_expiry.map_or(exp, |e| e.min(exp)));
+                let name = cols[5].trim();
+                if LOGIN_COOKIES.contains(&name) {
+                    login_min = Some(login_min.map_or(exp, |e| e.min(exp)));
+                } else if exp - now >= SHORT_LIVED_SECS {
+                    long_min = Some(long_min.map_or(exp, |e| e.min(exp)));
+                }
             }
         }
     }
+    out.earliest_expiry = login_min.or(long_min);
     out
 }
 
@@ -884,7 +905,25 @@ mod tests {
         assert_eq!(c.total, 4);
         assert_eq!(c.matching, 3);
         assert_eq!(c.expired, 1);
-        assert_eq!(c.earliest_expiry, Some(1_900_000_000));
+        assert_eq!(c.earliest_expiry, Some(2_000_000_000), "hạn = cookie đăng nhập SID");
+    }
+
+    #[test]
+    fn cookie_expiry_uses_login_cookies_not_short_lived_ones() {
+        let now = 1_000_000_000;
+        // File YouTube thật: CONSISTENCY sống vài phút, SID còn 380 ngày.
+        let text = format!(
+            ".youtube.com\tTRUE\t/\tTRUE\t{}\tCONSISTENCY\tx\n\
+             .youtube.com\tTRUE\t/\tTRUE\t{}\tSID\ty\n\
+             .youtube.com\tTRUE\t/\tTRUE\t{}\tVISITOR_INFO1_LIVE\tz\n",
+            now + 300, now + 380 * 86_400, now + 180 * 86_400
+        );
+        let c = inspect_cookie_text(&text, YT, now);
+        assert_eq!(c.earliest_expiry, Some(now + 380 * 86_400), "hạn = hạn cookie đăng nhập");
+        // Không có cookie đăng nhập → bỏ cookie sống < 1 ngày.
+        let text = format!(".tiktok.com\tTRUE\t/\tTRUE\t{}\tmsToken\tx\n.tiktok.com\tTRUE\t/\tTRUE\t{}\tttwid\ty\n",
+                           now + 60, now + 30 * 86_400);
+        assert_eq!(inspect_cookie_text(&text, &["tiktok.com"], now).earliest_expiry, Some(now + 30 * 86_400));
     }
 
     #[test]

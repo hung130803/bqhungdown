@@ -49,11 +49,12 @@ def eta(sec: int | None) -> str:
     return f"{h}g{m:02d}p" if h else f"{m}p{s:02d}s"
 
 
-def bar(pct: float | None, width: int = 12) -> str:
+def bar(pct: float | None, width: int = 10) -> str:
+    """Thanh tiến độ bằng ô màu — khối '█' bị Telegram vẽ thành vạch đen đặc khó nhìn."""
     if pct is None:
-        return "░" * width
+        return "⬜" * width
     full = max(0, min(width, round(pct / 100 * width)))
-    return "█" * full + "░" * (width - full)
+    return "🟩" * full + "⬜" * (width - full)
 
 
 def ago(iso: str | None, now: float | None = None) -> str:
@@ -199,7 +200,7 @@ def batch_text(items: list[dict], started: str, finished: bool) -> str:
     pct = 100 * done / n if n else 100
     head = (f"✅ <b>Xong đợt tải</b> (bắt đầu {started})" if finished
             else f"📦 <b>Đợt tải</b> (bắt đầu {started}) — <b>{c['completed']}/{n}</b> xong")
-    lines = [head, f"{bar(pct, 14)} {pct:.0f}%"]
+    lines = [head, f"{bar(pct)} {pct:.0f}%"]
     stats = [f"✅ Xong {c['completed']}"]
     if c["downloading"]:
         stats.append(f"⬇️ Đang tải {c['downloading']}")

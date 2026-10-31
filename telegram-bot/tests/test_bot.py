@@ -933,7 +933,7 @@ class UtilTests(unittest.TestCase):
         self.assertIsNone(compress.plan(4 * 3600, 45), "video quá dài thì báo, không gửi bản vỡ hình")
 
     def test_format_helpers(self):
-        self.assertEqual(fmt.bar(50, 4), "██░░")
+        self.assertEqual(fmt.bar(50, 4), "🟩🟩⬜⬜")
         self.assertEqual(fmt.size(1536), "1.5 KB")
         self.assertEqual(fmt.eta(3725), "1g02p")
         self.assertIn("&lt;b&gt;", fmt.esc("<b>"))
