@@ -51,3 +51,7 @@
   App tự bật bot (`bot_launcher.rs`, đọc `<config>/telegram_bot.json` do bot tự
   ghi) và bot mở được app từ xa (`/openapp`). Chỉ 1 bot chạy (khoá
   `logs/bot.lock`, mã thoát 4) — 2 bot cùng token bị Telegram báo 409.
+  App canh bot SUỐT ĐỜI (kiểm khoá `bot.lock` mỗi 30s, bot chết là bật lại) và
+  có lệnh đóng êm `/api/app/quit` (= "Thoát hẳn" ở khay). Socket cổng điều khiển
+  PHẢI `no_inherit` — tokio trên Windows cho tiến trình con kế thừa socket, bot
+  do app bật từng giữ cổng 47321 làm app mở lại bị treo (31/10/2026).

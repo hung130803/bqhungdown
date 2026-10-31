@@ -102,6 +102,8 @@ def main() -> int:
         # Token từng gắn webhook thì getUpdates bị 409 mãi — gỡ đi (giữ tin đang chờ).
         ("deleteWebhook", {"drop_pending_updates": False}),
         ("setMyCommands", {"commands": [{"command": c, "description": d} for c, d in BOT_COMMANDS]}),
+        # Nút "Menu" cạnh ô nhập mở thẳng danh sách lệnh.
+        ("setChatMenuButton", {"menu_button": {"type": "commands"}}),
     ):
         try:
             tg.call(method, data)
@@ -112,6 +114,8 @@ def main() -> int:
     router = Router(tg, app, cfg, monitor)
     disp = Dispatcher(tg, router, workers=cfg.workers)
     router.dispatcher = disp
+    # Bàn phím nút cố định: tự gửi 1 lần cho mỗi chat — khỏi phải biết gõ /start.
+    router.send_welcome_once(HERE / "logs" / "ui_state.json")
 
     def stop(*_a):
         log.info("Đang tắt bot…")

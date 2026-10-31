@@ -56,6 +56,11 @@ class Monitor:
         # Monitor SỬA chính tin đó theo tiến độ tới khi mọi mục xong/lỗi.
         self._tracked: dict[tuple[int, int], dict] = {}
         self._tracked_lock = threading.Lock()
+        self._expect_offline_until = float("-inf")
+
+    def expect_offline(self, seconds: float = 60) -> None:
+        """Gọi khi người dùng CHỦ ĐỘNG đóng app — không báo 'app đã tắt' trùng."""
+        self._expect_offline_until = self.clock() + seconds
 
     # ── tin tự cập nhật cho link người dùng gửi ──
     def track(self, chat_id: int, message_id: int, short_ids: list[str], folder: str | None, audio: bool) -> None:
@@ -172,6 +177,10 @@ class Monitor:
         try:
             data = self.app.queue("all", limit=5000)
         except AppOffline:
+            # Người dùng vừa đóng app bằng bot → đã có tin "Đã đóng app", khỏi báo trùng.
+            if self._online and self.clock() < self._expect_offline_until:
+                self._online = False
+                return
             if self._online:
                 self._notify("⚠️ <b>App BQHungDown trên máy tính đã tắt.</b> Bot vẫn chạy — "
                              "bấm nút dưới để bật lại app từ xa, hoặc chờ bot báo khi app chạy lại.",

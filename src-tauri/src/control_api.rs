@@ -114,13 +114,18 @@ pub fn spawn(app: AppHandle, cfg: ControlConfig) {
     }
     tauri::async_runtime::spawn(async move {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], cfg.port));
-        let listener = match tokio::net::TcpListener::bind(addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("[control-api] không mở được cổng {addr}: {e}");
-                return;
+        // Cổng bận (vd tiến trình cũ chưa nhả) → THỬ LẠI mỗi 5 giây thay vì bỏ
+        // cuộc: bỏ cuộc là app chạy mà bot không bao giờ điều khiển được.
+        let listener = loop {
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(l) => break l,
+                Err(e) => {
+                    eprintln!("[control-api] chưa mở được cổng {addr}: {e} — thử lại sau 5s");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
             }
         };
+        no_inherit(&listener);
         let token = Arc::new(cfg.token);
         loop {
             let (stream, peer) = match listener.accept().await {
@@ -131,6 +136,7 @@ pub fn spawn(app: AppHandle, cfg: ControlConfig) {
                     continue;
                 }
             };
+            no_inherit(&stream);
             if !peer.ip().is_loopback() {
                 continue;
             }
@@ -148,6 +154,28 @@ pub fn spawn(app: AppHandle, cfg: ControlConfig) {
         }
     });
 }
+
+/// Cấm tiến trình con KẾ THỪA socket của cổng điều khiển.
+///
+/// LỖI THẬT 31/10/2026: socket của tokio trên Windows để mặc định "cho kế
+/// thừa" → bot do app bật (bot_launcher) giữ luôn socket nghe 47321. App đóng
+/// rồi mà cổng vẫn bị bot giữ → app mở lại không bind được, bot hỏi thì treo
+/// ("App phản hồi quá lâu"). Bỏ cờ HANDLE_FLAG_INHERIT ngay sau khi tạo socket.
+#[cfg(windows)]
+fn no_inherit<S: std::os::windows::io::AsRawSocket>(sock: &S) {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetHandleInformation(handle: isize, mask: u32, flags: u32) -> i32;
+    }
+    const HANDLE_FLAG_INHERIT: u32 = 0x1;
+    // SAFETY: chỉ đổi cờ kế thừa của socket mình đang sở hữu; lỗi thì bỏ qua.
+    unsafe {
+        SetHandleInformation(sock.as_raw_socket() as isize, HANDLE_FLAG_INHERIT, 0);
+    }
+}
+
+#[cfg(not(windows))]
+fn no_inherit<S>(_sock: &S) {}
 
 struct Request {
     method: String,
@@ -304,6 +332,7 @@ async fn route(app: &AppHandle, req: &Request) -> ApiResult {
     let segs: Vec<&str> = req.path.trim_matches('/').split('/').collect();
     match (req.method.as_str(), segs.as_slice()) {
         ("GET", ["api", "ping"]) => Ok(json!({ "ok": true, "version": app.package_info().version.to_string() })),
+        ("POST", ["api", "app", "quit"]) => Ok(quit_app(app)),
         ("GET", ["api", "status"]) => Ok(status(app)),
         ("GET", ["api", "queue"]) => Ok(queue_list(app, req)),
         ("POST", ["api", "queue", id, action]) => queue_action(app, id, action),
@@ -327,6 +356,24 @@ async fn route(app: &AppHandle, req: &Request) -> ApiResult {
         }
         _ => Err(ApiError(404, format!("Không có lệnh {} {}", req.method, req.path))),
     }
+}
+
+/// Đóng app từ xa — y như "Thoát hẳn" ở khay. Trả lời TRƯỚC rồi mới thoát
+/// (thoát ngay thì bot nhận "mất kết nối" thay vì "đã đóng"). Báo số lượt tải
+/// đang dở để bot nói rõ (hàng đợi được lưu, mở lại app là tải tiếp).
+fn quit_app(app: &AppHandle) -> Value {
+    let active = app
+        .state::<Arc<QueueManager>>()
+        .list()
+        .iter()
+        .filter(|it| matches!(it.state, DownloadState::Downloading | DownloadState::Queued))
+        .count();
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        crate::quit_gracefully(&app2);
+    });
+    json!({ "ok": true, "quitting": true, "activeDownloads": active })
 }
 
 fn state_name(s: DownloadState) -> &'static str {
@@ -906,6 +953,25 @@ mod tests {
                 Ok(Err((401, _))) => {}
                 other => panic!("phải trả 401 ngay, được: {:?}", other.map(|x| x.map(|_| ()))),
             }
+        });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn listener_socket_is_not_inherited_by_children() {
+        use std::os::windows::io::AsRawSocket;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetHandleInformation(handle: isize, flags: *mut u32) -> i32;
+        }
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            no_inherit(&l);
+            let mut flags = 0u32;
+            let ok = unsafe { GetHandleInformation(l.as_raw_socket() as isize, &mut flags) };
+            assert_ne!(ok, 0);
+            assert_eq!(flags & 0x1, 0, "socket cổng điều khiển không được cho tiến trình con kế thừa");
         });
     }
 

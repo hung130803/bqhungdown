@@ -47,6 +47,20 @@ use crate::queue::QueueManager;
 use crate::settings_store::SettingsStore;
 use crate::ytdlp_runner::YtDlpRunner;
 
+/// THOÁT HẲN êm (dùng chung cho "Thoát hẳn" ở khay và lệnh đóng app từ bot):
+/// lưu hàng đợi + dừng lượt tải, tắt server PO token rồi mới thoát.
+pub fn quit_gracefully(app: &tauri::AppHandle) {
+    if let Some(q) = app.try_state::<Arc<QueueManager>>() {
+        q.shutdown();
+    }
+    // app.exit không chắc phát Destroyed cho cửa sổ đang ẩn → tắt server PO
+    // token ngay tại đây, kẻo mồ côi.
+    if let Some(po) = app.try_state::<Arc<crate::po_token::ProviderProcess>>() {
+        crate::po_token::shutdown(&po);
+    }
+    app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Separate app instances cannot see each other's in-memory queue and may
@@ -311,17 +325,7 @@ pub fn run() {
                                 let _ = w.set_focus();
                             }
                         }
-                        "quit" => {
-                            if let Some(q) = app.try_state::<Arc<QueueManager>>() {
-                                q.shutdown();
-                            }
-                            // app.exit không chắc phát Destroyed cho cửa sổ đang
-                            // ẩn → tắt server PO token ngay tại đây, kẻo mồ côi.
-                            if let Some(po) = app.try_state::<Arc<crate::po_token::ProviderProcess>>() {
-                                crate::po_token::shutdown(&po);
-                            }
-                            app.exit(0);
-                        }
+                        "quit" => quit_gracefully(app),
                         _ => {}
                     })
                     .on_tray_icon_event(|tray, event| {

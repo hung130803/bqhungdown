@@ -87,6 +87,16 @@ def open_app(exe: str) -> None:
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def force_kill_app() -> bool:
+    """Buộc tắt app (chỉ dùng khi app treo / bản cũ không có lệnh đóng êm)."""
+    import subprocess
+    if os.name != "nt":
+        return False
+    r = subprocess.run(["taskkill", "/IM", "bqhungdown.exe", "/F", "/T"], capture_output=True,
+                       creationflags=0x08000000)
+    return r.returncode == 0
+
+
 class SingleInstance:
     """Giữ khoá suốt đời tiến trình; tiến trình chết là hệ điều hành tự nhả."""
 
