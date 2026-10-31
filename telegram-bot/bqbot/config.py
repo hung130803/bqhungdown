@@ -26,6 +26,9 @@ class Config:
     poll_interval_sec: float = 5
     digest_interval_sec: float = 20
     board_interval_sec: float = 10
+    # Đợt tải coi là XONG khi không còn mục chờ/tải trong ngần này giây — quét
+    # nhóm thêm video DẦN từng kênh, chốt sớm là ra nhiều báo cáo lẻ.
+    batch_finish_grace_sec: float = 90
     notify_completed: bool = True
     notify_failed: bool = True
     notify_new: bool = True

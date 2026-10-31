@@ -840,13 +840,14 @@ async fn cookies_set(app: &AppHandle, site: &str, body: Value) -> ApiResult {
         if browser != "firefox" {
             return Err(bad("Chỉ hỗ trợ lấy cookie tự động từ Firefox (Chrome/Edge trên Windows bị khoá mã hoá)."));
         }
-        // Đường HTTP riêng của Douyin/Bilibili chỉ đọc FILE cookie — chưa hỗ trợ
-        // nguồn trình duyệt, nên giới hạn ở YouTube (đi hoàn toàn qua yt-dlp).
-        if site != "youtube" {
-            return Err(bad("Lấy cookie tự động từ Firefox hiện chỉ dùng cho YouTube."));
-        }
+        // MỌI trang: đường yt-dlp dùng `--cookies-from-browser`; đường HTTP riêng
+        // của Douyin lấy cookie Firefox qua yt-dlp (douyin_scraper::
+        // douyin_cookie_header_auto), hỏng thì chạy không cookie như cũ.
         if !firefox_has_profile() {
-            return Err(bad("Máy chưa có Firefox (hoặc chưa mở Firefox lần nào) — cài/mở Firefox, đăng nhập YouTube rồi bấm lại."));
+            return Err(bad(format!(
+                "Máy chưa có Firefox (hoặc chưa mở Firefox lần nào) — cài/mở Firefox, đăng nhập {} rồi bấm lại.",
+                crate::args_builder::cookie_site_label(site)
+            )));
         }
         let settings = app.state::<Arc<SettingsStore>>();
         let mut map = settings.get().site_cookies.clone();

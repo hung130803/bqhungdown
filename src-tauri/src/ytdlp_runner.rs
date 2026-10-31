@@ -1184,10 +1184,16 @@ mod tests_khong_cua_nao_duoc_sot_cookie {
     /// Những hàm spawn yt-dlp mà KHÔNG cần cookie — phải liệt kê tường minh ở
     /// đây, kèm lý do. Thêm tên vào danh sách này là một quyết định có ý thức,
     /// không phải quên.
-    const MIEN_TRU: &[(&str, &str)] = &[(
-        "run_update",
-        "tự cập nhật BINARY yt-dlp (--update-to nightly) — không đụng tài khoản nào",
-    )];
+    const MIEN_TRU: &[(&str, &str)] = &[
+        (
+            "run_update",
+            "tự cập nhật BINARY yt-dlp (--update-to nightly) — không đụng tài khoản nào",
+        ),
+        (
+            "export_browser_cookies",
+            "chỉ ĐỌC cookie trình duyệt ra file TẠM của app rồi xoá — không đưa file gốc của user",
+        ),
+    ];
 
     /// Các file có thể chứa cửa spawn.
     const FILES: &[&str] = &[

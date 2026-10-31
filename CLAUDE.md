@@ -60,3 +60,11 @@
   có lệnh đóng êm `/api/app/quit` (= "Thoát hẳn" ở khay). Socket cổng điều khiển
   PHẢI `no_inherit` — tokio trên Windows cho tiến trình con kế thừa socket, bot
   do app bật từng giữ cổng 47321 làm app mở lại bị treo (31/10/2026).
+- **COOKIE TỰ ĐỘNG TỪ FIREFOX CHO MỌI TRANG (31/10/2026):** ô cookie mỗi trang
+  đặt `browser: firefox` → yt-dlp `--cookies-from-browser firefox` mỗi lần tải
+  (Chrome/Edge trên Windows hỏng vì app-bound encryption, yt-dlp #10927).
+  Douyin đi đường HTTP riêng → `douyin_scraper::douyin_cookie_header_auto` nhờ
+  yt-dlp xuất cookie ra file tạm rồi XOÁ (giữ 30 phút); hỏng thì chạy không
+  cookie như cũ. Bot tự kiểm tra YouTube 18+ mỗi 6 giờ (`cookie_check.py`).
+  Đợt tải xong → bot gửi TIN MỚI báo cáo tổng theo nhóm (`fmt.batch_report`);
+  đợt được lưu ở `logs/live_msgs.json` để bot khởi động lại vẫn báo đúng.

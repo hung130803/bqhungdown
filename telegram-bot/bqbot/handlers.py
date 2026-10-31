@@ -704,7 +704,9 @@ class Router:
             if yt.get("browser") != "firefox":
                 rows.append([("🦊 YouTube tự lấy từ Firefox (khỏi xuất file)", "cf:youtube")])
             else:
-                rows.append([("🧪 Kiểm tra ngay", "ckt"), ("🦊 Mở Firefox", "cfo")])
+                rows.append([("🧪 Kiểm tra YouTube ngay", "ckt"), ("🦊 Mở Firefox", "cfo")])
+            if any(s.get("browser") != "firefox" for s in data.get("sites", [])):
+                rows.append([("🦊 Mọi trang tự lấy từ Firefox", "cf:all")])
             rows.append([("🔄 Làm mới", "ck"), HOME])
             self._show(chat_id, mid, fmt.cookies_text(data, check=self.cookie_checker.latest()), kb(rows))
         self._guard(chat_id, mid, go)
@@ -729,18 +731,30 @@ class Router:
         self._job("kiểm tra cookie Firefox", work, done)
 
     def _cb_cookie_firefox(self, chat_id: int, mid: int | None, args: list[str]) -> None:
-        """Ô cookie của trang → lấy THẲNG từ Firefox mỗi lần tải: không cần xuất
-        file, không bao giờ cũ (miễn Firefox còn đăng nhập)."""
-        site = args[0] if args and args[0] in COOKIE_SITES else "youtube"
+        """Ô cookie của trang (hoặc `all` = MỌI trang) → lấy THẲNG từ Firefox mỗi
+        lần tải: không cần xuất file, không bao giờ cũ (miễn Firefox còn đăng nhập)."""
+        arg = args[0] if args else "youtube"
+        sites = list(COOKIE_SITES) if arg == "all" else [arg if arg in COOKIE_SITES else "youtube"]
 
         def go():
-            self.app.set_cookie_browser(site, "firefox")
+            done, failed = [], []
+            for site in sites:
+                try:
+                    self.app.set_cookie_browser(site, "firefox")
+                    done.append(site)
+                except AppError as e:
+                    failed.append(f"{site}: {e}")
             self.app.cache.clear("cookies")
-            self._show(chat_id, mid,
-                       f"✅ <b>{fmt.esc(site)}</b> giờ <b>tự lấy cookie từ Firefox</b> mỗi lần tải — "
-                       "không cần gửi file cookie nữa.\n\n"
-                       "Việc duy nhất: <b>đăng nhập YouTube trên Firefox 1 lần</b> (tài khoản đã xác minh "
-                       "18+). Sau đó không cần mở Firefox khi tải; chỉ đừng đăng xuất.",
+            names = ", ".join(fmt.site_label(s) for s in done)
+            lines = [f"✅ <b>{fmt.esc(names)}</b> giờ <b>tự lấy cookie từ Firefox</b> mỗi lần tải — "
+                     "không cần gửi file cookie nữa." if done else "❌ Chưa bật được trang nào."]
+            if failed:
+                lines.append("⚠️ " + fmt.esc("; ".join(failed)))
+            if done:
+                lines += ["", "Việc duy nhất: <b>đăng nhập các trang đó trên Firefox 1 lần</b> "
+                          "(YouTube: tài khoản đã xác minh 18+). Sau đó không cần mở Firefox khi tải; "
+                          "chỉ đừng đăng xuất."]
+            self._show(chat_id, mid, "\n".join(lines),
                        kb([[("🦊 Mở Firefox để đăng nhập", "cfo")], [("🍪 Cookie", "ck"), HOME]]))
         self._guard(chat_id, mid, go)
 

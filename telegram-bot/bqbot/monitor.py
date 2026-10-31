@@ -83,6 +83,8 @@ class Monitor:
         self._batch_started: str | None = None
         self._batch_text = ""
         self._batch_last_edit = float("-inf")
+        self._batch_t0: float | None = None      # giờ máy (epoch) lúc mở đợt
+        self._batch_done_since: float | None = None
         self._quiet_online_until = float("-inf")
         # Nơi lưu id các tin đang tự cập nhật — bot khởi động lại thì chốt chúng
         # (không để tin "đang tải" đứng hình vĩnh viễn). None = không lưu (test).
@@ -111,36 +113,43 @@ class Monitor:
         if not self.state_path:
             return
         with self._tracked_lock:
-            tracked = [list(k) for k in self._tracked]
-        data = {"batch": [[c, m] for c, m in self._batch_msgs.items()], "tracked": tracked}
+            tracked = [{"chat": c, "mid": m, "ids": t["ids"], "folder": t["folder"], "audio": t["audio"]}
+                       for (c, m), t in self._tracked.items()]
+        data = {"batch": [[c, m] for c, m in self._batch_msgs.items()], "tracked": tracked,
+                "batch_ids": list(self._batch_ids), "batch_started": self._batch_started,
+                "batch_t0": self._batch_t0}
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
             self.state_path.write_text(json.dumps(data), encoding="utf-8")
         except OSError:
             pass
 
-    def close_stale_live_messages(self) -> int:
-        """Gọi lúc bot khởi động: các tin tự cập nhật của lần chạy trước không ai
-        sửa nữa → ghi chú cho người dùng biết, rồi quên chúng."""
+    def restore_live_messages(self) -> int:
+        """Gọi lúc bot khởi động: NHẬN LẠI đợt tải + tin tự cập nhật của lần chạy
+        trước → bot khởi động lại giữa chừng vẫn sửa tiếp đúng tin cũ và vẫn gửi
+        báo cáo khi đợt xong (trước đây đợt bị "quên" → xong mà không báo gì)."""
         if not self.state_path or not self.state_path.exists():
             return 0
         try:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            data = {}
+            return 0
         n = 0
-        for chat, mid in (data.get("batch") or []) + (data.get("tracked") or []):
-            try:
-                self.tg.edit_message(chat, mid, "⏹ <i>Bot vừa khởi động lại — tin này thôi tự cập nhật. "
-                                                "Xem tiến độ: nút ⬇️ Đang tải.</i>",
-                                     _kb([[("⬇️ Đang tải", "q:active:0"), ("✅ Xong", "q:completed:0")]]))
-                n += 1
-            except Exception:  # noqa: BLE001
-                pass
-        try:
-            self.state_path.unlink()
-        except OSError:
-            pass
+        ids = [str(x) for x in data.get("batch_ids") or []]
+        if ids:
+            self._batch_ids, self._batch_set = ids, set(ids)
+            self._batch_msgs = {int(c): int(m) for c, m in data.get("batch") or []}
+            self._batch_started = data.get("batch_started") or time.strftime("%H:%M")
+            self._batch_t0 = data.get("batch_t0") or time.time()
+            n += 1
+        for t in data.get("tracked") or []:
+            if not isinstance(t, dict):
+                continue  # định dạng cũ (chỉ [chat, mid]) — bỏ
+            with self._tracked_lock:
+                self._tracked[(int(t["chat"]), int(t["mid"]))] = {
+                    "ids": list(t.get("ids") or []), "folder": t.get("folder"),
+                    "audio": bool(t.get("audio")), "text": ""}
+            n += 1
         return n
 
     # ── tin tự cập nhật cho link người dùng gửi ──
@@ -330,8 +339,15 @@ class Monitor:
             now = self.clock()
             self._own = {k: t for k, t in self._own.items() if now - t < 600}
             own = set(self._own)
-        if self._prev is None:  # nhịp đầu: chỉ ghi mốc
+        if self._prev is None:  # nhịp đầu: ghi mốc
             self._prev = cur
+            if not self._batch_ids:
+                tracked0 = self._tracked_ids()
+                active = [it["shortId"] for it in items if it.get("state") in fmt.ACTIVE_STATES
+                          and it["shortId"] not in own and it["shortId"] not in tracked0]
+                if active:
+                    # Bot bật lúc app đang tải dở → vẫn theo dõi để cuối đợt có báo cáo.
+                    self._open_batch(active)
             return
         # Mục có tin tự cập nhật riêng (link người dùng gửi) → không đưa vào đợt.
         tracked = self._tracked_ids()
@@ -353,11 +369,18 @@ class Monitor:
             if first_seen_done and not self._batch_ids:
                 continue
             if sid not in self._batch_set and (before is None or st in ACTIVE_OR_DONE):
+                self._open_batch([sid])
+        self._prev = cur
+
+    def _open_batch(self, ids: list[str]) -> None:
+        for sid in ids:
+            if sid not in self._batch_set:
                 self._batch_ids.append(sid)
                 self._batch_set.add(sid)
-                if self._batch_started is None:
-                    self._batch_started = time.strftime("%H:%M")
-        self._prev = cur
+        if self._batch_started is None:
+            self._batch_started = time.strftime("%H:%M")
+            self._batch_t0 = time.time()
+        self._batch_done_since = None
 
     # ── 1 tin cho cả đợt tải ──
     def _update_batch(self, items: list[dict], force: bool = False) -> None:
@@ -377,6 +400,16 @@ class Monitor:
         cur = [by_id.get(s) or {"shortId": s, "state": "cancelled", "title": ""} for s in self._batch_ids]
         finished = not any(it.get("state") in fmt.ACTIVE_STATES for it in cur)
         now = self.clock()
+        if finished:
+            # Quét nhóm thêm video dần từng kênh → chờ thêm một lúc mới chốt,
+            # kẻo 1 nhóm ra nhiều báo cáo lẻ.
+            if self._batch_done_since is None:
+                self._batch_done_since = now
+            grace = getattr(self.cfg, "batch_finish_grace_sec", 90)
+            if not force and now - self._batch_done_since < grace:
+                return
+        else:
+            self._batch_done_since = None
         if not finished and not force and now - self._batch_last_edit < self.cfg.board_interval_sec:
             return
         if finished and not self._batch_msgs and all(it.get("state") in ("skipped", "cancelled") for it in cur):
@@ -402,9 +435,26 @@ class Monitor:
                 except Exception as e:  # noqa: BLE001
                     log.info("Cập nhật tin đợt tải lỗi: %s", e)
         if finished:
+            self._send_batch_report(cur)
             self._batch_ids, self._batch_set, self._batch_msgs = [], set(), {}
             self._batch_started, self._batch_text = None, ""
-            self._save_live()
+            self._batch_t0, self._batch_done_since = None, None
+        self._save_live()
+
+    def _send_batch_report(self, cur: list[dict]) -> None:
+        """BÁO CÁO TỔNG gửi thành TIN MỚI (điện thoại có thông báo) — tin tiến độ
+        cũ chỉ được sửa nên nằm tít phía trên, người dùng không thấy đợt đã xong."""
+        try:
+            channels = self.app.watch().get("items", [])
+        except (AppOffline, AppError):
+            channels = []
+        text = fmt.batch_report(cur, channels, self._batch_started or "", self._batch_t0)
+        markup = self._batch_markup(cur, True)
+        for chat in self.cfg.notify_chat_ids:
+            try:
+                self.tg.send_message(chat, text, markup)
+            except Exception as e:  # noqa: BLE001
+                log.info("Gửi báo cáo đợt tải lỗi: %s", e)
 
     @staticmethod
     def _batch_markup(items: list[dict], finished: bool) -> dict:

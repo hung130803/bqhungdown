@@ -236,6 +236,58 @@ def batch_text(items: list[dict], started: str, finished: bool) -> str:
     return "\n".join(lines)
 
 
+def _norm_dir(p) -> str:
+    return str(p or "").replace("/", "\\").rstrip("\\").lower()
+
+
+def batch_report(items: list[dict], channels: list[dict], started: str, t0: float | None,
+                 now: float | None = None) -> str:
+    """BÁO CÁO TỔNG khi đợt tải xong: tổng số + từng NHÓM (video xong/lỗi, kênh đã
+    đủ hạn mức hôm nay). Video gán vào nhóm theo thư mục lưu = thư mục kênh."""
+    now = now or time.time()
+    by_dir = {_norm_dir(c.get("destDir")): c for c in channels if c.get("destDir")}
+    c = {k: sum(1 for it in items if it.get("state") == k) for k in ("completed", "failed", "skipped", "cancelled")}
+    mins = int((now - t0) // 60) if t0 else None
+    dur = (f"{mins // 60} giờ {mins % 60} phút" if mins and mins >= 60 else f"{mins} phút") if mins is not None else ""
+    lines = [f"🏁 <b>ĐÃ XONG ĐỢT TẢI</b> — {len(items)} video",
+             f"⏱ {started} → {time.strftime('%H:%M', time.localtime(now))}" + (f" ({dur})" if dur else ""),
+             f"✅ Xong <b>{c['completed']}</b>" + (f" · ❌ Lỗi <b>{c['failed']}</b>" if c["failed"] else "")
+             + (f" · ⏭ Bỏ qua {c['skipped']}" if c["skipped"] else "")
+             + (f" · 🚫 Huỷ {c['cancelled']}" if c["cancelled"] else "")]
+    groups: dict[str, dict[str, int]] = {}
+    for it in items:
+        ch = by_dir.get(_norm_dir(it.get("saveFolder")))
+        g = (ch.get("group") or "Chưa nhóm") if ch else "Tải lẻ (không thuộc kênh theo dõi)"
+        d = groups.setdefault(g, {"completed": 0, "failed": 0, "skipped": 0, "cancelled": 0})
+        if it.get("state") in d:
+            d[it["state"]] += 1
+    if groups:
+        lines.append("\n<b>Theo nhóm:</b>")
+        for g, d in sorted(groups.items(), key=lambda kv: -sum(kv[1].values())):
+            line = f"📁 <b>{esc(g)}</b>: ✅ {d['completed']}"
+            if d["failed"]:
+                line += f" · ❌ {d['failed']}"
+            if d["skipped"]:
+                line += f" · ⏭ {d['skipped']}"
+            on = [ch for ch in channels if (ch.get("group") or "Chưa nhóm") == g and ch.get("enabled")]
+            if on:
+                full = sum(1 for ch in on if today_count(ch) >= daily_limit(ch))
+                line += f"\n    Hôm nay: <b>{full}/{len(on)}</b> kênh đã đủ video"
+                if full < len(on):
+                    line += f" · ⏳ {len(on) - full} kênh chưa đủ"
+            lines.append(line)
+    failed = [it for it in items if it.get("state") == "failed"]
+    if failed:
+        lines.append("\n<b>Lỗi:</b>")
+        for it in failed[:5]:
+            lines.append(f"• {esc(short(title_of(it), 40))} — <i>{esc(first_line(it.get('error'), 80))}</i>")
+        if len(failed) > 5:
+            lines.append(f"… và {len(failed) - 5} lỗi nữa")
+    if c["completed"]:
+        lines.append("\n💾 Video đã lưu trên máy tính (thư mục từng kênh).")
+    return "\n".join(lines)
+
+
 def today_count(c: dict, today: str | None = None) -> int:
     """Số video ĐÃ TẢI HÔM NAY. App giữ `dripCount` của NGÀY `dripDate` — khác
     hôm nay thì là số của ngày cũ (từng hiện '1/1' của ngày 27 làm tưởng đã tải)."""
@@ -377,7 +429,10 @@ def cookies_text(data: dict, now: float | None = None, check=None) -> str:
         if s.get("browser"):
             if s is yt and s.get("browser") == "firefox":
                 continue
-            lines.append(f"🌐 {label}: lấy từ trình duyệt {esc(s['browser'])}")
+            if s.get("browser") == "firefox":
+                lines.append(f"🦊 {label}: tự lấy từ Firefox (đăng nhập {label} trên Firefox nếu cần)")
+            else:
+                lines.append(f"🌐 {label}: lấy từ trình duyệt {esc(s['browser'])}")
             continue
         if not s.get("file"):
             lines.append(f"▫️ {label}: chưa đặt (dùng ô chung)")
@@ -398,6 +453,14 @@ def cookies_text(data: dict, now: float | None = None, check=None) -> str:
     lines += ["", "<i>Trang khác: gửi file <b>cookies.txt</b> vào đây (ghi tên trang ở chú thích,"
               " vd <code>douyin</code>, hoặc để bot tự nhận).</i>"]
     return "\n".join(lines)
+
+
+SITE_LABELS = {"youtube": "YouTube", "tiktok": "TikTok", "douyin": "Douyin", "facebook": "Facebook",
+               "instagram": "Instagram", "bilibili": "Bilibili", "twitter": "X (Twitter)"}
+
+
+def site_label(site: str) -> str:
+    return SITE_LABELS.get(site, site)
 
 
 def guess_cookie_site(text: str, sites: dict[str, tuple[str, ...]]) -> str | None:

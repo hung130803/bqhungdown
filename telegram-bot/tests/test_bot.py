@@ -106,7 +106,7 @@ def stop_and_wait(d: Dispatcher) -> None:
 
 def cfg(**kw) -> Config:
     base = dict(telegram_token="x", allowed_chat_ids=[CHAT], notify_chat_ids=[CHAT],
-                digest_interval_sec=0, board_interval_sec=0)
+                digest_interval_sec=0, board_interval_sec=0, batch_finish_grace_sec=0)
     base.update(kw)
     return Config(**base)
 
@@ -445,7 +445,7 @@ class RouterTests(NoNetworkCase):
         """Gửi link → 1 tin TỰ CẬP NHẬT tới khi xong, có nút gửi về điện thoại;
         không gửi thêm tin 'tải xong' trùng."""
         tg = FakeTG()
-        state = {"s": "queued"}
+        state = {"s": ""}  # nhịp mốc: link chưa vào hàng đợi
         app = FakeApp({
             "/api/enqueue": {"ok": True, "added": 1, "folder": "D:\\Video",
                              "items": [{"shortId": "v1", "title": "https://youtu.be/a", "state": "queued"}]},
@@ -808,16 +808,19 @@ class MonitorTests(NoNetworkCase):
         # Xong hết → chốt tổng kết có nút gửi về điện thoại + thử lại lỗi.
         items[2] = {"shortId": "v1", "state": "completed", "title": "Video 1"}
         m.tick()
-        last = tg.calls[-1]
-        self.assertEqual(last[0], "edit")
-        self.assertIn("Xong đợt tải", last[2])
-        buttons = [b["callback_data"] for row in last[3]["inline_keyboard"] for b in row]
+        # Tin tiến độ được chốt (sửa) + BÁO CÁO TỔNG gửi thành tin MỚI (có thông báo).
+        edit, report = tg.calls[-2], tg.calls[-1]
+        self.assertEqual(edit[0], "edit")
+        self.assertIn("Xong đợt tải", edit[2])
+        self.assertEqual(report[0], "send")
+        self.assertIn("ĐÃ XONG ĐỢT TẢI", report[2])
+        buttons = [b["callback_data"] for row in report[3]["inline_keyboard"] for b in row]
         self.assertIn("q:completed:0", buttons)
         self.assertIn("b:retry_failed", buttons)
         # Đợt mới sau đó → tin mới.
         items.append({"shortId": "w1", "state": "queued", "title": "Đợt 2"})
         m.tick()
-        self.assertEqual(sum(1 for c in tg.calls if c[0] == "send"), 2)
+        self.assertEqual(sum(1 for c in tg.calls if c[0] == "send"), 3)
 
     def test_offline_and_back_online(self):
         tg = FakeTG()
@@ -878,20 +881,93 @@ class MonitorTests(NoNetworkCase):
         m.tick()
         self.assertEqual(len(tg.texts()), n, "đã có tin 'Đã mở app' — không báo trùng")
 
-    def test_live_message_detection_and_stale_close(self):
+    def test_live_message_detection_and_restore(self):
         import tempfile
         tg = FakeTG()
         m = Monitor(tg, FakeApp(), cfg())
         with tempfile.TemporaryDirectory() as d:
             m.state_path = Path(d) / "live.json"
-            m.track(CHAT, 77, ["a1"], None, False)
+            m.track(CHAT, 77, ["a1"], "D:\\V", False)
             self.assertTrue(m.is_live_message(CHAT, 77))
             self.assertFalse(m.is_live_message(CHAT, 78))
             self.assertFalse(m.is_live_message(CHAT, None))
             m2 = Monitor(tg, FakeApp(), cfg())
             m2.state_path = m.state_path
-            self.assertEqual(m2.close_stale_live_messages(), 1)
-            self.assertFalse(m.state_path.exists())
+            self.assertEqual(m2.restore_live_messages(), 1)
+            self.assertTrue(m2.is_live_message(CHAT, 77), "bot khởi động lại vẫn sửa tiếp tin cũ")
+            self.assertEqual(m2._tracked_ids(), {"a1"})
+
+    def test_batch_survives_bot_restart_and_reports(self):
+        """Bot khởi động lại giữa đợt → nhận lại đợt, xong vẫn gửi báo cáo tổng."""
+        import tempfile
+        items = [{"shortId": "a", "state": "queued", "title": "A", "saveFolder": "D:\\k1"}]
+        chans = [{"id": "c1", "group": "MỸ", "destDir": "D:\\k1", "enabled": True, "dailyLimit": 1,
+                  "dripDate": time.strftime("%Y-%m-%d"), "dripCount": 1}]
+        mk = lambda: FakeApp({"/api/queue": {"ok": True, "items": items},  # noqa: E731
+                              "/api/cookies": {"ok": True, "sites": []},
+                              "/api/watch": {"ok": True, "items": chans}})
+        with tempfile.TemporaryDirectory() as d:
+            tg = FakeTG()
+            m = Monitor(tg, mk(), cfg())
+            m.state_path = Path(d) / "live.json"
+            m.tick()
+            items.append({"shortId": "b", "state": "queued", "title": "B", "saveFolder": "D:\\k1"})
+            m.tick()
+            self.assertEqual(sum(1 for c in tg.calls if c[0] == "send"), 1)
+            batch_mid = tg._mid
+            # Bot tắt / bật lại
+            m2 = Monitor(tg, mk(), cfg())
+            m2.state_path = m.state_path
+            self.assertEqual(m2.restore_live_messages(), 1)
+            items[0]["state"] = items[1]["state"] = "completed"
+            m2.tick()
+            m2.tick()
+            edits = [c for c in tg.calls if c[0] == "edit"]
+            self.assertEqual(edits[-1][4], batch_mid, "sửa tiếp ĐÚNG tin cũ, không gửi tin đợt mới")
+            report = tg.calls[-1]
+            self.assertEqual(report[0], "send")
+            self.assertIn("ĐÃ XONG ĐỢT TẢI", report[2])
+            self.assertIn("MỸ", report[2])
+            self.assertIn("1/1", report[2], "kênh đã đủ hạn mức hôm nay")
+
+    def test_bot_started_mid_download_still_reports(self):
+        items = [{"shortId": "a", "state": "downloading", "title": "A", "percent": 10.0}]
+        tg = FakeTG()
+        m = Monitor(tg, FakeApp({"/api/queue": {"ok": True, "items": items},
+                                 "/api/cookies": {"ok": True, "sites": []},
+                                 "/api/watch": {"ok": True, "items": []}}), cfg())
+        m.tick()  # bot vừa bật, app đang tải dở
+        items[0]["state"] = "completed"
+        m.tick()
+        self.assertIn("ĐÃ XONG ĐỢT TẢI", tg.calls[-1][2])
+
+    def test_batch_waits_grace_before_reporting(self):
+        """Quét nhóm thêm video dần từng kênh: hết video tạm thời thì CHƯA chốt."""
+        clock = {"t": 0.0}
+        items = [{"shortId": "a", "state": "queued", "title": "A"}]
+        tg = FakeTG()
+        m = Monitor(tg, FakeApp({"/api/queue": {"ok": True, "items": items},
+                                 "/api/cookies": {"ok": True, "sites": []},
+                                 "/api/watch": {"ok": True, "items": []}}),
+                    cfg(batch_finish_grace_sec=90), clock=lambda: clock["t"])
+        m.tick()
+        items.append({"shortId": "b", "state": "queued", "title": "B"})
+        m.tick()
+        items[0]["state"] = items[1]["state"] = "completed"
+        clock["t"] = 10
+        m.tick()
+        self.assertFalse(any("ĐÃ XONG" in c[2] for c in tg.calls if len(c) > 2), "chưa hết thời gian chờ")
+        items.append({"shortId": "c", "state": "queued", "title": "C"})  # kênh sau thêm video
+        clock["t"] = 50
+        m.tick()
+        items[2]["state"] = "completed"
+        clock["t"] = 60
+        m.tick()
+        clock["t"] = 200
+        m.tick()
+        reports = [c for c in tg.calls if c[0] == "send" and "ĐÃ XONG" in c[2]]
+        self.assertEqual(len(reports), 1, "đúng 1 báo cáo cho cả nhóm")
+        self.assertIn("3 video", reports[0][2])
 
     def test_first_seen_skipped_item_does_not_open_batch(self):
         tg = FakeTG()

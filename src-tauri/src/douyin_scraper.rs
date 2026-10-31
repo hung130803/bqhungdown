@@ -279,6 +279,81 @@ fn douyin_cookie_header(settings: &Settings) -> Option<String> {
     netscape_to_cookie_header(&raw, "douyin.com")
 }
 
+/// Ô cookie Douyin đang đặt "lấy từ trình duyệt" nào (vd `firefox`). Ô riêng
+/// trước; ô riêng trống hẳn thì theo ô chung — giống `settings_for_url`.
+fn douyin_cookie_browser(settings: &Settings) -> Option<String> {
+    match settings.site_cookies.get("douyin") {
+        Some(slot) if !slot.is_empty() => slot.browser.clone().filter(|b| !b.is_empty()),
+        _ if settings.cookies_file.as_deref().map(|f| !f.is_empty()).unwrap_or(false) => None,
+        _ => settings.cookies_browser.clone().filter(|b| !b.is_empty()),
+    }
+}
+
+/// Cookie Douyin cho đường HTTP riêng của app. Ô đặt "lấy từ Firefox" → lấy
+/// TƯƠI từ Firefox (giữ 30 phút); lấy hỏng thì rơi về đường file như cũ —
+/// tức là tệ nhất cũng chỉ như chưa có cookie, KHÔNG làm hỏng lượt quét.
+async fn douyin_cookie_header_auto(app: &tauri::AppHandle, settings: &Settings) -> Option<String> {
+    if let Some(browser) = douyin_cookie_browser(settings) {
+        if let Some(h) = browser_cookie_header(app, &browser, "douyin.com").await {
+            return Some(h);
+        }
+        eprintln!("[douyin] không lấy được cookie từ {browser} — chạy không cookie");
+    }
+    douyin_cookie_header(settings)
+}
+
+/// Cache cookie lấy từ trình duyệt: (trình duyệt, tên miền) → (lúc lấy, header).
+type BrowserCookieCache = std::collections::HashMap<(String, String), (std::time::Instant, String)>;
+static BROWSER_COOKIES: std::sync::Mutex<Option<BrowserCookieCache>> = std::sync::Mutex::new(None);
+const BROWSER_COOKIE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Lấy cookie của `domain` từ trình duyệt bằng CHÍNH yt-dlp của app:
+/// `--cookies-from-browser <b> --cookies <file tạm>` không kèm link → yt-dlp
+/// chỉ nạp cookie trình duyệt rồi ghi ra file tạm lúc thoát (không vào mạng).
+/// Đọc phần của `domain` xong XOÁ file tạm ngay.
+async fn browser_cookie_header(app: &tauri::AppHandle, browser: &str, domain: &str) -> Option<String> {
+    let key = (browser.to_string(), domain.to_string());
+    if let Ok(g) = BROWSER_COOKIES.lock() {
+        if let Some((at, h)) = g.as_ref().and_then(|m| m.get(&key)) {
+            if at.elapsed() < BROWSER_COOKIE_TTL {
+                return Some(h.clone());
+            }
+        }
+    }
+    let header = export_browser_cookies(app, browser, domain).await?;
+    if let Ok(mut g) = BROWSER_COOKIES.lock() {
+        g.get_or_insert_with(Default::default)
+            .insert(key, (std::time::Instant::now(), header.clone()));
+    }
+    Some(header)
+}
+
+async fn export_browser_cookies(app: &tauri::AppHandle, browser: &str, domain: &str) -> Option<String> {
+    use tauri::Manager;
+    use tauri_plugin_shell::ShellExt;
+    let dir = app.path().app_config_dir().ok()?.join("ytdlp-temp");
+    std::fs::create_dir_all(&dir).ok()?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = dir.join(format!("bck-{}-{nonce}.txt", std::process::id()));
+    let tmp_s = tmp.to_string_lossy().to_string();
+    let cmd = app
+        .shell()
+        .sidecar("yt-dlp")
+        .ok()?
+        .args(["--ignore-config", "--no-warnings", "--cookies-from-browser", browser, "--cookies", &tmp_s]);
+    let out = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output()).await;
+    let raw = std::fs::read_to_string(&tmp).ok();
+    let _ = std::fs::remove_file(&tmp);
+    if out.is_err() {
+        eprintln!("[cookie] lấy cookie từ {browser} quá 60 giây — bỏ");
+        return None;
+    }
+    netscape_to_cookie_header(&raw?, domain)
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 //  PHÂN LOẠI LỖI — mỗi loại một cách xử khác nhau, nói đúng cho user
 // ─────────────────────────────────────────────────────────────────────────
@@ -892,7 +967,7 @@ pub async fn fetch_channel_listing_douyin(
     let sec_uid = extract_sec_uid(url)
         .ok_or_else(|| AppError::Other("Link Douyin phải dạng douyin.com/user/…".into()))?;
 
-    let cookie = douyin_cookie_header(settings);
+    let cookie = douyin_cookie_header_auto(app, settings).await;
     let co_dang_nhap = cookie.as_deref().map(cookie_has_login).unwrap_or(false);
 
     let out = fetch_channel_api(app, &sec_uid, &None, cookie.as_deref(), limit as usize).await;
@@ -1217,7 +1292,7 @@ pub async fn scrape_douyin_channel(
 
     // Cookie đăng nhập của user — THỨ QUYẾT ĐỊNH lấy được ~20 hay hàng trăm
     // video. Bản trước không hề đọc nó (xem `netscape_to_cookie_header`).
-    let cookie = douyin_cookie_header(&settings.get());
+    let cookie = douyin_cookie_header_auto(&app, &settings.get()).await;
     let co_dang_nhap = cookie.as_deref().map(cookie_has_login).unwrap_or(false);
     eprintln!(
         "[douyin] cookie: {} (đăng nhập: {co_dang_nhap})",
@@ -1955,6 +2030,27 @@ www.douyin.com\tFALSE\t/\tFALSE\t1799999999\ts_v_web_id\tGIA_TRI_WEBID
         // File biến mất / đường dẫn sai -> None, KHÔNG được panic.
         std::fs::remove_file(&p).ok();
         assert!(douyin_cookie_header(&s).is_none(), "file mất thì trả None");
+    }
+
+    /// Ô Douyin đặt "lấy từ Firefox" → đi đường trình duyệt; ô riêng đặt FILE
+    /// thì KHÔNG được lấy browser của ô chung; ô riêng trống thì theo ô chung.
+    #[test]
+    fn chon_nguon_cookie_douyin_tu_trinh_duyet() {
+        use crate::models::SiteCookie;
+        let mut s = Settings::default();
+        assert_eq!(douyin_cookie_browser(&s), None, "chưa đặt gì");
+
+        s.site_cookies.insert("douyin".into(), SiteCookie { file: None, browser: Some("firefox".into()) });
+        assert_eq!(douyin_cookie_browser(&s).as_deref(), Some("firefox"));
+
+        s.site_cookies.insert("douyin".into(), SiteCookie { file: Some("c.txt".into()), browser: None });
+        s.cookies_browser = Some("firefox".into());
+        assert_eq!(douyin_cookie_browser(&s), None, "ô riêng là FILE → không lấy browser ô chung");
+
+        s.site_cookies.remove("douyin");
+        assert_eq!(douyin_cookie_browser(&s).as_deref(), Some("firefox"), "ô riêng trống → theo ô chung");
+        s.cookies_file = Some("chung.txt".into());
+        assert_eq!(douyin_cookie_browser(&s), None, "ô chung có file → file thắng (như push_cookie_args)");
     }
 
     /// Dòng hỏng/thiếu cột không được làm sập cả file cookie.

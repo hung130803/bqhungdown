@@ -112,11 +112,11 @@ def main() -> int:
 
     monitor = Monitor(tg, app, cfg)
     monitor.state_path = HERE / "logs" / "live_msgs.json"
-    # Tin "đang tải" của lần chạy trước không ai sửa nữa → ghi chú cho rõ.
+    # Nhận lại đợt tải / tin tiến độ của lần chạy trước → sửa tiếp, xong vẫn báo cáo.
     try:
-        monitor.close_stale_live_messages()
+        monitor.restore_live_messages()
     except Exception as e:  # noqa: BLE001
-        log.info("chốt tin cũ lỗi: %s", e)
+        log.info("nhận lại tin tiến độ cũ lỗi: %s", e)
     router = Router(tg, app, cfg, monitor)
     disp = Dispatcher(tg, router, workers=cfg.workers)
     router.dispatcher = disp

@@ -68,6 +68,36 @@ class ScreenTests(unittest.TestCase):
         self.assertIn("đã bị xoá", bad)
 
 
+class AllSitesFirefoxTests(unittest.TestCase):
+    def test_enable_firefox_for_every_site(self):
+        from bqbot.handlers import COOKIE_SITES, Router
+        tg = FakeTG()
+        app = FakeApp({"/api/cookies": {"ok": True, "sites": []}})
+        r = Router(tg, app, cfg())
+        r._cb_cookie_firefox(1, None, ["all"])
+        posted = {p.rsplit("/", 1)[1]: b for (m, p, b) in app.requests if m == "POST" and p.startswith("/api/cookies/")}
+        self.assertEqual(set(posted), set(COOKIE_SITES))
+        self.assertTrue(all(b["browser"] == "firefox" for b in posted.values()))
+        self.assertIn("Douyin", tg.texts()[-1])
+
+    def test_one_site_error_does_not_stop_others(self):
+        from bqbot.handlers import COOKIE_SITES, Router
+
+        tg = FakeTG()
+        app = FakeApp({"/api/cookies": {"ok": True, "sites": []},
+                       "/api/cookies/tiktok": {"ok": False, "error": "lỗi thử"}})
+        Router(tg, app, cfg())._cb_cookie_firefox(1, None, ["all"])
+        posted = [b for (m, p, b) in app.requests if m == "POST" and p.startswith("/api/cookies/")]
+        self.assertEqual(len(posted), len(COOKIE_SITES))
+        self.assertIn("tiktok: lỗi thử", tg.texts()[-1])
+
+    def test_screen_lists_firefox_sites(self):
+        data = {"sites": [{"site": "youtube", "label": "YouTube", "browser": "firefox"},
+                          {"site": "douyin", "label": "Douyin", "browser": "firefox"}]}
+        t = fmt.cookies_text(data, check=cc.CheckResult(cc.OK, 0))
+        self.assertIn("🦊 Douyin: tự lấy từ Firefox", t)
+
+
 class MonitorAlertTests(unittest.TestCase):
     def _mon(self, results):
         tg = FakeTG()
