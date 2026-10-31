@@ -560,6 +560,9 @@ fn parse_video_item(it: &Value) -> Option<(String, ChannelVideo)> {
     if lbc == "live" || lbc == "upcoming" {
         return None;
     }
+    // Bản phát lại live đã xong (`was_live`) API báo "none" giống video thường;
+    // `liveStreamingDetails` thì có cả ở buổi công chiếu (video thật) nên KHÔNG
+    // dùng để lọc — cổng tải cuối (args_builder::LIVE_FILTER) chặn chính xác.
     let title = it
         .pointer("/snippet/title")
         .and_then(|v| v.as_str())

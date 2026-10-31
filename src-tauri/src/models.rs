@@ -222,8 +222,8 @@ pub struct WatchedChannel {
     /// Video bị cổng tải chặn vì ĐANG live/chờ live/công chiếu: id → mốc giữ
     /// (Unix giây). Trong lúc giữ: vẫn ở seen_ids (không chiếm suất "mới
     /// nhất" mỗi lượt quét). Hết hạn giữ: gỡ khỏi seen để lượt sau xét lại —
-    /// lúc đó thường đã thành `was_live`/video thường và tải được (CLAUDE.md:
-    /// was_live phải GIỮ).
+    /// buổi công chiếu (premiere) khi đó thành video thường và tải được; buổi
+    /// live thật thành `was_live` thì cổng tải lại chặn (từ 31/10/2026).
     #[serde(default)]
     pub live_hold: std::collections::BTreeMap<String, i64>,
     // MỌI trường (trừ id/url định danh) đều CÓ default: bản mới thêm trường mới

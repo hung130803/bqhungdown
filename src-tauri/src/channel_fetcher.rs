@@ -1167,11 +1167,12 @@ fn parse_channel(source_url: &str, value: Value) -> (ChannelInfo, Vec<ChannelVid
 /// trả `live_status` — `is_upcoming` (duration=None) · `is_live` (duration=
 /// None) · `was_live` (đã xong, có duration 949s / 25568s / 3161s...).
 /// `post_live` = vừa kết thúc, YouTube còn đang xử lý -> tải ra file hỏng nên
-/// cũng bỏ. GIỮ `was_live`: nó đã thành video thường, đúng thứ cần cắt.
+/// cũng bỏ. `was_live` (bản phát lại buổi live đã xong) TRƯỚC giữ, nay BỎ LUÔN
+/// theo yêu cầu anh Hùng 31/10/2026 ("Chặn luôn was_live").
 pub(crate) fn la_live_hoac_cho_live(live_status: Option<&str>) -> bool {
     matches!(
         live_status,
-        Some("is_live") | Some("is_upcoming") | Some("post_live")
+        Some("is_live") | Some("is_upcoming") | Some("post_live") | Some("was_live")
     )
 }
 
@@ -1305,17 +1306,14 @@ mod tests {
 
         let (info, videos) = parse_channel("https://www.youtube.com/@SkyNews/streams", v);
         assert_eq!(info.title, "Sky News", "vẫn đọc đúng tên kênh");
-        assert_eq!(videos.len(), 15,
-                   "phải bỏ đúng 5 bản live/chờ-live, giữ 15 video thật");
+        // Từ 31/10/2026 bỏ cả was_live -> trang /streams (toàn live) không còn gì.
+        assert_eq!(videos.len(), 0,
+                   "bỏ cả 15 was_live + 5 live/chờ-live (anh Hùng 31/10/2026)");
         // Không một video nào còn thiếu duration (live/upcoming = duration null)
         for x in &videos {
             assert!(x.duration_sec.is_some() && x.duration_sec.unwrap() > 0,
                     "video giữ lại phải có độ dài thật: {}", x.title);
         }
-        // Video MỚI NHẤT (phần tử đầu) không được là bản live — YouTube xếp
-        // live/upcoming lên trên cùng nên đây là ca dễ sai nhất.
-        assert!(videos[0].duration_sec.unwrap() > 0,
-                "video mới nhất phải là video THẬT");
     }
 
     /// TIKTOK PHẢI CÓ LƯỢT TIM · BÌNH LUẬN · CHIA SẺ — chạy ĐƯỜNG THẬT.
@@ -1423,10 +1421,9 @@ mod tests {
         assert!(parse_entry(&cho_live).is_none(), "chờ live phải bị bỏ");
         assert!(parse_entry(&dang_live).is_none(), "đang live phải bị bỏ");
         assert!(parse_entry(&vua_xong).is_none(), "post_live phải bị bỏ");
+        assert!(parse_entry(&live_da_xong).is_none(),
+                "was_live (phát lại buổi live) -> BỎ (anh Hùng 31/10/2026)");
         // GIỮ — đây là ĐỐI CHỨNG: vá quá tay là mất video thật
-        assert!(parse_entry(&live_da_xong).is_some(),
-                "was_live ĐÃ thành video thường -> phải GIỮ");
-        assert_eq!(parse_entry(&live_da_xong).unwrap().duration_sec, Some(949));
         assert!(parse_entry(&thuong).is_some(), "video thường phải giữ");
         assert!(parse_entry(&khong_co_truong).is_some(),
                 "không có live_status (TikTok/Douyin...) -> GIỮ, đừng phán bừa");
@@ -1436,9 +1433,9 @@ mod tests {
         let ds = serde_json::json!({"entries": [
             cho_live, dang_live, live_da_xong, thuong]});
         let (_i, vs) = parse_channel("https://x", ds);
-        assert_eq!(vs.len(), 2, "chỉ còn 2 video thật");
-        assert!(vs[0].url.ends_with("wl1"),
-                "video mới nhất phải là video THẬT, không phải bản live");
+        assert_eq!(vs.len(), 1, "chỉ còn 1 video thường");
+        assert!(vs[0].url.ends_with("nm1"),
+                "video mới nhất phải là video THƯỜNG, không phải bản live/phát lại");
     }
 
     #[test]

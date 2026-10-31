@@ -1,8 +1,10 @@
 use crate::models::{DownloadMode, DownloadRequest, Settings};
 
-// Keep completed broadcasts and sources without live metadata. Never infer
-// live status from a title ("live" may simply be part of a normal video's name).
-pub(crate) const LIVE_FILTER: &str = "!is_live & live_status!=?is_live & live_status!=?is_upcoming & live_status!=?post_live";
+// Chặn MỌI loại live: đang live, chờ live, vừa xong đang xử lý, VÀ bản phát lại
+// của buổi live đã xong (`was_live` — anh Hùng 31/10/2026: "Chặn luôn was_live").
+// GIỮ nguồn không có metadata live (TikTok/Douyin...: `!=?` cho qua khi thiếu
+// trường). Không suy đoán theo tiêu đề (chữ "live" có thể là tên video thường).
+pub(crate) const LIVE_FILTER: &str = "!is_live & live_status!=?is_live & live_status!=?is_upcoming & live_status!=?post_live & live_status!=?was_live";
 use std::path::{Path, PathBuf};
 
 /// Tên thư mục tạm ẩn nằm NGAY TRONG thư mục kênh. Mỗi lượt tải có 1 thư mục

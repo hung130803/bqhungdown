@@ -22,8 +22,9 @@
   `channel_fetcher::parse_entry` (bỏ is_live/is_upcoming/post_live) và
   `youtube_api::parse_video_item` (`snippet.liveBroadcastContent` =
   live/upcoming; snippet đã có trong `part=` nên KHÔNG tốn thêm quota).
-  BẤT BIẾN: `was_live` + video thường + extractor không trả live_status
-  (TikTok/Douyin) đều phải GIỮ — vá quá tay là mất video thật.
+  BẤT BIẾN: video thường + extractor không trả live_status (TikTok/Douyin)
+  đều phải GIỮ — vá quá tay là mất video thật. (`was_live` từng được giữ —
+  từ 31/10/2026 BỊ CHẶN, xem mục dưới.)
   Đường RSS (`watcher::fetch_rss_videos`) không có thông tin live; không được
   coi lọc danh sách là đủ. Cổng tải cuối bổ sung ngày 25/10 bên dưới bảo vệ
   cả nguồn này. Mục vẫn có thể xuất hiện trong queue rồi bị Bỏ qua khi kiểm
@@ -33,13 +34,17 @@
   chặn `is_live`, `is_upcoming`, `post_live` ở cả quét kênh và lệnh tải cuối
   (`args_builder::LIVE_FILTER`). Áp dụng URL tay, RSS, cache, queue khôi phục,
   retry và force-redownload. Không chờ đến giờ phát; báo Bỏ qua có lý do,
-  không ghi Hoàn tất hoặc tự retry. Giữ `was_live` đã thành video hoàn chỉnh
-  và video thiếu metadata live. Không suy đoán theo chữ "live" trong tiêu đề.
+  không ghi Hoàn tất hoặc tự retry. Giữ video thiếu metadata live.
+  **CHẶN LUÔN `was_live` (31/10/2026, anh Hùng: "Chặn luôn was_live")** — bản
+  phát lại buổi live đã xong cũng không tải: `la_live_hoac_cho_live` +
+  `LIVE_FILTER`. Đường API (`liveBroadcastContent`=none) không phân biệt được
+  was_live với premiere nên để cổng tải cuối chặn. Không suy đoán theo chữ "live" trong tiêu đề.
   RSS không có trạng thái live nên bộ lọc lúc quét không đủ bảo vệ.
   Video bị cổng tải chặn vì live (qua RSS) được GIỮ TẠM 6 giờ
   (`WatchedChannel.live_hold`, `watcher::LIVE_HOLD_SECS`): nằm trong seen nên
   không chiếm suất mỗi lượt quét, hết hạn thì gỡ khỏi seen để xét lại — KHÔNG
-  được cho vào skipped_ids (mất video khi nó thành was_live).
+  được cho vào skipped_ids: buổi công chiếu (premiere) phát xong thành video
+  thường và phải tải được.
 - **BOT TELEGRAM + CỔNG ĐIỀU KHIỂN (30/10/2026):** `src-tauri/src/control_api.rs`
   mở HTTP `127.0.0.1:<port>` (khoá trong `<config>/control_api.json`) cho bot
   `telegram-bot/` (Python). Route CHỈ gọi lại `commands::*` — không viết lại
