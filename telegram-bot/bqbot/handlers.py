@@ -481,7 +481,12 @@ class Router:
             head = f"<b>📺 Kênh — {fmt.esc(title)}</b> · {len(items)} kênh"
             if n_err and flt != "e":
                 head += f" · 🔴 {n_err} lỗi"
-            lines = [head, f"<i>Trang {page_ + 1}/{pages} — bấm tên kênh để quét, tải thêm, bật/tắt.</i>"]
+            on = [c for c in items if c.get("enabled")]
+            done_today = sum(1 for c in on if fmt.today_count(c) >= int(c.get("dailyLimit") or 1))
+            lines = [head,
+                     f"Hôm nay: ✅ {done_today} kênh đã đủ · ⏳ {len(on) - done_today} kênh chưa tải",
+                     "<i>Số trên nút = video đã tải HÔM NAY / hạn mức mỗi ngày (qua 0 giờ tự về 0).</i>",
+                     f"<i>Trang {page_ + 1}/{pages} — bấm tên kênh để quét, tải thêm, bật/tắt.</i>"]
             if not chunk:
                 lines.append("\nKhông có kênh.")
             rows: list[list[tuple[str, str]]] = []

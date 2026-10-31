@@ -235,10 +235,27 @@ def batch_text(items: list[dict], started: str, finished: bool) -> str:
     return "\n".join(lines)
 
 
+def today_count(c: dict, today: str | None = None) -> int:
+    """Số video ĐÃ TẢI HÔM NAY. App giữ `dripCount` của NGÀY `dripDate` — khác
+    hôm nay thì là số của ngày cũ (từng hiện '1/1' của ngày 27 làm tưởng đã tải)."""
+    today = today or time.strftime("%Y-%m-%d")
+    return int(c.get("dripCount") or 0) if c.get("dripDate") == today else 0
+
+
+def day_status(c: dict, today: str | None = None) -> str:
+    """Chữ rõ nghĩa cho hạn mức ngày: 'đủ 1/1 hôm nay' / 'chưa tải 0/1'."""
+    n, lim = today_count(c, today), int(c.get("dailyLimit") or 1)
+    if c.get("downloading"):
+        return f"⬇️ đang tải {n}/{lim}"
+    if n >= lim:
+        return f"✅ đủ {n}/{lim} hôm nay"
+    return f"chưa tải {n}/{lim}" if n == 0 else f"đã tải {n}/{lim}"
+
+
 def channel_button(c: dict) -> str:
     icon = "🔴" if c.get("lastError") else ("🟢" if c.get("enabled") else "⏸")
-    name = short(c.get("targetName") or c.get("title") or c.get("url"), 26)
-    return f"{icon} {name} · {c.get('dripCount', 0)}/{c.get('dailyLimit', 1)}"
+    name = short(c.get("targetName") or c.get("title") or c.get("url"), 24)
+    return f"{icon} {name} · {day_status(c)}"
 
 
 def channel_detail(c: dict) -> str:
@@ -247,8 +264,7 @@ def channel_detail(c: dict) -> str:
         f"<b>📺 {name}</b>" + (f" [{esc(c['group'])}]" if c.get("group") else ""),
         f"Theo dõi: {'🟢 đang bật' if c.get('enabled') else '⏸ đang tắt'}"
         f" · tự tải: {'có' if c.get('autoDownload') else 'không'}",
-        f"Hôm nay: {c.get('dripCount', 0)}/{c.get('dailyLimit', 1)} video"
-        + (f" · đang tải {c['downloading']}" if c.get("downloading") else ""),
+        f"Hôm nay: {day_status(c)} (hạn mức {c.get('dailyLimit', 1)} video/ngày, sang ngày mới tự về 0)",
         f"Lần quét gần nhất: {ago(c.get('lastChecked'))}"
         + (f" · {c['lastNewCount']} video mới" if c.get("lastNewCount") else ""),
         f"Đã làm: {c.get('done', 0)} video"
@@ -318,9 +334,8 @@ def channel_line(c: dict) -> str:
         icon = "🔴"
     name = esc(short(c.get("targetName") or c.get("title") or c.get("url"), 40))
     grp = f" [{esc(c['group'])}]" if c.get("group") else ""
-    extra = f" · ⬇️{c['downloading']}" if c.get("downloading") else ""
-    return (f"{icon} <b>{name}</b>{grp}\n    {c.get('dripCount', 0)}/{c.get('dailyLimit', 1)} hôm nay"
-            f"{extra} · quét {ago(c.get('lastChecked'))}")
+    return (f"{icon} <b>{name}</b>{grp}\n    {esc(day_status(c))}"
+            f" · quét {ago(c.get('lastChecked'))}")
 
 
 def cookies_text(data: dict, now: float | None = None) -> str:

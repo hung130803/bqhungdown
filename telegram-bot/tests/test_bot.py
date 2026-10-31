@@ -932,6 +932,15 @@ class UtilTests(unittest.TestCase):
         self.assertLessEqual((vk + compress.AUDIO_KBPS) * 792.5 / 8192, 45.01)
         self.assertIsNone(compress.plan(4 * 3600, 45), "video quá dài thì báo, không gửi bản vỡ hình")
 
+    def test_day_count_ignores_old_dates(self):
+        today = "2026-10-31"
+        old = {"dripDate": "2026-10-27", "dripCount": 1, "dailyLimit": 1, "enabled": True}
+        new = {"dripDate": today, "dripCount": 1, "dailyLimit": 1, "enabled": True}
+        self.assertEqual(fmt.today_count(old, today), 0, "số của ngày 27 không phải số hôm nay")
+        self.assertEqual(fmt.day_status(old, today), "chưa tải 0/1")
+        self.assertEqual(fmt.day_status(new, today), "✅ đủ 1/1 hôm nay")
+        self.assertIn("đang tải", fmt.day_status({**new, "downloading": 1}, today))
+
     def test_format_helpers(self):
         self.assertEqual(fmt.bar(50, 4), "🟩🟩⬜⬜")
         self.assertEqual(fmt.size(1536), "1.5 KB")
