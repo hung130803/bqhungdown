@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from . import compress, fmt, launcher
+from . import compress, fmt, launcher, report
 from .app_client import AppClient, AppError, AppOffline
 from .cookie_check import CookieChecker
 from .dispatcher import Dispatcher, Task
@@ -90,7 +90,8 @@ def main_menu() -> dict:
         [("📊 Tình trạng", "st"), ("⬇️ Đang chạy", "q:active:0")],
         [("❌ Lỗi", "q:failed:0"), ("✅ Xong", "q:completed:0")],
         [("📺 Kênh", "w:a:0"), ("🍪 Cookie", "ck")],
-        [("⚙️ Cài đặt", "s"), ("📡 Bảng theo dõi", "bd")],
+        [("📋 Báo cáo ngày", "rp"), ("⚙️ Cài đặt", "s")],
+        [("📡 Bảng theo dõi", "bd")],
         [("🔧 Sửa lỗi tải", "fx"), ("🕘 Lịch sử", "h")],
     ])
 
@@ -107,15 +108,16 @@ KEYBOARD_COMMANDS: dict[str, str] = {
     "⚙️ Cài đặt": "settings",
     "▶ Mở app": "openapp",
     "⏹ Đóng app": "closeapp",
+    "📋 Báo cáo ngày": "report",
     "🏠 Menu": "menu",
 }
 # Đổi bố cục bàn phím → tăng số này để bot gửi lại bàn phím mới 1 lần.
-KEYBOARD_VERSION = "kb2"
+KEYBOARD_VERSION = "kb3"
 
 
 def reply_keyboard() -> dict:
     labels = list(KEYBOARD_COMMANDS)
-    rows = [labels[0:2], labels[2:4], labels[4:6], labels[6:8], labels[8:10]]
+    rows = [labels[i:i + 2] for i in range(0, len(labels), 2)]
     return {
         "keyboard": [[{"text": t} for t in row] for row in rows],
         "resize_keyboard": True,
@@ -144,6 +146,7 @@ class Router:
         self.commands: dict[str, tuple[Callable[[dict, str], None], bool]] = {
             # tên: (hàm, nặng?)
             "start": (self._cmd_start, False),
+            "report": (self._cmd_report, True),
             "menu": (self._cmd_menu, False),
             "help": (self._cmd_help, False),
             "status": (self._cmd_status, True),
@@ -217,6 +220,7 @@ class Router:
             "sc": self._cb_set_conc, "si": self._cb_set_interval, "fx": self._cb_fix, "bd": self._cb_board,
             "bx": self._cb_board_stop, "h": self._cb_history, "f": self._cb_file, "x": self._cb_noop,
             "oa": self._cb_openapp, "qx": self._cb_closeapp, "qf": self._cb_force_close,
+            "rp": self._cb_report,
         }.get(verb)
         if not handler:
             return None
@@ -264,6 +268,16 @@ class Router:
         # 1 tin chỉ mang được 1 loại nút: tin chào bật bàn phím cố định, tin sau là menu bấm nhanh.
         self._send(chat_id, WELCOME, reply_keyboard())
         self._cmd_menu(chat_id, "")
+
+    def _cmd_report(self, chat_id: int, _arg: str) -> None:
+        self._cb_report(chat_id, None, [])
+
+    def _cb_report(self, chat_id: int, mid: int | None, _args: list[str]) -> None:
+        """📋 Báo cáo ngày — xem bất cứ lúc nào (cuối ngày bot cũng tự gửi)."""
+        def go():
+            text, markup = report.build(self.app, self.cookie_checker.latest())
+            self._show(chat_id, mid, text, markup)
+        self._guard(chat_id, mid, go)
 
     def _cmd_menu(self, chat_id: int, _arg: str) -> None:
         self._send(chat_id, "<b>BQHungDown</b> — chọn việc:", main_menu())
@@ -489,6 +503,14 @@ class Router:
             head = f"<b>📺 Kênh — {fmt.esc(title)}</b> · {len(items)} kênh"
             if n_err and flt != "e":
                 head += f" · 🔴 {n_err} lỗi"
+            kinds: dict[str, int] = {}
+            for c in items:
+                k = fmt.channel_error_kind(c.get("lastError"))
+                if k:
+                    kinds[k] = kinds.get(k, 0) + 1
+            if kinds:
+                head += "\n" + " · ".join(f"{fmt.STATUS_META[k][0]} {n} {fmt.STATUS_META[k][1]}"
+                                           for k, n in kinds.items())
             on = [c for c in items if c.get("enabled")]
             done_today = sum(1 for c in on if fmt.today_count(c) >= fmt.daily_limit(c))
             lines = [head,

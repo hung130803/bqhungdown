@@ -314,10 +314,94 @@ def day_status(c: dict, today: str | None = None) -> str:
     return f"chưa tải {n}/{lim}" if n == 0 else f"đã tải {n}/{lim}"
 
 
+# Trạng thái kênh: khoá → (biểu tượng, nhãn ngắn). Mỗi lỗi một nhãn RIÊNG —
+# không gộp mọi thứ thành "lỗi" (anh Hùng 31/10/2026: "báo cho chuẩn").
+STATUS_META = {
+    "full": ("✅", "đủ hôm nay"),
+    "dl": ("⬇️", "đang tải"),
+    "wait": ("⏳", "đã quét, chưa có video tải"),
+    "notrun": ("💤", "chưa quét hôm nay"),
+    "empty": ("📭", "hết video"),
+    "dead": ("❌", "kênh không còn"),
+    "blocked": ("🤖", "YouTube chặn tạm"),
+    "cookie": ("🍪", "lỗi cookie"),
+    "net": ("📡", "lỗi mạng"),
+    "private": ("🔒", "riêng tư"),
+    "err": ("🔴", "lỗi khác"),
+    "off": ("⏸", "tắt theo dõi"),
+}
+STATUS_ADVICE = {
+    "empty": "Kênh còn nhưng không còn video chưa làm/không có video ở mục theo dõi — mở kênh xem; "
+             "chỉ còn Shorts thì đổi loại, trống thật thì tắt theo dõi.",
+    "dead": "YouTube báo 404 (kênh bị xoá/khoá/đổi tên @) — mở link kiểm tra, mất thật thì tắt theo dõi.",
+    "blocked": "YouTube chặn tạm thời, KHÔNG phải kênh hỏng — app tự quét lại lượt sau.",
+    "cookie": "Vào 🍪 Cookie → 🧪 Kiểm tra; đăng nhập lại trên Firefox nếu đỏ.",
+    "net": "Kiểm tra mạng/proxy trên máy tính.",
+    "private": "Kênh để riêng tư/chỉ thành viên — không tải được nếu không có quyền.",
+    "err": "Bấm tên kênh trong 📺 Kênh để xem dòng lỗi chi tiết.",
+    "notrun": "Kênh chưa được quét hôm nay — bấm ▶ Quét nhóm (bot hoặc app), hoặc bật tự quét trong Cài đặt.",
+}
+
+
+def local_day(iso: str | None) -> str | None:
+    """Ngày (giờ máy, YYYY-MM-DD) của mốc ISO UTC app trả về."""
+    if not iso:
+        return None
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def channel_error_kind(err: str | None) -> str | None:
+    """Loại lỗi QUÉT KÊNH theo câu app báo (error.rs / channel_fetcher)."""
+    if not err:
+        return None
+    e = err.lower()
+    if err.startswith("❌ Kênh KHÔNG CÒN") or "http error 404" in e or "requested entity was not found" in e:
+        return "dead"
+    if err.startswith("📭") or "does not have a" in e or "không có video nào trên kênh" in e:
+        return "empty"
+    if err.startswith(("🤖", "⏳")) or "not a bot" in e or "http error 429" in e or "yêu cầu xác minh" in e:
+        return "blocked"
+    if err.startswith(("🍪", "🔞")):
+        return "cookie"
+    if err.startswith("📡") or "lỗi mạng" in e or "timed out" in e:
+        return "net"
+    if err.startswith("🔒"):
+        return "private"
+    return "err"
+
+
+def channel_status(c: dict, today: str | None = None) -> tuple[str, str, str]:
+    """(biểu tượng, nhãn có số, khoá) — 1 trạng thái ĐÚNG cho mỗi kênh."""
+    if not c.get("enabled"):
+        e, l = STATUS_META["off"]
+        return e, l, "off"
+    kind = channel_error_kind(c.get("lastError"))
+    if kind:
+        e, l = STATUS_META[kind]
+        return e, l, kind
+    n, lim = today_count(c, today), daily_limit(c)
+    if c.get("downloading"):
+        return "⬇️", f"đang tải {n}/{lim}", "dl"
+    if n >= lim:
+        return "✅", f"đủ {n}/{lim} hôm nay", "full"
+    if c.get("sourceEmpty"):
+        return "📭", f"hết video chưa làm {n}/{lim}", "empty"
+    today = today or time.strftime("%Y-%m-%d")
+    checked = local_day(c.get("lastChecked"))
+    if checked != today:
+        when = f" (lần cuối {checked[8:10]}/{checked[5:7]})" if checked else " (chưa quét lần nào)"
+        return "💤", f"chưa quét hôm nay{when}", "notrun"
+    return "⏳", f"đã quét, chưa có video tải {n}/{lim}", "wait"
+
+
 def channel_button(c: dict) -> str:
-    icon = "🔴" if c.get("lastError") else ("🟢" if c.get("enabled") else "⏸")
+    icon, label, _ = channel_status(c)
     name = short(c.get("targetName") or c.get("title") or c.get("url"), 24)
-    return f"{icon} {name} · {day_status(c)}"
+    return f"{icon} {name} · {label}"
 
 
 def channel_detail(c: dict) -> str:
@@ -326,6 +410,8 @@ def channel_detail(c: dict) -> str:
         f"<b>📺 {name}</b>" + (f" [{esc(c['group'])}]" if c.get("group") else ""),
         f"Theo dõi: {'🟢 đang bật' if c.get('enabled') else '⏸ đang tắt'}"
         f" · tự tải: {'có' if c.get('autoDownload') else 'không'}",
+        "Tình trạng: {} {}".format(*channel_status(c)[:2])
+        + (f"\n👉 <i>{STATUS_ADVICE[channel_status(c)[2]]}</i>" if channel_status(c)[2] in STATUS_ADVICE else ""),
         f"Hôm nay: {day_status(c)} (hạn mức {daily_limit(c)} video/ngày, sang ngày mới tự về 0)",
         f"Lần quét gần nhất: {ago(c.get('lastChecked'))}"
         + (f" · {c['lastNewCount']} video mới" if c.get("lastNewCount") else ""),

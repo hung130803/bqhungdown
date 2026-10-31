@@ -106,7 +106,8 @@ def stop_and_wait(d: Dispatcher) -> None:
 
 def cfg(**kw) -> Config:
     base = dict(telegram_token="x", allowed_chat_ids=[CHAT], notify_chat_ids=[CHAT],
-                digest_interval_sec=0, board_interval_sec=0, batch_finish_grace_sec=0)
+                digest_interval_sec=0, board_interval_sec=0, batch_finish_grace_sec=0,
+                daily_report_hour=24)
     base.update(kw)
     return Config(**base)
 

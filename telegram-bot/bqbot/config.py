@@ -29,6 +29,8 @@ class Config:
     # Đợt tải coi là XONG khi không còn mục chờ/tải trong ngần này giây — quét
     # nhóm thêm video DẦN từng kênh, chốt sớm là ra nhiều báo cáo lẻ.
     batch_finish_grace_sec: float = 90
+    # Giờ (máy tính) tự gửi BÁO CÁO NGÀY; 24 = tắt.
+    daily_report_hour: int = 23
     notify_completed: bool = True
     notify_failed: bool = True
     notify_new: bool = True

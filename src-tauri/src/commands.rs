@@ -173,7 +173,10 @@ pub async fn fetch_channel_videos(
     // (ChannelInput bỏ qua, không hiện lỗi đỏ). Dịch luôn cả nó là user bấm
     // Huỷ lại thấy báo "Tải thất bại".
     .map_err(|e| match e {
-        AppError::YtDlpFailed(msg) if !crate::error::is_cancel_message(&msg) => {
+        AppError::YtDlpFailed(msg)
+            if !crate::error::is_cancel_message(&msg)
+                && !crate::channel_fetcher::is_channel_fetch_message(&msg) =>
+        {
             AppError::YtDlpFailed(crate::error::friendly_reason_with(&msg, &url, &s))
         }
         other => other,

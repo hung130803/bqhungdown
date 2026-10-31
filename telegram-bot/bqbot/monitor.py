@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import fmt
+from . import fmt, report
 from .app_client import AppClient, AppError, AppOffline
 from .cookie_check import OK as CK_OK, CookieChecker
 
@@ -63,6 +63,7 @@ class Monitor:
         self.cookie_checker = CookieChecker()
         self._ff_next = clock() + FIREFOX_CHECK_FIRST
         self._ff_last_alert = float("-inf")
+        self._report_sent: str | None = None
         self._online: bool | None = None
         self._boards: dict[int, int] = {}
         self._boards_lock = threading.Lock()
@@ -298,9 +299,43 @@ class Monitor:
         if now - self._last_channel_check >= CHANNEL_ERR_EVERY:
             self._last_channel_check = now
             self._check_channel_errors()
+        self._maybe_daily_report()
         if now >= self._ff_next:
             self._ff_next = now + FIREFOX_CHECK_EVERY
             threading.Thread(target=self.firefox_check, name="kiem-cookie-firefox", daemon=True).start()
+
+    def _maybe_daily_report(self) -> None:
+        """Tự gửi BÁO CÁO NGÀY 1 lần lúc >= DAILY_REPORT_HOUR (giờ máy). Nhớ ngày đã
+        gửi trong file để bot khởi động lại không gửi trùng."""
+        lt = time.localtime()
+        if lt.tm_hour < getattr(self.cfg, "daily_report_hour", 23):
+            return
+        today = time.strftime("%Y-%m-%d", lt)
+        if self._report_sent == today:
+            return
+        path = self.state_path.parent / "daily_report.json" if self.state_path else None
+        if self._report_sent is None and path and path.exists():
+            try:
+                self._report_sent = json.loads(path.read_text(encoding="utf-8")).get("sent")
+            except (OSError, ValueError):
+                pass
+            if self._report_sent == today:
+                return
+        self._report_sent = today
+        if path:
+            try:
+                path.write_text(json.dumps({"sent": today}), encoding="utf-8")
+            except OSError:
+                pass
+
+        def send():
+            try:
+                text, markup = report.build(self.app, self.cookie_checker.latest())
+            except (AppOffline, AppError) as e:
+                log.info("Báo cáo ngày lỗi: %s", e)
+                return
+            self._notify(text, markup)
+        threading.Thread(target=send, name="bao-cao-ngay", daemon=True).start()
 
     def firefox_check(self) -> None:
         """Chạy ở luồng riêng (mất 5–30 giây). Chỉ khi ô YouTube đang lấy từ Firefox."""
@@ -531,6 +566,8 @@ class Monitor:
                 lines = [f"🔴 <b>{len(fresh)} kênh quét lỗi</b>"]
                 for c in fresh[:6]:
                     name = fmt.esc(fmt.short(c.get("targetName") or c.get("title") or c.get("url"), 35))
-                    lines.append(f"• {name}: <i>{fmt.esc(fmt.short((c.get('lastError') or '').split(chr(10))[0], 100))}</i>")
+                    icon, label, _k = fmt.channel_status(c)
+                    lines.append(f"{icon} {name}: <b>{label}</b>\n    "
+                                 f"<i>{fmt.esc(fmt.short((c.get('lastError') or '').split(chr(10))[0], 110))}</i>")
                 self._notify("\n".join(lines), _kb([[("📺 Kênh lỗi", "w:e:0")]]))
         self._channel_errors = cur

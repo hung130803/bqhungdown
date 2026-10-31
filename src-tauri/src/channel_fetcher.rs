@@ -64,7 +64,7 @@ fn is_cancelled(my_gen: u64) -> bool {
 fn friendly_fetch_error(raw: &str) -> String {
     let l = raw.to_lowercase();
     if crate::error::is_cookie_decrypt_error(raw) {
-        return "Không đọc được cookie từ trình duyệt (Windows mã hoá DPAPI). \
+        return "🍪 Không đọc được cookie từ trình duyệt (Windows mã hoá DPAPI). \
                 Vào Cài đặt → tắt \"Lấy cookies từ trình duyệt\" (để trống). \
                 Video YouTube công khai không cần cookie."
             .into();
@@ -73,27 +73,54 @@ fn friendly_fetch_error(raw: &str) -> String {
         || l.contains("not a bot")
         || l.contains("confirm you")
     {
-        return "YouTube đang chặn (yêu cầu xác minh \"không phải robot\"). \
-                App sẽ tự cập nhật yt-dlp ở nền — hãy đợi 1-2 phút rồi thử lại. \
-                Nếu vẫn lỗi, thử lại sau ít phút hoặc đổi mạng/IP."
+        return "🤖 YouTube đang chặn tạm (yêu cầu xác minh \"không phải robot\") — KHÔNG phải kênh hỏng. \
+                App sẽ tự cập nhật yt-dlp ở nền và tự quét lại lượt sau."
             .into();
     }
     if l.contains("http error 429") || l.contains("too many requests") {
-        return "YouTube tạm chặn vì tải quá nhiều trong thời gian ngắn (lỗi 429). \
-                Hãy đợi vài phút rồi thử lại, hoặc giảm số kênh tải cùng lúc."
+        return "⏳ YouTube tạm chặn vì quét quá nhiều trong thời gian ngắn (lỗi 429) — KHÔNG phải \
+                kênh hỏng. App tự quét lại lượt sau; nhiều kênh bị cùng lúc thì giảm số kênh quét."
             .into();
     }
-    if l.contains("this channel does not have")
+    // Kênh MẤT HẲN — đo thật 31/10/2026 (@LibertyPatrolMedia, @Jakemartinlive):
+    // yt-dlp báo "HTTP Error 404" + "Requested entity was not found".
+    if l.contains("http error 404")
+        || l.contains("requested entity was not found")
         || l.contains("does not exist")
+        || l.contains("has been terminated")
+        || l.contains("this channel is not available")
+    {
+        return "❌ Kênh KHÔNG CÒN trên YouTube (YouTube báo 404: kênh đã bị xoá, bị khoá hoặc đổi tên @). \
+                Mở link kênh trên trình duyệt để kiểm tra — mất thật thì tắt theo dõi kênh này."
+            .into();
+    }
+    // Kênh CÒN nhưng mục đang theo dõi TRỐNG — đo thật (@fafoauditandnews):
+    // "This channel does not have a videos tab" (cả shorts/streams cũng không có).
+    if l.contains("this channel does not have")
+        || l.contains("không có video nào trên kênh")
         || l.contains("not found")
     {
-        return "Không tìm thấy video trên kênh (kênh trống, sai link, hoặc tab không có video).".into();
+        return "📭 Kênh còn nhưng HẾT VIDEO ở mục đang theo dõi (chủ kênh đã xoá/ẩn hết, hoặc kênh \
+                chỉ đăng loại khác). Mở kênh trên trình duyệt để xem; nếu kênh chỉ còn Shorts thì đổi \
+                loại sang Shorts, kênh trống thật thì tắt theo dõi."
+            .into();
     }
     if l.contains("private") || l.contains("members-only") {
-        return "Kênh/nội dung này ở chế độ riêng tư hoặc chỉ dành cho thành viên.".into();
+        return "🔒 Kênh/nội dung này ở chế độ riêng tư hoặc chỉ dành cho thành viên.".into();
     }
-    // Fallback: keep the original yt-dlp message so power users can read it.
-    format!("Không lấy được danh sách video: {raw}")
+    // Fallback: giữ dòng lỗi gốc để chẩn đoán.
+    let raw_short: String = raw.chars().take(220).collect();
+    format!("⚠️ Không lấy được danh sách video của kênh: {raw_short}")
+}
+
+/// Câu báo do `friendly_fetch_error` dựng (lỗi QUÉT KÊNH, đã tiếng Việt, đã
+/// đúng nghĩa). Chỗ gọi KHÔNG được bọc thêm `friendly_reason*` — hàm đó dành
+/// cho lỗi TẢI VIDEO, từng biến "kênh bị xoá" thành "Tải thất bại → bấm Sửa
+/// lỗi tải ngay" (anh Hùng 31/10/2026: "báo cho chuẩn chứ không phải báo bừa").
+pub(crate) fn is_channel_fetch_message(msg: &str) -> bool {
+    const PREFIXES: &[&str] = &["🍪 Không đọc được cookie", "🤖 YouTube đang chặn", "⏳ YouTube tạm chặn",
+        "❌ Kênh KHÔNG CÒN", "📭 Kênh còn nhưng HẾT VIDEO", "🔒 Kênh/nội dung", "⚠️ Không lấy được danh sách video"];
+    PREFIXES.iter().any(|p| msg.starts_with(p))
 }
 
 /// Lấy danh sách tập của một series bilibili.tv (BiliIntl) qua API episodes
@@ -1436,6 +1463,28 @@ mod tests {
         assert_eq!(vs.len(), 1, "chỉ còn 1 video thường");
         assert!(vs[0].url.ends_with("nm1"),
                 "video mới nhất phải là video THƯỜNG, không phải bản live/phát lại");
+    }
+
+    /// LỖI QUÉT KÊNH PHẢI NÓI ĐÚNG — câu gốc đo thật 31/10/2026. Trước đây cả
+    /// "kênh bị xoá" lẫn "kênh hết video" đều ra "Tải thất bại → Sửa lỗi tải ngay".
+    #[test]
+    fn loi_quet_kenh_bao_dung_nghia() {
+        let xoa = friendly_fetch_error("ERROR: [youtube:tab] @LibertyPatrolMedia: Unable to download API page: \
+            HTTP Error 404: Not Found (caused by <HTTPError 404: Not Found>)");
+        assert!(xoa.starts_with("❌ Kênh KHÔNG CÒN"), "{xoa}");
+        let het = friendly_fetch_error("ERROR: [youtube:tab] @fafoauditandnews: This channel does not have a videos tab");
+        assert!(het.starts_with("📭"), "{het}");
+        assert!(friendly_fetch_error("Không có video nào trên kênh").starts_with("📭"));
+        assert!(friendly_fetch_error("ERROR: Sign in to confirm you're not a bot").starts_with("🤖"));
+        assert!(friendly_fetch_error("HTTP Error 429: Too Many Requests").starts_with("⏳"));
+        let la = friendly_fetch_error("ERROR: something new");
+        assert!(la.contains("something new"), "lỗi lạ phải giữ dòng gốc");
+        // Mọi câu đều được nhận diện → watcher/commands KHÔNG bọc thành "Tải thất bại".
+        for m in [&xoa, &het, &la] {
+            assert!(is_channel_fetch_message(m), "{m}");
+            assert!(!m.contains("Sửa lỗi tải ngay"), "{m}");
+        }
+        assert!(!is_channel_fetch_message("yt-dlp thất bại: abc"));
     }
 
     #[test]
