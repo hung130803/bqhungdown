@@ -753,29 +753,47 @@ class RouterTests(NoNetworkCase):
 
 # ───────────────────────── theo dõi ─────────────────────────
 class MonitorTests(NoNetworkCase):
-    def test_first_tick_is_baseline_then_digest(self):
+    def test_batch_is_one_live_message_until_done(self):
+        """Cả đợt tải = 1 tin tự cập nhật; không gửi tin rời từng video."""
         tg = FakeTG()
-        items = [{"shortId": "a1", "state": "downloading", "title": "Video A"},
-                 {"shortId": "b2", "state": "queued", "title": "Video B"}]
+        items = [{"shortId": "a1", "state": "completed", "title": "Cũ"}]
         app = FakeApp({"/api/queue": lambda _b: {"ok": True, "items": items},
                        "/api/cookies": {"ok": True, "sites": []},
                        "/api/watch": {"ok": True, "items": []}})
         m = Monitor(tg, app, cfg())
         m.tick()
         self.assertEqual(tg.texts(), [], "nhịp đầu chỉ ghi mốc")
-        items[0] = {"shortId": "a1", "state": "completed", "title": "Video A"}
-        items[1] = {"shortId": "b2", "state": "failed", "title": "Video B", "error": "⚠️ Tải thất bại"}
-        items.append({"shortId": "c3", "state": "queued", "title": "Video C"})
-        m.mark_own(["d4"])
-        items.append({"shortId": "d4", "state": "queued", "title": "Link tự gửi"})
+        # Quét kênh thêm 3 video + 1 link người dùng tự gửi.
+        items += [{"shortId": f"v{i}", "state": "queued", "title": f"Video {i}"} for i in range(3)]
+        m.mark_own(["own"])
+        items.append({"shortId": "own", "state": "queued", "title": "Link tự gửi"})
         m.tick()
-        text = tg.texts()[-1]
-        self.assertIn("Tải xong 1", text)
-        self.assertIn("Lỗi 1", text)
-        self.assertIn("1 mục mới", text)
-        self.assertNotIn("Link tự gửi", text, "mục người dùng tự gửi không báo lại là mới")
-        buttons = [b["callback_data"] for row in tg.calls[-1][3]["inline_keyboard"] for b in row]
-        self.assertIn("qa:b2:retry:failed:0", buttons)
+        sends = [c for c in tg.calls if c[0] == "send"]
+        self.assertEqual(len(sends), 1, "1 tin cho cả đợt")
+        self.assertIn("0/3", sends[0][2])
+        self.assertNotIn("Link tự gửi", sends[0][2])
+        # Tiến triển: 1 xong, 1 đang tải, 1 lỗi → SỬA đúng tin đó.
+        items[1] = {"shortId": "v0", "state": "completed", "title": "Video 0"}
+        items[2] = {"shortId": "v1", "state": "downloading", "title": "Video 1", "percent": 50.0}
+        items[3] = {"shortId": "v2", "state": "failed", "title": "Video 2", "error": "⚠️ Tải thất bại"}
+        m.tick()
+        self.assertEqual(sum(1 for c in tg.calls if c[0] == "send"), 1, "không gửi thêm tin")
+        self.assertEqual(tg.calls[-1][0], "edit")
+        self.assertIn("1/3", tg.calls[-1][2])
+        self.assertIn("50%", tg.calls[-1][2])
+        # Xong hết → chốt tổng kết có nút gửi về điện thoại + thử lại lỗi.
+        items[2] = {"shortId": "v1", "state": "completed", "title": "Video 1"}
+        m.tick()
+        last = tg.calls[-1]
+        self.assertEqual(last[0], "edit")
+        self.assertIn("Xong đợt tải", last[2])
+        buttons = [b["callback_data"] for row in last[3]["inline_keyboard"] for b in row]
+        self.assertIn("q:completed:0", buttons)
+        self.assertIn("b:retry_failed", buttons)
+        # Đợt mới sau đó → tin mới.
+        items.append({"shortId": "w1", "state": "queued", "title": "Đợt 2"})
+        m.tick()
+        self.assertEqual(sum(1 for c in tg.calls if c[0] == "send"), 2)
 
     def test_offline_and_back_online(self):
         tg = FakeTG()

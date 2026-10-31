@@ -187,6 +187,53 @@ def watch_result(action: str, res: dict | None, err: BaseException | None) -> st
     return "ℹ️ <b>Không có video mới</b> kể từ lần quét trước."
 
 
+ACTIVE_STATES = ("queued", "downloading")
+
+
+def batch_text(items: list[dict], started: str, finished: bool) -> str:
+    """1 tin cho CẢ ĐỢT tải (quét kênh / chạy nhóm) — tự cập nhật, không spam."""
+    n = len(items)
+    c = {k: sum(1 for it in items if it.get("state") == k)
+         for k in ("completed", "downloading", "queued", "failed", "skipped", "cancelled", "paused")}
+    done = c["completed"] + c["failed"] + c["skipped"] + c["cancelled"]
+    pct = 100 * done / n if n else 100
+    head = (f"✅ <b>Xong đợt tải</b> (bắt đầu {started})" if finished
+            else f"📦 <b>Đợt tải</b> (bắt đầu {started}) — <b>{c['completed']}/{n}</b> xong")
+    lines = [head, f"{bar(pct, 14)} {pct:.0f}%"]
+    stats = [f"✅ Xong {c['completed']}"]
+    if c["downloading"]:
+        stats.append(f"⬇️ Đang tải {c['downloading']}")
+    if c["queued"]:
+        stats.append(f"⏳ Chờ {c['queued']}")
+    if c["paused"]:
+        stats.append(f"⏸ Dừng {c['paused']}")
+    if c["failed"]:
+        stats.append(f"❌ Lỗi {c['failed']}")
+    if c["skipped"]:
+        stats.append(f"⏭ Bỏ qua {c['skipped']}")
+    lines.append(" · ".join(stats))
+    downloading = [it for it in items if it.get("state") == "downloading"]
+    if downloading and not finished:
+        lines.append("\n<b>Đang tải:</b>")
+        for it in downloading[:6]:
+            lines.append(f"• {esc(short(title_of(it), 42))}\n   {esc(progress_line(it))}")
+        if len(downloading) > 6:
+            lines.append(f"… và {len(downloading) - 6} video nữa")
+    failed = [it for it in items if it.get("state") == "failed"]
+    if failed:
+        lines.append("\n<b>Lỗi:</b>")
+        for it in failed[:5]:
+            lines.append(f"• {esc(short(title_of(it), 40))} — <i>{esc(first_line(it.get('error'), 80))}</i>")
+        if len(failed) > 5:
+            lines.append(f"… và {len(failed) - 5} lỗi nữa")
+    if finished and c["completed"]:
+        lines.append("\n💾 Video đã lưu trên máy tính (thư mục từng kênh). "
+                     "Muốn xem trên điện thoại: bấm <b>📤 Gửi video về điện thoại</b>.")
+    elif not finished:
+        lines.append(f"\n<i>Tự cập nhật lúc {time.strftime('%H:%M:%S')}</i>")
+    return "\n".join(lines)
+
+
 def channel_button(c: dict) -> str:
     icon = "🔴" if c.get("lastError") else ("🟢" if c.get("enabled") else "⏸")
     name = short(c.get("targetName") or c.get("title") or c.get("url"), 26)

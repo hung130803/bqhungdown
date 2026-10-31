@@ -1,7 +1,9 @@
 """Theo dõi nền: so ảnh chụp hàng đợi giữa 2 nhịp → báo sự kiện.
 
-- Tải xong / lỗi / bỏ qua (live) / mục mới do kênh tự thêm → gom thành 1 tin
-  tóm tắt mỗi `digest_interval_sec` (không spam từng video).
+- Mục mới / tải xong / lỗi / bỏ qua (quét kênh, chạy nhóm, tải trên máy) → gom
+  vào 1 ĐỢT TẢI = 1 tin tự cập nhật (tổng tiến độ + đang tải + lỗi); xong hết
+  thì chốt tổng kết kèm nút gửi video về điện thoại. Không gửi tin rời từng video.
+  Link người dùng tự gửi có tin tự cập nhật riêng (`track`).
 - Lỗi liên quan cookie → nhắc gửi cookie mới cho ĐÚNG trang (tối đa 1 lần/giờ/trang).
 - Cookie sắp hết hạn (< 3 ngày) → nhắc 1 lần/12 giờ.
 - Kênh mới bị lỗi quét → báo.
@@ -24,6 +26,8 @@ from .app_client import AppClient, AppError, AppOffline
 log = logging.getLogger("bqbot.monitor")
 
 COOKIE_ALERT_EVERY = 3600
+# Mục đổi sang các trạng thái này thì vào đợt tải (kể cả mục có từ trước khi bot bật).
+ACTIVE_OR_DONE = ("queued", "downloading", "completed", "failed", "skipped")
 COOKIE_EXPIRY_EVERY = 12 * 3600
 CHANNEL_ERR_EVERY = 600
 
@@ -43,8 +47,6 @@ class Monitor:
         self._own: dict[str, float] = {}
         self._own_lock = threading.Lock()
         self._online: bool | None = None
-        self._events: dict[str, list[dict]] = {"completed": [], "failed": [], "skipped": [], "new": []}
-        self._last_digest = clock()
         self._boards: dict[int, int] = {}
         self._boards_lock = threading.Lock()
         self._last_board = 0.0
@@ -57,6 +59,13 @@ class Monitor:
         self._tracked: dict[tuple[int, int], dict] = {}
         self._tracked_lock = threading.Lock()
         self._expect_offline_until = float("-inf")
+        # Đợt tải hiện tại (1 tin tự cập nhật / chat).
+        self._batch_ids: list[str] = []
+        self._batch_set: set[str] = set()
+        self._batch_msgs: dict[int, int] = {}
+        self._batch_started: str | None = None
+        self._batch_text = ""
+        self._batch_last_edit = float("-inf")
 
     def expect_offline(self, seconds: float = 60) -> None:
         """Gọi khi người dùng CHỦ ĐỘNG đóng app — không báo 'app đã tắt' trùng."""
@@ -196,9 +205,7 @@ class Monitor:
         items = data.get("items", [])
         self._diff(items)
         self._update_tracked(items)
-        if now - self._last_digest >= self.cfg.digest_interval_sec:
-            self._last_digest = now
-            self._flush_digest()
+        self._update_batch(items)
         if now - self._last_board >= self.cfg.board_interval_sec:
             self._last_board = now
             self._update_boards()
@@ -218,57 +225,70 @@ class Monitor:
         if self._prev is None:  # nhịp đầu: chỉ ghi mốc
             self._prev = cur
             return
-        # Mục có tin tự cập nhật riêng → không báo trùng trong tin tóm tắt.
+        # Mục có tin tự cập nhật riêng (link người dùng gửi) → không đưa vào đợt.
         tracked = self._tracked_ids()
         for it in items:
             sid, st = it["shortId"], it.get("state")
             before = self._prev.get(sid)
             if before == st:
                 continue
-            if before is None and st in ("queued", "downloading"):
-                if sid not in own and sid not in tracked:
-                    self._events["new"].append(it)
-            elif st == "completed":
-                if sid not in tracked:
-                    self._events["completed"].append(it)
-            elif st == "failed":
-                if sid not in tracked:
-                    self._events["failed"].append(it)
+            if st == "failed":
                 self._maybe_cookie_alert(it)
-            elif st == "skipped" and it.get("error"):  # bỏ qua vì live (đã tải rồi thì không có lời báo)
-                self._events["skipped"].append(it)
+            if sid in own or sid in tracked:
+                continue
+            # Mọi mục mới / đổi trạng thái (do quét kênh, chạy nhóm, tải trên máy…)
+            # gom vào ĐỢT TẢI hiện tại → 1 tin tự cập nhật thay vì nhiều tin rời.
+            if sid not in self._batch_set and (before is None or st in ACTIVE_OR_DONE):
+                self._batch_ids.append(sid)
+                self._batch_set.add(sid)
+                if self._batch_started is None:
+                    self._batch_started = time.strftime("%H:%M")
         self._prev = cur
 
-    def _flush_digest(self) -> None:
-        ev = self._events
-        self._events = {"completed": [], "failed": [], "skipped": [], "new": []}
-        parts: list[str] = []
-        rows: list[list[tuple[str, str]]] = []
-        if ev["new"] and self.cfg.notify_new:
-            parts.append(f"🆕 <b>{len(ev['new'])} mục mới</b> vào hàng đợi")
-            parts += ["  " + fmt.item_line(it, with_id=False) for it in ev["new"][:5]]
-            if len(ev["new"]) > 5:
-                parts.append(f"  … và {len(ev['new']) - 5} mục")
-        if ev["completed"] and self.cfg.notify_completed:
-            parts.append(f"✅ <b>Tải xong {len(ev['completed'])}</b> (đã lưu trên máy tính)")
-            for n, it in enumerate(ev["completed"][:8], 1):
-                parts.append(f"  {n}. {fmt.esc(fmt.short(fmt.title_of(it), 55))}")
-                if n <= 4:
-                    rows.append([(f"📤 Gửi về điện thoại {n}", f"f:{it['shortId']}")])
-            if len(ev["completed"]) > 8:
-                parts.append(f"  … và {len(ev['completed']) - 8} video")
-        if ev["failed"] and self.cfg.notify_failed:
-            parts.append(f"❌ <b>Lỗi {len(ev['failed'])}</b>")
-            for n, it in enumerate(ev["failed"][:5], 1):
-                reason = fmt.first_line(it.get("error"), 110)
-                parts.append(f"  {n}. {fmt.esc(fmt.short(fmt.title_of(it), 45))}\n    <i>{fmt.esc(reason)}</i>")
-                rows.append([(f"🔁 Thử lại {n}", f"qa:{it['shortId']}:retry:failed:0"),
-                             (f"ℹ️ Xem lỗi {n}", f"qi:{it['shortId']}:failed:0")])
-            rows.append([("❌ Xem tất cả lỗi", "q:failed:0"), ("🔁 Thử lại hết", "b:retry_failed")])
-        if ev["skipped"] and self.cfg.notify_failed:
-            parts.append(f"⏭ <b>Bỏ qua {len(ev['skipped'])}</b> (video live/chờ live)")
-        if parts:
-            self._notify("\n".join(parts), _kb(rows[:12]) if rows else None)
+    # ── 1 tin cho cả đợt tải ──
+    def _update_batch(self, items: list[dict], force: bool = False) -> None:
+        if not self._batch_ids:
+            return
+        by_id = {it["shortId"]: it for it in items}
+        cur = [by_id.get(s) or {"shortId": s, "state": "cancelled", "title": ""} for s in self._batch_ids]
+        finished = not any(it.get("state") in fmt.ACTIVE_STATES for it in cur)
+        now = self.clock()
+        if not finished and not force and now - self._batch_last_edit < self.cfg.board_interval_sec:
+            return
+        text = fmt.batch_text(cur, self._batch_started or "", finished)
+        markup = self._batch_markup(cur, finished)
+        if text != self._batch_text or finished:
+            self._batch_last_edit = now
+            self._batch_text = text
+            for chat in self.cfg.notify_chat_ids:
+                mid = self._batch_msgs.get(chat)
+                try:
+                    if mid is None:
+                        sent = self.tg.send_message(chat, text, markup)
+                        if sent:
+                            self._batch_msgs[chat] = sent["message_id"]
+                    else:
+                        self.tg.edit_message(chat, mid, text, markup)
+                except Exception as e:  # noqa: BLE001
+                    log.info("Cập nhật tin đợt tải lỗi: %s", e)
+        if finished:
+            self._batch_ids, self._batch_set, self._batch_msgs = [], set(), {}
+            self._batch_started, self._batch_text = None, ""
+
+    @staticmethod
+    def _batch_markup(items: list[dict], finished: bool) -> dict:
+        failed = any(it.get("state") == "failed" for it in items)
+        if not finished:
+            rows = [[("📋 Chi tiết / dừng / huỷ", "q:active:0")]]
+            if failed:
+                rows.append([("❌ Xem lỗi", "q:failed:0")])
+            return _kb(rows)
+        rows = []
+        if any(it.get("state") == "completed" for it in items):
+            rows.append([("📤 Gửi video về điện thoại", "q:completed:0")])
+        if failed:
+            rows.append([("❌ Xem lỗi", "q:failed:0"), ("🔁 Thử lại lỗi", "b:retry_failed")])
+        return _kb(rows or [[("🏠 Menu", "m")]])
 
     def _maybe_cookie_alert(self, it: dict) -> None:
         err = (it.get("error") or "").lower()

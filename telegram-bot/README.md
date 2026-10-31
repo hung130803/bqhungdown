@@ -53,8 +53,9 @@ vào thư mục vừa mở. Máy tính bật là bot + app chạy.
 | Sửa lỗi tải | `/fix` (cập nhật yt-dlp…) |
 | Bật app từ xa | `/openapp` hoặc nút **▶ Mở app trên máy tính** (máy tính phải đang mở) |
 
-**Bot tự báo:** tải xong / lỗi (kèm nút thử lại) / video mới từ kênh (gom 1 tin mỗi
-20 giây) · cookie hỏng hoặc sắp hết hạn · kênh quét lỗi · app tắt/chạy lại.
+**Bot tự báo:** mỗi đợt tải (quét kênh / chạy nhóm) là **1 tin tự cập nhật** tổng
+tiến độ (xong X/N, đang tải, lỗi); xong hết thì chốt tổng kết kèm nút gửi video về
+điện thoại / thử lại lỗi · cookie hỏng hoặc sắp hết hạn · kênh quét lỗi · app tắt/chạy lại.
 
 ## Thiết kế tốc độ
 
