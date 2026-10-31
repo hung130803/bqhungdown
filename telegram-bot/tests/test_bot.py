@@ -705,6 +705,24 @@ class RouterTests(NoNetworkCase):
         buttons = [b["callback_data"] for row in tg.calls[-1][3]["inline_keyboard"] for b in row]
         self.assertIn("qf", buttons)
 
+    def test_group_more_runs_each_enabled_channel(self):
+        tg = FakeTG()
+        chans = [{"id": "a", "title": "A", "enabled": True, "group": "VN"},
+                 {"id": "b", "title": "B", "enabled": True, "group": "VN"},
+                 {"id": "c", "title": "C", "enabled": False, "group": "VN"}]
+        app = FakeApp({"/api/status": STATUS, "/api/watch": {"ok": True, "items": chans},
+                       "/api/watch/a/more": {"ok": True, "count": 1},
+                       "/api/watch/b/more": {"ok": True, "count": 0}})
+        r = Router(tg, app, cfg())
+        cb = {"id": "x", "message": {"chat": {"id": CHAT}, "message_id": 4}}
+        self.run_task(r.route_callback({**cb, "data": "wgm:0"}))
+        self.assertIn("2</b> video", tg.texts()[-1], "chỉ tính kênh đang bật")
+        self.run_task(r.route_callback({**cb, "data": "wgx:0"}))
+        posted = [p for m, p, _ in app.requests if m == "POST"]
+        self.assertEqual(posted, ["/api/watch/a/more", "/api/watch/b/more"], "bỏ qua kênh đang tắt")
+        self.assertIn("đã thêm 1 video", tg.texts()[-1])
+        self.assertIn("1 kênh hết video", tg.texts()[-1])
+
     def test_history_shows_only_completed(self):
         tg = FakeTG()
         app = FakeApp({"/api/history": {"ok": True, "items": [

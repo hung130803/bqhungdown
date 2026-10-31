@@ -207,6 +207,7 @@ class Router:
             "qi": self._cb_queue_item, "wi": self._cb_watch_item,
             "b": self._cb_bulk, "bc": self._cb_bulk_confirm, "w": self._cb_watch, "wc": self._cb_watch_check,
             "wq": self._cb_watch_check_group, "wm": self._cb_watch_more, "we": self._cb_watch_enable,
+            "wgm": self._cb_group_more_confirm, "wgx": self._cb_group_more,
             "ck": self._cb_cookies, "cs": self._cb_cookie_set, "s": self._cb_settings, "sa": self._cb_set_auto,
             "sc": self._cb_set_conc, "si": self._cb_set_interval, "fx": self._cb_fix, "bd": self._cb_board,
             "bx": self._cb_board_stop, "h": self._cb_history, "f": self._cb_file, "x": self._cb_noop,
@@ -494,6 +495,9 @@ class Router:
             qlabel = f"▶ Quét nhóm {fmt.short(group or 'Chưa nhóm', 14)}" if group is not None else "▶ Quét tất cả kênh"
             qdata = f"wq:{flt[1:]}" if group is not None else "wq:a"
             rows.append([(qlabel, qdata)])
+            if group is not None:
+                # = nút "Thêm 1 lượt cho cả nhóm" trên app: vượt hạn mức ngày, mỗi kênh +1 video.
+                rows.append([("➕ Thêm 1 video mỗi kênh (cả nhóm)", f"wgm:{flt[1:]}")])
             rows.append([HOME])
             self._show(chat_id, mid, "\n".join(lines), kb(rows))
         self._guard(chat_id, mid, go)
@@ -566,6 +570,72 @@ class Router:
             self._show(chat_id, mid, f"▶ Đang quét {where} (chạy nền). Video mới sẽ được báo ở đây.",
                        kb([[("📺 Kênh", "w:a:0"), ("📡 Bảng theo dõi", "bd")], [HOME]]))
         self._guard(chat_id, mid, go)
+
+    # ── Thêm 1 lượt cho cả nhóm (vượt hạn mức ngày) ──
+    def _group_by_index(self, idx: str) -> str | None:
+        groups = self._groups()
+        return groups[int(idx)] if idx.isdigit() and int(idx) < len(groups) else None
+
+    def _cb_group_more_confirm(self, chat_id: int, mid: int, args: list[str]) -> None:
+        def go():
+            group = self._group_by_index(args[0] if args else "")
+            if group is None:
+                self._show(chat_id, mid, "Không thấy nhóm này nữa.", kb([[("📺 Kênh", "w:a:0")]]))
+                return
+            on = [c for c in self.app.watch(group=group).get("items", []) if c.get("enabled")]
+            self._show(chat_id, mid,
+                       f"➕ <b>Thêm 1 video cho mỗi kênh nhóm {fmt.esc(group)}?</b>\n"
+                       f"{len(on)} kênh đang bật → tải thêm tối đa <b>{len(on)}</b> video ngay bây giờ, "
+                       "VƯỢT hạn mức ngày (hạn mức ngày mai không đổi). Kênh hết video thì bỏ qua.",
+                       kb([[("➕ Làm luôn", f"wgx:{args[0]}"), ("Không", f"w:g{args[0]}:0")]]))
+        self._guard(chat_id, mid, go)
+
+    def _cb_group_more(self, chat_id: int, mid: int, args: list[str]) -> None:
+        """Mỗi kênh bật trong nhóm: 'Tải thêm 1 video hôm nay' — lần lượt từng kênh
+        (đỡ bị YouTube chặn), sửa 1 tin tiến độ, cuối cùng báo tổng kết."""
+        group = self._group_by_index(args[0] if args else "")
+        if group is None:
+            return
+        try:
+            chans = [c for c in self.app.watch(group=group).get("items", []) if c.get("enabled")]
+        except (AppOffline, AppError) as e:
+            self._show(chat_id, mid, f"⚠️ {fmt.esc(e)}", kb([[("▶ Mở app", "oa")]]))
+            return
+        self._show(chat_id, mid, f"➕ Đang lấy thêm video cho {len(chans)} kênh nhóm {fmt.esc(group)}… (0/{len(chans)})")
+
+        def work() -> dict:
+            res = {"added": [], "empty": [], "error": []}
+            for n, c in enumerate(chans, 1):
+                name = c.get("targetName") or c.get("title") or c["id"]
+                try:
+                    r = self.app.watch_action(c["id"], "more")
+                    (res["added"] if int(r.get("count") or 0) > 0 else res["empty"]).append(name)
+                except (AppOffline, AppError) as e:
+                    res["error"].append(f"{name}: {e}")
+                    if isinstance(e, AppOffline):
+                        break
+                if n % 5 == 0 or n == len(chans):
+                    try:
+                        self.tg.edit_message(chat_id, mid, f"➕ Đang lấy thêm video nhóm {fmt.esc(group)}… "
+                                                           f"({n}/{len(chans)}) · đã thêm {len(res['added'])}")
+                    except Exception:  # noqa: BLE001
+                        pass
+            return res
+
+        def done(res: Any, err: BaseException | None) -> None:
+            if err or not res:
+                self._show(chat_id, mid, f"❌ Lỗi: {fmt.esc(err)}", kb([[("📺 Kênh", "w:a:0")]]))
+                return
+            lines = [f"✅ <b>Nhóm {fmt.esc(group)}: đã thêm {len(res['added'])} video</b> vào hàng đợi."]
+            if res["empty"]:
+                lines.append(f"ℹ️ {len(res['empty'])} kênh hết video chưa tải: " +
+                             fmt.esc(", ".join(fmt.short(x, 20) for x in res["empty"][:10])))
+            if res["error"]:
+                lines.append(f"🔴 {len(res['error'])} kênh lỗi: " +
+                             fmt.esc("; ".join(fmt.short(x, 60) for x in res["error"][:5])))
+            self._show(chat_id, mid, "\n".join(lines),
+                       kb([[("⬇️ Xem tiến độ", "q:active:0"), ("📺 Kênh", f"w:g{args[0]}:0")]]))
+        self._job(f"thêm 1 lượt nhóm {group}", work, done)
 
     def _cmd_check(self, chat_id: int, arg: str) -> None:
         def go():
