@@ -189,10 +189,10 @@ class TelegramAPI:
     def delete_message(self, chat_id: int, message_id: int) -> Any:
         return self.call("deleteMessage", {"chat_id": chat_id, "message_id": message_id}, read_timeout=10)
 
-    def get_updates(self, offset: int, timeout: int = 20) -> list:
+    def get_updates(self, offset: int, timeout: int = 10) -> list:
         return self.call("getUpdates", {
             "offset": offset, "timeout": timeout,
-            "allowed_updates": ["message", "callback_query"]}, read_timeout=timeout + 10) or []
+            "allowed_updates": ["message", "callback_query"]}, read_timeout=timeout + 5) or []
 
     def download_file(self, file_id: str, max_bytes: int = 6 * 1024 * 1024) -> bytes:
         info = self.call("getFile", {"file_id": file_id})
