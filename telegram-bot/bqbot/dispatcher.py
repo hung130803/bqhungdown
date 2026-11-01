@@ -75,7 +75,10 @@ class Dispatcher:
         backoff = 1.0
         while not self.stop.is_set():
             try:
-                ups = self.tg.get_updates(self.offset, timeout=50)
+                # Long poll 20 s (trước 50 s): kết nối bị mạng cắt ngầm giữa
+                # chừng thì phải chờ hết read timeout mới biết — 60 s không nhận
+                # được nút nào (log 31/10 23:14, 01/11 18:54). Nay tối đa ~30 s.
+                ups = self.tg.get_updates(self.offset, timeout=20)
                 backoff = 1.0
             except Exception as e:  # noqa: BLE001  mạng chập chờn — chờ tăng dần, tối đa 30s
                 log.warning("getUpdates lỗi: %s", e)

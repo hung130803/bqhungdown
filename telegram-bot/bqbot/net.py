@@ -29,17 +29,46 @@ CONNECT_TIMEOUT = 5
 SEND_GAP_SEC = 0.35
 # Phương thức "bỏ qua khi 429" — trễ 1 lần sửa tin/trả lời nút không đáng chờ.
 DROP_ON_429 = ("editMessageText", "editMessageReplyMarkup", "answerCallbackQuery", "deleteMessage")
+# Gửi lại được dù lỗi mạng giữa chừng (làm 2 lần cũng y như 1 lần) → thử lại
+# NGAY trên kết nối mới thay vì báo lỗi / bắt người dùng bấm lại.
+IDEMPOTENT = DROP_ON_429 + ("getMe", "getFile")
+# Sửa tin / trả lời nút: kết nối khoẻ chỉ mất < 1 s; quá 12 s là kết nối hỏng
+# → bỏ, thử lại trên kết nối mới thay vì ngồi chờ đủ 30 s.
+INTERACTIVE_READ_TIMEOUT = 12
 
 _local = threading.local()
+
+
+# Kết nối keep-alive để RẢNH quá ngần này giây thì bỏ, mở kết nối mới (~0,5 s).
+# Lý do (log thật 31/10–01/11): bấm nút sau một lúc không dùng → lần gọi đầu
+# đi vào kết nối cũ đã bị mạng cắt ngầm → treo tới hết read timeout (30 s)
+# hoặc "Connection aborted 10054" → anh Hùng thấy bot 20–50 s mới trả lời.
+IDLE_REFRESH_SEC = 30
 
 
 def session() -> requests.Session:
     """Session riêng của luồng hiện tại (requests.Session không an toàn đa luồng)."""
     s = getattr(_local, "session", None)
+    now = time.monotonic()
+    if s is not None and now - getattr(_local, "used", now) > IDLE_REFRESH_SEC:
+        reset_session()
+        s = None
     if s is None:
         s = requests.Session()
         _local.session = s
+    _local.used = now
     return s
+
+
+def reset_session() -> None:
+    """Bỏ Session (và kết nối keep-alive) của luồng hiện tại — gọi sau lỗi mạng."""
+    s = getattr(_local, "session", None)
+    _local.session = None
+    if s is not None:
+        try:
+            s.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class TelegramError(Exception):
@@ -86,7 +115,8 @@ class TelegramAPI:
                        for k, v in data.items() if v is not None}
         for fh in (files or {}).values():
             fh.seek(0)  # gửi lại sau 429 phải đọc file từ đầu
-        resp =session().post(url, data=payload, files=files, timeout=(CONNECT_TIMEOUT, read_timeout))
+        resp = session().post(url, data=payload, files=files, timeout=(CONNECT_TIMEOUT, read_timeout))
+        _local.used = time.monotonic()  # tính rảnh từ lúc XONG (long poll giữ kết nối lâu)
         try:
             return resp.json()
         except ValueError:
@@ -110,14 +140,17 @@ class TelegramAPI:
             self._space_sends(method)
             try:
                 res = self._transport(method, data, files, read_timeout)
-            except (requests.ConnectionError, requests.ConnectTimeout) as e:
+            except requests.RequestException as e:
+                reset_session()  # kết nối hỏng → lần sau mở kết nối mới
+                if method in IDEMPOTENT and attempts < 2:
+                    continue
+                if not isinstance(e, (requests.ConnectionError, requests.ConnectTimeout)):
+                    raise TelegramError(method, "lỗi mạng: " + self.redact(e)) from None
                 # Chưa kết nối được = Telegram CHƯA nhận → gửi lại an toàn.
                 # (ReadTimeout thì có thể đã nhận rồi → KHÔNG gửi lại, tránh trùng.)
                 if method.startswith("send") and attempts < 3 and not isinstance(e, requests.ReadTimeout):
                     self._sleep(1.5 * attempts)
                     continue
-                raise TelegramError(method, "lỗi mạng: " + self.redact(e)) from None
-            except requests.RequestException as e:
                 raise TelegramError(method, "lỗi mạng: " + self.redact(e)) from None
             if res.get("ok"):
                 return res.get("result")
@@ -146,16 +179,17 @@ class TelegramAPI:
     def edit_message(self, chat_id: int, message_id: int, text: str, reply_markup: dict | None = None) -> Any:
         return self.call("editMessageText", {
             "chat_id": chat_id, "message_id": message_id, "text": text[:4096], "parse_mode": "HTML",
-            "disable_web_page_preview": True, "reply_markup": reply_markup})
+            "disable_web_page_preview": True, "reply_markup": reply_markup},
+            read_timeout=INTERACTIVE_READ_TIMEOUT)
 
     def answer_callback(self, callback_id: str, text: str = "", alert: bool = False) -> Any:
         return self.call("answerCallbackQuery", {
-            "callback_query_id": callback_id, "text": text[:200], "show_alert": alert}, read_timeout=10)
+            "callback_query_id": callback_id, "text": text[:200], "show_alert": alert}, read_timeout=8)
 
     def delete_message(self, chat_id: int, message_id: int) -> Any:
         return self.call("deleteMessage", {"chat_id": chat_id, "message_id": message_id}, read_timeout=10)
 
-    def get_updates(self, offset: int, timeout: int = 50) -> list:
+    def get_updates(self, offset: int, timeout: int = 20) -> list:
         return self.call("getUpdates", {
             "offset": offset, "timeout": timeout,
             "allowed_updates": ["message", "callback_query"]}, read_timeout=timeout + 10) or []

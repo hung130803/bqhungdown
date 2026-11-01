@@ -220,6 +220,30 @@ class NetTests(NoNetworkCase):
         self.assertEqual(api.send_message(1, "x")["message_id"], 1)
         self.assertEqual(len(calls), 2)
 
+    def test_edit_retried_once_on_dead_connection(self):
+        """Kết nối cũ bị mạng cắt ngầm → sửa tin treo/ lỗi; sửa tin làm lại vô hại
+        nên thử lại NGAY trên kết nối mới, không bắt anh Hùng bấm lại."""
+        calls = []
+
+        def transport(method, data, files, rt):
+            calls.append(rt)
+            if len(calls) == 1:
+                raise requests.ReadTimeout("read timed out")
+            return {"ok": True, "result": True}
+
+        api = TelegramAPI("T", transport=transport, sleep=lambda s: None)
+        self.assertTrue(api.edit_message(1, 2, "x"))
+        self.assertEqual(len(calls), 2)
+        self.assertLessEqual(calls[0], 15, "sửa tin không được chờ tới 30 s mới bỏ")
+
+    def test_idle_session_is_replaced(self):
+        from bqbot import net
+        s1 = net.session()
+        self.assertIs(net.session(), s1, "đang dùng liên tục → giữ kết nối")
+        net._local.used -= net.IDLE_REFRESH_SEC + 1
+        self.assertIsNot(net.session(), s1, "rảnh lâu → kết nối cũ có thể đã chết, mở mới")
+        net.reset_session()
+
     def test_log_filter_redacts_token(self):
         sys.path.insert(0, str(HERE))
         import logging
