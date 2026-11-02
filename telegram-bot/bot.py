@@ -11,6 +11,7 @@ import logging.handlers
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -76,14 +77,23 @@ def main() -> int:
     tg = TelegramAPI(cfg.telegram_token)
     app = AppClient(Path(cfg.app_config_path) if cfg.app_config_path else None)
 
-    try:
-        me = tg.call("getMe")
-    except TelegramError as e:
-        if e.code in (401, 404):
-            log.error("Token bot sai (Telegram báo %s) — sửa telegram_token trong config.json", e.code)
-            return config_mod.CONFIG_EXIT_CODE
-        log.error("Không kết nối được Telegram: %s", e)
-        return 1
+    # Bật cùng Windows: mạng/VPN thường lên SAU bot vài chục giây → chờ mạng,
+    # KHÔNG thoát (thoát là không ai bật lại khi app chưa mở). --check thì thôi.
+    wait = 5.0
+    while True:
+        try:
+            me = tg.call("getMe")
+            break
+        except TelegramError as e:
+            if e.code in (401, 404):
+                log.error("Token bot sai (Telegram báo %s) — sửa telegram_token trong config.json", e.code)
+                return config_mod.CONFIG_EXIT_CODE
+            if check_only:
+                log.error("Không kết nối được Telegram: %s", e)
+                return 1
+            log.warning("Chưa kết nối được Telegram (%s) — thử lại sau %.0fs", e, wait)
+            time.sleep(wait)
+            wait = min(wait * 2, 60.0)
     log.info("Bot @%s sẵn sàng", me.get("username"))
     # Đăng ký với app: từ lần mở app sau, APP TỰ BẬT bot chạy ngầm.
     reg = launcher.register(HERE, app.config_path.parent)
