@@ -278,6 +278,65 @@ pub fn resolve_watch_folder(
     default_folder.to_path_buf()
 }
 
+/// KHOÁ KÊNH ĐÍCH: các nguồn có cùng khoá = cùng nuôi 1 kênh đích (nguồn
+/// chính + nguồn DỰ PHÒNG). None = kênh không đặt thư mục riêng/tên kênh
+/// đích (rơi về thư mục mặc định chung) — KHÔNG gộp, vì đó là các kênh độc
+/// lập chứ không phải dự phòng của nhau.
+///
+/// LỖI THẬT (anh Hùng 02/11/2026, "kênh 2" nhóm Mỹ BKT có 2 nguồn): hạn mức
+/// "1 video/ngày" tính RIÊNG từng nguồn → mỗi nguồn tự tải 1 → kênh đích nhận
+/// 2 video/ngày. Nay hạn mức tính theo KÊNH ĐÍCH (xem `sibling_taken_today`).
+pub(crate) fn target_key(c: &WatchedChannel, watch_root: &Option<String>) -> Option<String> {
+    let has_dest = c.dest_dir.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
+    let has_target = watch_root.as_deref().map(str::trim).is_some_and(|s| !s.is_empty())
+        && c.target_name.as_deref().and_then(sanitize_folder_name).is_some();
+    if !has_dest && !has_target {
+        return None;
+    }
+    let p = resolve_watch_folder(&c.dest_dir, &c.target_name, watch_root, std::path::Path::new(""));
+    let k = p.to_string_lossy().replace('/', "\\").trim_end_matches(['\\', ' ']).to_lowercase();
+    (!k.is_empty()).then_some(k)
+}
+
+/// Số video các nguồn KHÁC của cùng kênh đích đã tự tải HÔM NAY — cộng vào
+/// bộ đếm của nguồn đang xét để cả kênh đích chỉ nhận đúng hạn mức ngày.
+/// Nguồn đứng TRƯỚC trong danh sách được quét trước (`check_all`) nên là
+/// nguồn chính; nguồn sau chỉ được lấy khi nguồn trước không có gì. Hàm thuần.
+fn sibling_taken_today(
+    all: &[WatchedChannel],
+    me_id: &str,
+    key: &str,
+    today: &str,
+    watch_root: &Option<String>,
+) -> u32 {
+    all.iter()
+        .filter(|c| c.id != me_id && c.drip_date.as_deref() == Some(today))
+        .filter(|c| target_key(c, watch_root).as_deref() == Some(key))
+        .map(|c| c.drip_count)
+        .sum()
+}
+
+/// Gom kênh theo kênh đích, GIỮ thứ tự danh sách: mỗi phần tử là 1 nhóm chạy
+/// lần lượt (nguồn chính trước, dự phòng sau). Kênh không có khoá = nhóm 1 mình.
+fn group_by_target(chans: &[WatchedChannel], watch_root: &Option<String>) -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = Vec::new();
+    let mut idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for c in chans {
+        match target_key(c, watch_root) {
+            Some(k) => {
+                if let Some(&i) = idx.get(&k) {
+                    out[i].push(c.id.clone());
+                } else {
+                    idx.insert(k, out.len());
+                    out.push(vec![c.id.clone()]);
+                }
+            }
+            None => out.push(vec![c.id.clone()]),
+        }
+    }
+    out
+}
+
 /// A fetched video plus its dedup id and publish time (for "đăng X phút trước").
 #[derive(Clone)]
 struct Fetched {
@@ -297,24 +356,31 @@ struct Fetched {
 /// Kênh đang được quét (theo id). Quét nền + nút ▶ + bot có thể cùng gọi một
 /// kênh — hai lượt `apply` song song trên cùng ảnh chụp cũ sẽ đếm/rót trùng.
 static CHECKING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// Kênh ĐÍCH đang được một nguồn quét (theo `target_key`). 2 nguồn của cùng
+/// kênh đích quét song song sẽ cùng thấy "chưa ai tải hôm nay" → cùng tải.
+static CHECKING_TARGET: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-struct CheckingGuard(String);
+struct CheckingGuard(&'static std::sync::Mutex<Vec<String>>, String);
 
 impl CheckingGuard {
     fn try_new(id: &str) -> Option<Self> {
-        let mut g = CHECKING.lock().unwrap_or_else(|e| e.into_inner());
-        if g.iter().any(|x| x == id) {
+        Self::try_in(&CHECKING, id)
+    }
+
+    fn try_in(list: &'static std::sync::Mutex<Vec<String>>, key: &str) -> Option<Self> {
+        let mut g = list.lock().unwrap_or_else(|e| e.into_inner());
+        if g.iter().any(|x| x == key) {
             return None;
         }
-        g.push(id.to_string());
-        Some(Self(id.to_string()))
+        g.push(key.to_string());
+        Some(Self(list, key.to_string()))
     }
 }
 
 impl Drop for CheckingGuard {
     fn drop(&mut self) {
-        let mut g = CHECKING.lock().unwrap_or_else(|e| e.into_inner());
-        g.retain(|x| x != &self.0);
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.retain(|x| x != &self.1);
     }
 }
 
@@ -346,6 +412,24 @@ pub async fn check_channel(
     let channel = match store.get(id) {
         Some(c) => c,
         None => return 0,
+    };
+    // Cùng kênh đích → chờ nguồn kia quét xong (luôn lấy khoá id TRƯỚC khoá
+    // kênh đích, không bao giờ ngược lại → không thể kẹt chéo).
+    let _target_guard = match target_key(&channel, &settings_store.get().watch_root) {
+        Some(key) => {
+            let mut waited = 0u32;
+            loop {
+                if let Some(g) = CheckingGuard::try_in(&CHECKING_TARGET, &key) {
+                    break Some(g);
+                }
+                if waited >= 2400 {
+                    return 0;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                waited += 1;
+            }
+        }
+        None => None,
     };
     let is_baseline = channel.seen_ids.is_empty();
 
@@ -493,6 +577,11 @@ async fn apply(
     } else {
         0
     };
+    // Nguồn DỰ PHÒNG: suất ngày là của KÊNH ĐÍCH — nguồn khác cùng kênh đích
+    // đã tải hôm nay thì nguồn này coi như đã dùng chừng ấy suất.
+    if let Some(key) = target_key(channel, &settings.watch_root) {
+        drip_count += sibling_taken_today(&store.list(), &channel.id, &key, &today, &settings.watch_root);
+    }
     // Mốc ban đầu — lúc ghi lại chỉ CỘNG phần rót thêm lượt này lên số MỚI
     // NHẤT trong store (reconcile của kênh khác chạy song song có thể vừa trả
     // suất cho kênh này trong lúc ta chờ mạng; ghi đè tuyệt đối là mất bước đó).
@@ -502,8 +591,13 @@ async fn apply(
     // 1 lần (dù có tải hay không).
     let mut overflow_new_ids: std::collections::HashSet<String> =
         std::collections::HashSet::new();
-    if new_count > 0 {
-        let chan_name = channel.title.clone().unwrap_or_else(|| channel.url.clone());
+    // Chế độ "Chỉ báo": báo ngay (video vào `pending`, không lặp lại). Chế độ
+    // tự tải: CHỈ báo video thực sự xếp tải ở tier ② — video dư suất để "chưa
+    // thấy" nên lượt quét nào cũng lại thấy; báo theo new_count thì cứ vài
+    // phút lại hiện "có video mới — đang tải" mà không tải gì (nhất là nguồn
+    // dự phòng đang nhường suất cho nguồn chính).
+    let chan_name = channel.title.clone().unwrap_or_else(|| channel.url.clone());
+    if new_count > 0 && !auto {
         let first = new_fetched.first().map(|f| f.video.title.clone()).unwrap_or_default();
         crate::notification::notify_new_videos(app, &settings, &chan_name, new_count, &first, auto);
     }
@@ -549,6 +643,10 @@ async fn apply(
             let got = enqueue_new(app, queue, settings_store, history, &channel.title,
                                   folder.clone(), channel.max_height, &vids, &settings).await;
             drip_count += got;
+            if got > 0 {
+                crate::notification::notify_new_videos(
+                    app, &settings, &chan_name, got, &vids[0].title, auto);
+            }
         }
     } else if auto && new_count > 0 {
         // Hết suất (hàng chờ đã chiếm) -> TẤT CẢ video mới để "chưa thấy",
@@ -1294,6 +1392,56 @@ mod tests {
         assert!(!channel_in_group(Some("Mỹ"), Some("")));
     }
 
+    fn nguon(id: &str, dest: Option<&str>, target: Option<&str>, date: Option<&str>, n: u32) -> WatchedChannel {
+        let mut c = tests::chan(vec![], 1, vec![]);
+        c.id = id.into();
+        c.dest_dir = dest.map(Into::into);
+        c.target_name = target.map(Into::into);
+        c.drip_date = date.map(Into::into);
+        c.drip_count = n;
+        c
+    }
+
+    /// LỖI THẬT 02/11/2026: "kênh 2" có 2 nguồn (chính + dự phòng), mỗi nguồn
+    /// tự tải 1 → kênh đích nhận 2 video/ngày. Suất phải tính theo kênh đích.
+    #[test]
+    fn nguon_du_phong_khong_tai_them_khi_nguon_chinh_da_tai() {
+        let root = Some("D:\\Video".to_string());
+        let all = vec![
+            nguon("chinh", Some("D:\\video ssmatool\\Mỹ BKT\\kênh 2"), None, Some("2026-11-02"), 1),
+            // Cùng thư mục, khác hoa/thường + gạch chéo cuối → vẫn là 1 kênh đích.
+            nguon("phong", Some("d:/video ssmatool/mỹ bkt/KÊNH 2/"), None, None, 0),
+            nguon("khac", Some("D:\\video ssmatool\\Mỹ BKT\\kênh 3"), None, Some("2026-11-02"), 1),
+        ];
+        let key = target_key(&all[1], &root).unwrap();
+        assert_eq!(target_key(&all[0], &root).as_deref(), Some(key.as_str()));
+        // Nguồn dự phòng thấy kênh đích đã dùng 1 suất hôm nay → hết suất.
+        assert_eq!(sibling_taken_today(&all, "phong", &key, "2026-11-02", &root), 1);
+        assert_eq!(new_take_count(3, 1, 1), 0);
+        // Hôm qua tải thì không tính cho hôm nay; kênh khác không dính.
+        assert_eq!(sibling_taken_today(&all, "phong", &key, "2026-11-03", &root), 0);
+        let k3 = target_key(&all[2], &root).unwrap();
+        assert_eq!(sibling_taken_today(&all, "khac", &k3, "2026-11-02", &root), 0);
+    }
+
+    #[test]
+    fn gom_nguon_theo_kenh_dich_giu_thu_tu() {
+        let root = Some("D:\\Video".to_string());
+        let all = vec![
+            nguon("a1", None, Some("Kênh A"), None, 0),
+            nguon("b", None, Some("Kênh B"), None, 0),
+            nguon("a2", Some("D:\\Video\\kênh a"), None, None, 0), // = thư mục của "Kênh A"
+            nguon("x", None, None, None, 0),  // thư mục mặc định: không gộp
+            nguon("y", None, None, None, 0),
+        ];
+        assert_eq!(
+            group_by_target(&all, &root),
+            vec![vec!["a1".to_string(), "a2".into()], vec!["b".into()], vec!["x".into()], vec!["y".into()]]
+        );
+        // Không đặt watch_root thì tên kênh đích không thành thư mục → không gộp.
+        assert!(target_key(&all[0], &None).is_none());
+    }
+
     #[test]
     fn parse_archive_lay_dung_id_va_bo_dong_rong() {
         // yt-dlp ghi "<extractor> <id>"; lấy token cuối. Dòng rỗng/khoảng
@@ -1847,16 +1995,18 @@ pub async fn check_all(
     use tokio::sync::Semaphore;
     use tokio::task::JoinSet;
 
-    let ids: Vec<String> = store
+    let chans: Vec<crate::models::WatchedChannel> = store
         .list()
         .into_iter()
         .filter(|c| c.enabled)
         .filter(|c| channel_in_group(c.group.as_deref(), group.as_deref()))
-        .map(|c| c.id)
         .collect();
+    // Nguồn cùng kênh đích chạy NỐI ĐUÔI theo thứ tự danh sách: nguồn chính
+    // dùng suất trước, nguồn dự phòng chỉ được lấy khi nguồn chính không có gì.
+    let groups = group_by_target(&chans, &settings_store.get().watch_root);
     let sem = Arc::new(Semaphore::new(CHECK_CONCURRENCY));
     let mut set: JoinSet<()> = JoinSet::new();
-    for id in ids {
+    for ids in groups {
         let app = app.clone();
         let store = store.clone();
         let queue = queue.clone();
@@ -1865,7 +2015,9 @@ pub async fn check_all(
         let sem = sem.clone();
         set.spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
-            check_channel(&app, &store, &queue, &settings_store, &history, &id).await;
+            for id in ids {
+                check_channel(&app, &store, &queue, &settings_store, &history, &id).await;
+            }
         });
     }
     while set.join_next().await.is_some() {}

@@ -30,6 +30,12 @@
   cả nguồn này. Mục vẫn có thể xuất hiện trong queue rồi bị Bỏ qua khi kiểm
   tra metadata thật; không có nghĩa đã tải nội dung live.
 - Chủ app: BQ Hung — trao đổi tiếng Việt.
+- **NGUỒN DỰ PHÒNG (02/11/2026):** nhiều nguồn cùng thư mục đích (`dest_dir`
+  hoặc `watch_root\target_name`) = 1 kênh đích. Hạn mức ngày tính cho KÊNH
+  ĐÍCH (`watcher::target_key`, `sibling_taken_today`), nguồn chạy nối đuôi
+  theo thứ tự danh sách (đứng trước = nguồn chính, `group_by_target`) + khoá
+  `CHECKING_TARGET`. Trước đó mỗi nguồn tự tải 1/ngày → kênh đích nhận 2.
+  Kênh rơi về thư mục mặc định chung KHÔNG gộp. "➕ Tải thêm" vẫn vượt suất.
 - **MẶC ĐỊNH KHÔNG TẢI LIVE (25/10/2026, yêu cầu trực tiếp của chủ app):**
   chặn `is_live`, `is_upcoming`, `post_live` ở cả quét kênh và lệnh tải cuối
   (`args_builder::LIVE_FILTER`). Áp dụng URL tay, RSS, cache, queue khôi phục,
