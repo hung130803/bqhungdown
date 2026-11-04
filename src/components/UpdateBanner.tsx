@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { markUpdating, clearUpdating } from "@/ipc/commands";
 
 /**
  * Background updater banner.
@@ -41,6 +42,8 @@ export function UpdateBanner() {
     setDownloading(true);
     setError(null);
     try {
+      // Trình cài tắt app KHÔNG qua đường thoát êm → báo trước cho bot đừng mở lại bản cũ.
+      await markUpdating();
       await update.downloadAndInstall((event) => {
         if (event.event === "Started") {
           setProgress({ downloaded: 0, total: event.data.contentLength });
@@ -50,6 +53,7 @@ export function UpdateBanner() {
       });
       await relaunch();
     } catch (e) {
+      void clearUpdating();
       setError(String(e));
       setDownloading(false);
     }

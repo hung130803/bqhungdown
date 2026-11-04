@@ -822,6 +822,28 @@ export async function daychuyenStop(huyJob: boolean): Promise<string> {
   return invoke<string>("daychuyen_stop", { huyJob });
 }
 
+/** Ghi dấu "đang tự cập nhật" (hạn 10 phút) TRƯỚC khi cài — bot không mở lại
+ *  bản cũ khi trình cài tắt app. Lỗi thì bỏ qua (không chặn việc cập nhật). */
+export async function markUpdating(): Promise<void> {
+  if (IS_WEB) return;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke<void>("mark_updating");
+  } catch {
+    /* app cũ / không ghi được: cập nhật vẫn chạy */
+  }
+}
+
+export async function clearUpdating(): Promise<void> {
+  if (IS_WEB) return;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke<void>("clear_updating");
+  } catch {
+    /* bỏ qua */
+  }
+}
+
 /** ⏭ Bỏ qua hôm nay (mai chạy lại đúng giờ). */
 export async function daychuyenSkipToday(): Promise<string> {
   const { invoke } = await import("@tauri-apps/api/core");

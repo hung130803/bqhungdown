@@ -317,15 +317,19 @@ class DayChuyenAlertTests(NoNetworkCase):
 # ───────────── Vòng duyệt cdb2d8e: app tắt bất thường, chống báo trùng, nút ↑ theo tên ─────────────
 
 class AppChetTests(NoNetworkCase):
-    def _mon(self, song=False, thoat_em=False):
+    # Lịch tải BẬT → bot tự mở lại (N2: Lịch tắt thì chỉ báo, xem AppChetLichTatTests).
+    def _mon(self, song=False, thoat_em=False, lich=True, cap_nhat=None, **kw):
         tg = FakeTG()
-        app = FakeApp({"/api/queue": {"ok": True, "items": []}, "/api/daychuyen": {"ok": True}})
+        app = FakeApp({"/api/queue": {"ok": True, "items": []},
+                       "/api/daychuyen": {"ok": True, "lichTaiEnabled": lich}})
         clock = {"t": 1000.0}
-        m = Monitor(tg, app, cfg(), clock=lambda: clock["t"])
+        m = Monitor(tg, app, cfg(**kw), clock=lambda: clock["t"])
         wall = {"t": 1_800_000_000.0}
         m.wall = lambda: wall["t"]
-        m.app_dang_chay = lambda: song
+        m.hoi_tasklist = []
+        m.app_dang_chay = lambda: m.hoi_tasklist.append(1) or song
         m.da_thoat_em = lambda: thoat_em
+        m.dang_cap_nhat = lambda: cap_nhat
         mo = []
         m.mo_app = lambda: mo.append(1)
         m.tick()  # app đang chạy
@@ -476,6 +480,72 @@ class LichNutTheoTenTests(LichBoardTests):
         self.assertIn("kẹp 99", tg.texts()[-1])
         r._cmd_lich(CHAT, "han 0")
         self.assertIn("<b>1 giờ</b>", tg.texts()[-1])
+
+
+class AppChetLichTatTests(NoNetworkCase):
+    """N1, N2 + việc nhỏ của vòng duyệt 9ffa5a3."""
+    _mon = AppChetTests._mon
+
+    def test_n2_lich_tat_chi_bao_khong_tu_mo(self):
+        tg, app, m, clock, wall, mo = self._mon(lich=False)
+        clock["t"] += 31
+        m.tick()
+        self.assertEqual(mo, [])
+        self.assertIn("tắt bất thường", tg.texts()[-1])
+        self.assertIn("▶ Mở app", tg.texts()[-1])
+
+    def test_n2_lich_tat_nhung_bat_tuy_chon_thi_tu_mo(self):
+        tg, app, m, clock, wall, mo = self._mon(lich=False, tu_mo_lai_app=True)
+        clock["t"] += 31
+        m.tick()
+        self.assertEqual(mo, [1])
+
+    def test_n1_dang_tu_cap_nhat_thi_khong_mo_ban_cu(self):
+        tg, app, m, clock, wall, mo = self._mon(cap_nhat=1_800_000_000.0 + 600)
+        clock["t"] += 400
+        wall["t"] += 400
+        m.tick()
+        self.assertEqual(mo, [], "trình cài đang chạy: không mở lại bản cũ")
+        self.assertFalse(any("bất thường" in t for t in tg.texts()))
+        wall["t"] += 300  # quá hạn 10 phút mà app chưa lên
+        m.tick()
+        self.assertEqual(mo, [])
+        self.assertIn("quá 10 phút", tg.texts()[-1])
+        n = len(tg.texts())
+        m.tick()
+        self.assertEqual(len(tg.texts()), n, "báo 1 lần")
+
+    def test_gian_tasklist_khi_con_tien_trinh_ma_cong_im(self):
+        tg, app, m, clock, wall, mo = self._mon(song=True)
+        for _ in range(30):  # 30 nhịp × 5 giây, trong khoảng 30 s – 180 s
+            clock["t"] += 5
+            m.tick()
+        self.assertLessEqual(len(m.hoi_tasklist), 5, "tasklist tối đa 1 lần / 30 giây")
+
+    def test_tu_mo_lai_lau_hon_120_giay_khong_bao_chay_lai_lap(self):
+        tg, app, m, clock, wall, mo = self._mon()
+        clock["t"] += 31
+        m.tick()
+        clock["t"] += 300  # app lên chậm
+        app.offline = False
+        m.tick()
+        self.assertFalse(any("đã chạy lại" in t for t in tg.texts()), tg.texts())
+
+    def test_so_da_nhan_khong_phinh(self):
+        tg, app, m, clock, wall, mo = self._mon()
+        for i in range(80):
+            m._notify_ok(f"tin {i}", key=f"k{i}")
+            wall["t"] += 1
+        self.assertLessEqual(len(m._da_nhan), 50)
+        wall["t"] += 4000
+        m._notify_ok("x", key="moi")
+        self.assertEqual(list(m._da_nhan), [], "khoá cũ > 1 giờ bị bỏ, khoá đã gửi đủ thì xoá")
+
+    def test_dau_cap_nhat_doc_han(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(launcher.dang_cap_nhat(Path(d)))
+            (Path(d) / "dang_cap_nhat.json").write_text('{"het_han":"2026-11-04T06:10:12+07:00"}', encoding="utf-8")
+            self.assertEqual(launcher.dang_cap_nhat(Path(d)), fmt.parse_time("2026-11-04T06:10:12+07:00"))
 
 
 if __name__ == "__main__":

@@ -94,6 +94,26 @@ def da_thoat_em(app_config_dir: Path | None = None) -> bool:
         return False
 
 
+DAU_CAP_NHAT = "dang_cap_nhat.json"
+
+
+def dang_cap_nhat(app_config_dir: Path | None = None) -> float | None:
+    """App đang TỰ CẬP NHẬT? Trả hạn (epoch) của dấu `dang_cap_nhat.json`, None
+    = không có dấu. Dấu đọc không ra → coi hạn 10 phút tính từ lúc sửa file."""
+    import json
+    from datetime import datetime
+    p = registration_path(app_config_dir).with_name(DAU_CAP_NHAT)
+    try:
+        if not p.is_file():
+            return None
+        try:
+            return datetime.fromisoformat(json.loads(p.read_text(encoding="utf-8"))["het_han"]).timestamp()
+        except (ValueError, KeyError, TypeError):
+            return p.stat().st_mtime + 600
+    except OSError:
+        return None
+
+
 class AppDangChay(OSError):
     """Đã có tiến trình bqhungdown.exe (vd vừa tự mở cùng Windows, cổng điều
     khiển chưa lên) — mở thêm bản nữa chỉ bật hộp thoại khoá 1-phiên của app."""

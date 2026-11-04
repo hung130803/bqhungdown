@@ -143,13 +143,16 @@ class Monitor:
         self.lich_boards = LichBoards(clock)
         # Chat đã nhận tin cảnh báo (theo khoá tin) — gửi lỗi 1 phần thì lần sau
         # chỉ gửi lại cho chat CHƯA nhận.
-        self._da_nhan: dict[str, set[int]] = {}
+        self._da_nhan: dict[str, dict] = {}
         # App tắt bất thường → báo + tự mở lại.
         self._offline_since: float | None = None
         self._chet_da_xu_ly = False
         self._lan_mo_lai: list[float] = []
         self.app_dang_chay: Callable[[], bool] = launcher.app_dang_chay
         self.da_thoat_em: Callable[[], bool] = launcher.da_thoat_em
+        self.dang_cap_nhat: Callable[[], float | None] = launcher.dang_cap_nhat
+        self._tasklist: tuple[float, bool] | None = None  # (lúc hỏi, kết quả)
+        self._cho_mo_lai = False  # bot vừa tự mở lại → lúc app lên khỏi báo "đã chạy lại" lặp
         self.mo_app: Callable[[], None] = lambda: self._mo_app_that()
         # Nơi lưu id các tin đang tự cập nhật — bot khởi động lại thì chốt chúng
         # (không để tin "đang tải" đứng hình vĩnh viễn). None = không lưu (test).
@@ -289,7 +292,19 @@ class Monitor:
     def _notify_ok(self, text: str, markup: dict | None = None, key: str | None = None) -> bool:
         """Gửi mọi chat nhận báo; True khi TẤT CẢ đã nhận. Có `key` → nhớ chat đã
         nhận, lần gửi lại chỉ gửi cho chat CHƯA nhận (không gửi trùng)."""
-        da = self._da_nhan.setdefault(key, set()) if key else set()
+        da: set[int] = set()
+        if key:
+            now = self.wall()
+            # Sổ "đã nhận" nhỏ gọn: bỏ khoá cũ > 1 giờ, tối đa 50 khoá.
+            for k in [k for k, e in self._da_nhan.items() if now - e["ts"] > 3600]:
+                del self._da_nhan[k]
+            e = self._da_nhan.get(key)
+            if not e or e["text"] != text:  # khoá = LOẠI; nội dung đổi → gửi lại cho mọi chat
+                e = {"text": text, "chats": set(), "ts": now}
+                self._da_nhan[key] = e
+                while len(self._da_nhan) > 50:
+                    del self._da_nhan[min(self._da_nhan, key=lambda k: self._da_nhan[k]["ts"])]
+            da = e["chats"]
         ok = bool(self.cfg.notify_chat_ids)
         for chat in self.cfg.notify_chat_ids:
             if chat in da:
@@ -375,8 +390,9 @@ class Monitor:
         except AppError as e:
             log.warning("Đọc hàng đợi lỗi: %s", e)
             return
-        if self._online is False and self.clock() >= self._quiet_online_until:
+        if self._online is False and self.clock() >= self._quiet_online_until and not self._cho_mo_lai:
             self._notify("✅ App BQHungDown đã chạy lại.")
+        self._cho_mo_lai = False
         self._online = True
         self._offline_since = None
         if now - self._last_daychuyen >= DAYCHUYEN_EVERY:
@@ -548,13 +564,13 @@ class Monitor:
         for loai, text in sorted(van_de.items()):
             moi_co = self._dc_active.get(loai) != text
             if moi_co and now - self._dc_last.get(loai, float("-inf")) >= DAYCHUYEN_ALERT_EVERY:
-                if self._notify_ok("⚠️ <b>Dây chuyền tải</b>: " + fmt.esc(text), key=f"vd:{loai}:{text}"):
+                if self._notify_ok("⚠️ <b>Dây chuyền tải</b>: " + fmt.esc(text), key=f"vd:{loai}"):
                     self._dc_active[loai] = text
                     self._dc_last[loai] = now
                     changed = True
         for loai in [k for k in self._dc_active if k not in van_de]:
             if self._notify_ok("✅ <b>Dây chuyền tải</b> đã ổn lại: " + fmt.esc(self._dc_active[loai]),
-                               key=f"ok:{loai}:{self._dc_active[loai]}"):
+                               key=f"ok:{loai}"):
                 del self._dc_active[loai]
                 changed = True
         # S4: chỉ giữ id còn trong danh sách app đang trả (app tự bỏ cảnh báo
@@ -572,7 +588,7 @@ class Monitor:
             if now - self._dc_last.get(key, float("-inf")) < DAYCHUYEN_ALERT_EVERY:
                 continue  # đã báo loại này trong giờ qua → gộp vào tin sau
             text = "\n".join("• " + fmt.esc(c.get("text", "")) for c in ds) if len(ds) > 1 else fmt.esc(ds[0].get("text", ""))
-            if self._notify_ok("⚠️ <b>Dây chuyền tải</b>: " + text, key="ev:" + ",".join(sorted(c["id"] for c in ds))):
+            if self._notify_ok("⚠️ <b>Dây chuyền tải</b>: " + text, key="ev:" + loai):
                 self._canh_bao_da_gui.update(c["id"] for c in ds)
                 self._dc_last[key] = now
                 changed = True
@@ -599,17 +615,37 @@ class Monitor:
         if self.da_thoat_em():
             self._chet_da_xu_ly = True  # anh tự thoát (khay / lệnh đóng app) → không tự mở
             return
+        han_cap_nhat = self.dang_cap_nhat()
+        if han_cap_nhat is not None:
+            # Đang tự cập nhật: KHÔNG mở lại bản cũ giữa lúc cài; quá hạn mà app
+            # vẫn chưa lên thì báo (1 lần).
+            if self.wall() < han_cap_nhat:
+                return
+            self._chet_da_xu_ly = True
+            self._notify("⚠️ <b>App tải tự cập nhật đã quá 10 phút mà chưa chạy lại.</b> "
+                         "Kiểm tra máy (trình cài có thể đang chờ) rồi bấm ▶ Mở app.",
+                         _kb([[("▶ Mở app trên máy tính", "oa")]]))
+            return
         im = self.clock() - self._offline_since
         if im < APP_CHET_KHONG_TIEN_TRINH:
             return
-        song = self.app_dang_chay()
+        # tasklist tốn ~1 giây: app còn tiến trình mà cổng im thì hỏi 30 giây/lần.
+        if self._tasklist is None or self.clock() - self._tasklist[0] >= 30:
+            self._tasklist = (self.clock(), self.app_dang_chay())
+        song = self._tasklist[1]
         if song and im < APP_CHET_CONG_IM:
             return
         self._chet_da_xu_ly = True
+        self._tasklist = None
         if song:
             self._notify(f"⚠️ <b>App tải không trả lời đã {int(im // 60)} phút</b> (tiến trình vẫn còn — có thể bị treo). "
                          "Bot không mở thêm bản thứ 2. Bấm ⛔ Buộc tắt rồi ▶ Mở app.",
                          _kb([[("⛔ Buộc tắt", "qf"), ("▶ Mở app", "oa")]]))
+            return
+        if not (self._lich_tai or self.cfg.tu_mo_lai_app):
+            # Lịch tải tắt: chỉ BÁO như cũ, không tự mở (bật `tu_mo_lai_app` để tự mở).
+            self._notify("⚠️ <b>App tải đã tắt bất thường</b> (không qua Thoát hẳn). Bấm ▶ Mở app để bật lại.",
+                         _kb([[("▶ Mở app trên máy tính", "oa")]]))
             return
         now = self.wall()
         self._lan_mo_lai = [t for t in self._lan_mo_lai if now - t < 3600]
@@ -625,7 +661,7 @@ class Monitor:
                          _kb([[("▶ Mở app trên máy tính", "oa")]]))
             return
         self._lan_mo_lai.append(now)
-        self.quiet_back_online(120)
+        self._cho_mo_lai = True
         self._notify(f"⚠️ <b>App tải đã tắt bất thường</b> — bot đã tự mở lại "
                      f"(lần {len(self._lan_mo_lai)}/{APP_MO_LAI_MAX} trong giờ). Lịch tải tự nối đợt dở khi app lên.")
 

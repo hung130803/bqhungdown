@@ -38,6 +38,9 @@ class Config:
     max_send_file_mb: int = 49
     # Đường dẫn app để nút "Mở app" bấm từ điện thoại; trống = tự tìm bản cài.
     app_exe: str | None = None
+    # App tải tắt bất thường: bot TỰ MỞ LẠI khi Lịch tải đang bật; Lịch tắt thì
+    # chỉ báo — trừ khi bật ô này (mặc định TẮT = y như cũ).
+    tu_mo_lai_app: bool = False
     workers: int = 3
 
 

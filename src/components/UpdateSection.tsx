@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { markUpdating, clearUpdating } from "@/ipc/commands";
 import { getVersion } from "@tauri-apps/api/app";
 
 /**
@@ -47,6 +48,8 @@ export function UpdateSection() {
     try {
       let total = 0;
       let done = 0;
+      // Trình cài tắt app KHÔNG qua đường thoát êm → báo trước cho bot đừng mở lại bản cũ.
+      await markUpdating();
       await update.downloadAndInstall((event) => {
         if (event.event === "Started") {
           total = event.data.contentLength ?? 0;
@@ -57,6 +60,7 @@ export function UpdateSection() {
       });
       await relaunch();
     } catch (e) {
+      void clearUpdating();
       setMsg(String(e));
       setDownloading(false);
     }

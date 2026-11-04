@@ -100,7 +100,16 @@
   `<config>/thoat_em.json` (app ghi khi thoát êm, xoá khi mở) → bot báo "tắt bất
   thường" + tự mở lại tối đa 3 lần/giờ (`monitor._check_app_chet`). Cờ Dừng ở
   `DayChuyen.co` (cùng khoá với chiếm/nhả lượt); nhịp quét cũ nhường khi
-  `lich_dang_chay()`; ghi nốt khi thoát chỉ 1 lần (`thoat_em`). Kiểm ổ + so ngày trước MỖI
+  `lich_dang_chay()`; ghi nốt khi thoát chỉ 1 lần (`thoat_em`).
+  CHƯA CHỐNG PANIC: watcher/queue/history vẫn còn `unwrap` — lớp bot mở lại app
+  chỉ là DỰ PHÒNG. Bot tự mở lại CHỈ khi Lịch tải bật (hoặc `tu_mo_lai_app` trong
+  config bot, mặc định tắt); Lịch tắt thì chỉ báo. Tự cập nhật ghi dấu
+  `<config>/dang_cap_nhat.json` (hạn 10 phút) TRƯỚC khi cài → bot không mở lại
+  bản cũ giữa lúc cài.
+  **CỔNG BƯỚC 0** (`bash scripts/daychuyen_buoc0.sh docs/daychuyen_baseline_<tên>.txt`):
+  `cargo test --lib` · `cargo clippy --lib` (exit 0 — deny của daychuyen.rs) · `npx tsc -b`
+  · `npx vitest run` · bot `python -m unittest discover -s tests` ·
+  `scripts/test-live-filter.py` (đỏ sẵn vì was_live, chỉ cần giống nền). Kiểm ổ + so ngày trước MỖI
   nhóm (`truoc_nhom`). Giờ sai / bật khi chưa có nhóm → `settings_store` TỪ
   CHỐI. Lỗi báo bot theo loại (`tinh_van_de` + `canh_bao.loai`), bot gửi tối đa
   1 tin/giờ mỗi loại + "đã ổn lại". Chi tiết: docs/QUY_TRINH_DAY_CHUYEN_TU_DONG.md

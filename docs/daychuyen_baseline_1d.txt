@@ -1,0 +1,401 @@
+Baseline chay luc 2026-11-04T15:04:40+07:00 tren nhanh daychuyen-tu-dong @ 9ffa5a3
+===== cargo test --lib 2>&1 =====
+(cwd: /c/Users/Admin/Downloads/prodowwn/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src\lib.rs (target\debug\deps\bqhungdown_lib-c3a2372f71c26b2e.exe)
+
+running 317 tests
+test args_builder::tests::bilibili_headers_pick_right_domain ... ok
+test args_builder::tests::ket_noi_co_gian_theo_so_luong_giu_tong_khoe ... ok
+test args_builder::tests::normalize_proxy_formats ... ok
+test args_builder::tests::thu_muc_tam_theo_tag_khac_nhau ... ok
+test bilibili_wbi::tests::mixin_key_len_and_sign_stable ... ok
+test bilibili_wbi::tests::parse_length_formats ... ok
+test args_builder::tests_don_vo_temp::goi_khi_khong_co_gi_van_yen ... ok
+test bilibili_wbi::tests::unix_date_conversion ... ok
+test bot_launcher::tests::restart_policy_never_gives_up ... ok
+test args_builder::tests_don_vo_temp::xoa_luon_vo_bqd_temp_khi_da_rong ... ok
+test channel_cache::tests::load_missing_returns_none ... ok
+test args_builder::tests_don_vo_temp::giu_vo_khi_con_luot_tai_khac ... ok
+test channel_cache::tests::rejects_unsafe_channel_id ... ok
+test bilibili_wbi::tests::extract_mid_works ... ok
+test channel_cache::tests::url_key_on_dinh_va_an_toan ... ok
+test channel_cache::tests::load_fresh_ton_trong_ttl ... ok
+test channel_fetcher::tests::bo_video_live_va_cho_live ... ok
+test channel_fetcher::tests::extract_bilibili_video_id ... ok
+test channel_fetcher::tests::bo_video_live_du_lieu_that_tu_ytdlp ... ok
+test channel_fetcher::tests::loi_quet_kenh_bao_dung_nghia ... ok
+test channel_fetcher::tests::nhan_dien_shorts_du_kieu ... ok
+test channel_fetcher::tests::normalise_bilibili_space_urls ... ok
+test channel_fetcher::tests::normalise_bilibili_tv_series_strips_query ... ok
+test channel_fetcher::tests::thieu_so_thi_de_trong_chu_khong_bia_0 ... ok
+test commands::tests::khoi_phuc_go_dung_id_giu_phan_con_lai ... ok
+test commands::tests::khong_khop_thi_giu_nguyen ... ok
+test channel_fetcher::tests::tiktok_co_tim_binh_luan_chia_se_du_lieu_that_tu_ytdlp ... ok
+test channel_cache::tests::load_with_age_tra_tuoi ... ok
+test channel_cache::tests::save_then_load_roundtrip ... ok
+test bot_launcher::tests::registration_requires_real_files_and_enabled ... ok
+test commands::tests_don_mei::khong_bao_gio_quet_trang_temp ... ok
+test commands::tests_don_mei::thu_muc_khong_ton_tai_tra_0 ... ok
+test commands::tests_don_rac::van_don_duoc_manh_ban_cu_o_tang_goc ... ok
+test commands::tests_don_mei::giu_muc_con_moi_xoa_muc_du_tuoi ... ok
+test commands::tests_don_updater::nhan_dung_ten_thu_muc_bo_cai ... ok
+test control_api::tests::cookie_expiry_uses_login_cookies_not_short_lived_ones ... ok
+test control_api::tests::cookie_file_counts_only_matching_site ... ok
+test control_api::tests::cookie_file_rejects_lookalike_domain ... ok
+test control_api::tests::expired_login_cookies_report_session_dead ... ok
+test commands::tests_don_mei::xoa_dung_tien_to_khong_cham_thu_khac ... ok
+test control_api::tests::query_parsing_decodes ... ok
+test commands::tests_don_rac::khong_xoa_manh_cua_luot_tai_dang_song ... ok
+test control_api::tests::listener_socket_is_not_inherited_by_children ... ok
+test control_api::tests::token_compare_and_generation ... ok
+test args_builder::tests::thu_muc_tam_rieng_khi_co_tag ... ok
+test args_builder::tests::youtube_never_gets_hardcoded_user_agent ... ok
+test args_builder::tests::fetch_metadata_args ... ok
+test args_builder::tests::video_best_default ... ok
+test args_builder::tests::safe_retry_uses_fallback_clients_and_conservative_networking ... ok
+test args_builder::tests::khong_co_tag_thi_giu_kieu_cu ... ok
+test args_builder::tests::audio_mode_emits_extract_audio ... ok
+test args_builder::tests::cho_ytdlp_tu_thu_lai_khi_dut_ket_noi ... ok
+test args_builder::tests::max_height_1440_caps_format ... ok
+test args_builder::tests::video_sort_prefers_original_lang_and_m4a_in_both_branches ... ok
+test args_builder::tests::khong_bao_gio_dung_http_chunk_size ... ok
+test daychuyen::tests::b10_van_de_theo_loai_cho_bot ... ok
+test args_builder::tests::non_youtube_keeps_user_agent ... ok
+test args_builder::tests::bilibili_download_args_include_headers ... ok
+test args_builder::tests::max_height_zero_means_unlimited ... ok
+test args_builder::tests::resume_appends_continue ... ok
+test args_builder::warning_flag_tests::download_keeps_warnings_metadata_silences_them ... ok
+test args_builder::tests::live_filter_covers_retry_force_and_audio ... ok
+test control_api::tests::wrong_token_is_rejected_before_reading_body ... ok
+test daychuyen::tests::b6_truoc_moi_nhom_o_day_sang_ngay_tat_lich ... ok
+test daychuyen::tests::b7_d6_ngu_dong_qua_ngay_khong_quet_lai_ca_luot_chong_len ... ok
+test daychuyen::tests::b8_doi_gio_may_lui_khong_quet_lai ... ok
+test daychuyen::tests::b9_doi_gio_giua_chung ... ok
+test daychuyen::tests::d12_hai_nguon_cung_thu_muc_dich_chi_1_dong_kenh ... ok
+test daychuyen::tests::d18_chuan_hoa_duong_dan_ca_mau_chung ... ok
+test daychuyen::tests::d1_den_gio_thi_chay_dung_1_lan ... ok
+test daychuyen::tests::d15_d16_mo_lai_giua_dot_noi_tiep_khong_ghi_trung_khong_tai_lai_video_xong ... ok
+test daychuyen::tests::d21_o_duoi_nguong_khong_mo_dot_bao_ly_do ... ok
+test daychuyen::tests::d2_mo_app_sau_gio_bat_dau_thi_chay_ngay ... ok
+test daychuyen::tests::d4_lich_tai_bat_thi_nhip_cu_tu_tat_khong_sua_gia_tri ... ok
+test daychuyen::tests::d3_mo_lai_trong_ngay_noi_dot_dang_mo_khong_mo_dot_moi ... ok
+test daychuyen::tests::d6_moi_video_co_ket_qua_cuoi_thi_dong_xong_seq_tang ... ok
+test daychuyen::tests::d20_thu_muc_exchange_khong_ton_tai_khong_crash_khong_tao ... ok
+test daychuyen::tests::d7_qua_han_chot_dong_het_han_video_ghi_tre_phieu_khong_bi_sua ... ok
+test daychuyen::tests::d8_live_bi_cong_tai_chan_thi_ghi_bo_qua_kem_ly_do ... ok
+test daychuyen::tests::dung_luong_o_that_doc_duoc ... ok
+test daychuyen::tests::b2_dung_khi_khong_quet_thi_dong_ngay_khong_huy_job ... ok
+test daychuyen::tests::b1_dung_bam_2_lan_chi_1_lan_va_phieu_ghi_huy ... ok
+test daychuyen::tests::b3_chay_ngay_bam_2_lan_chi_chay_1_luot ... ok
+test daychuyen::tests::d5_phieu_ghi_55_video_va_3_kenh_khong_co_video ... ok
+test control_api::tests::reads_http_request_with_body_split_across_packets ... ok
+test daychuyen::tests::mac_dinh_lich_tai_tat_va_settings_cu_van_doc_duoc ... ok
+test daychuyen::tests::n1_cho_luot_quet_khac_xong_roi_moi_mo_dot ... ok
+test daychuyen::tests::nhom_khong_co_video_nao_dong_xong_ngay_sau_khi_quet ... ok
+test daychuyen::tests::quy_doi_trang_thai_hang_doi_sang_phieu ... ok
+test daychuyen::tests::s1_nhip_cu_giu_khoang_cu_duoi_30_phut_chi_canh_bao ... ok
+test daychuyen::tests::b14_trang_thai_json_du_truong_cho_tin_tu_sua ... ok
+test daychuyen::tests::b4_bo_qua_hom_nay_va_chay_ngay_go_bo_qua ... ok
+test daychuyen::tests::b5_d4_panic_trong_luot_chay_tu_nha_co_va_bao_bot ... ok
+test daychuyen::tests::s5_co_chan_quet_tay_lien_mach_va_tu_go_khi_xong ... ok
+test daychuyen::tests::sua6_xong_chi_khi_co_output_path ... ok
+test daychuyen::tests::b12_dong_het_han_con_tre_thi_bao_bot_kem_so ... ok
+test bot_launcher::tests::detects_python_bot_lock ... ok
+test daychuyen::tests::e4_dung_ngay_sau_khi_chiem_luot_khong_bi_xoa ... ok
+test douyin_scraper::tests_cookie::boc_dung_cookie_douyin_bo_domain_khac ... ok
+test daychuyen::tests::e5_dung_2_lan_khac_lua_chon_bao_ro ... ok
+test daychuyen::tests::e6_dung_khi_khong_chay_khong_bo_luot_hom_nay ... ok
+test douyin_scraper::tests_cookie::chon_nguon_cookie_douyin_tu_trinh_duyet ... ok
+test douyin_scraper::tests_cookie::dong_hong_khong_lam_sap ... ok
+test douyin_scraper::tests_cookie::file_khong_co_douyin_tra_none ... ok
+test douyin_scraper::tests_cookie::nhan_ra_cookie_da_dang_nhap ... ok
+test douyin_scraper::tests_null_list::aweme_list_null_ra_rong_khong_no ... ok
+test douyin_scraper::tests_null_list::boc_duoc_ten_kenh_tu_goi_danh_sach ... ok
+test douyin_scraper::tests_null_list::bóc_được_ngày_đăng_và_lượt_thích_số_thật ... ok
+test douyin_scraper::tests_null_list::ca_day_chuyen_json_thanh_dong_tren_man_hinh ... ok
+test douyin_scraper::tests_null_list::chi_serde_default_van_no_voi_null ... ok
+test douyin_scraper::tests_null_list::ho_so_that_qua_ham_cua_app ... ignored
+test douyin_scraper::tests_null_list::ho_so_rong_thi_coi_nhu_khong_co ... ok
+test douyin_scraper::tests_null_list::ho_so_uu_tien_hon_author_va_chon_anh_to_nhat ... ok
+test douyin_scraper::tests_null_list::hong_ho_so_van_con_ten_that_tu_author ... ok
+test douyin_scraper::tests_null_list::khong_lay_anh_bia_bai_lam_anh_dai_dien ... ok
+test douyin_scraper::tests_null_list::thiếu_thống_kê_ra_none_chứ_không_bịa_số_0 ... ok
+test douyin_scraper::tests_null_list::video_thuong_images_null_van_boc_duoc ... ok
+test douyin_scraper::tests_null_list::khoa_goi_json_that_gui_len_giao_dien ... ok
+test douyin_scraper::tests_phan_loai_loi::html_la_bao_doi_api_kem_noi_dung ... ok
+test douyin_scraper::tests_phan_loai_loi::json_that_van_boc_duoc ... ok
+test douyin_scraper::tests_phan_loai_loi::loi_khuyen_cookie_doi_theo_tinh_trang ... ok
+test douyin_scraper::tests_phan_loai_loi::moi_loai_mot_loi_khuyen_khac_nhau ... ok
+test douyin_scraper::tests_phan_loai_loi::nhan_ra_chan_ca_khi_status_200 ... ok
+test douyin_scraper::tests_phan_loai_loi::than_rong_la_loai_rieng ... ok
+test douyin_scraper::tests_phan_loai_loi::trang_chan_403_phai_ra_bi_chan_khong_phai_du_lieu_hong ... ok
+test douyin_scraper::tests_tikwm_giu_du_so::aweme_list_null_thi_ra_rong_chu_khong_no ... ok
+test douyin_scraper::tests_tikwm_giu_du_so::bai_anh_duoc_danh_dau_dung ... ok
+test douyin_scraper::tests_tikwm_giu_du_so::thieu_so_thi_de_trong_chu_khong_bia_0 ... ok
+test douyin_scraper::tests_tikwm_giu_du_so::tikwm_giu_du_tim_binh_luan_chia_se ... ok
+test douyin_sign::tests::rc4_roundtrip ... ok
+test douyin_sign::tests::sm3_known_vector ... ok
+test douyin_sign::tests::abogus_deterministic_charset ... ok
+test error::tests::forbidden_error_detection ... ok
+test error::tests::age_gate_is_not_proof_of_expired_cookie_or_bot_block ... ok
+test error::tests::best_error_line_grabs_error_not_hint ... ok
+test error::tests::friendly_403_points_to_fix_button ... ok
+test error::tests::friendly_age_restricted_says_cookie_not_bot ... ok
+test error::tests::friendly_bilibili_412 ... ok
+test error::tests::friendly_biliintl_geo_suggests_sea_proxy ... ok
+test error::tests::friendly_biliintl_registered_users ... ok
+test error::tests::friendly_bot_wall_points_to_fix_button ... ok
+test error::tests::friendly_cookie_decrypt ... ok
+test error::tests::friendly_format_error_points_to_fix_button ... ok
+test error::tests::friendly_domain_blocked_by_isp ... ok
+test error::tests::friendly_detail_is_truncated ... ok
+test error::tests::friendly_geo_blocked_matches_real_youtube_message ... ok
+test error::tests::friendly_network_and_disk ... ok
+test error::tests::friendly_premiere_and_drm ... ok
+test error::tests::friendly_private_and_members_only ... ok
+test error::tests::friendly_unavailable_and_unsupported ... ok
+test error::tests::friendly_unknown_error_has_default_guidance_and_detail ... ok
+test error::tests::friendly_vpn_hint_alone_is_geo_not_generic ... ok
+test error::tests::friendly_watchdog_stall ... ok
+test error::tests::permanent_fail_bat_dung_loai ... ok
+test error::tests::soft_block_khong_bi_coi_la_vinh_vien ... ok
+test error::tests::preserve_invalid_cookie_warning_before_age_error ... ok
+test error::tests::soft_block_marker_treated_as_bot_not_deleted_video ... ok
+test error::tests::unavailable_detection ... ok
+test error::tests_bao_dung_trang_cookie::loi_khong_phai_cookie_thi_khong_noi_ve_o_cookie ... ok
+test error::tests_bao_dung_trang_cookie::loi_cookie_chi_dich_danh_trang ... ok
+test error::tests_bao_dung_trang_cookie::link_la_thi_khong_bia_ten_trang ... ok
+test error::tests_bao_dung_trang_cookie::nhan_ra_dung_cau_nguoi_dung_bam_huy ... ok
+test error::warning_tests::bot_wall_and_403_are_not_cookie_problems ... ok
+test error::warning_tests::cookie_warning_not_blamed_for_network_errors ... ok
+test error::warning_tests::expired_cookie_warning_is_detected ... ok
+test error::warning_tests::missing_firefox_profile_falls_back_to_no_cookies ... ok
+test error::warning_tests::warnings_never_become_the_error_reason ... ok
+test extractors::tests::all_regexes_compile ... ok
+test error::warning_tests::firefox_slot_says_log_in_again_not_export_file ... ok
+test extractors::tests::kick_matches ... ok
+test error::tests_bao_dung_trang_cookie::loi_quet_kenh_cung_chi_dich_danh_trang ... ok
+test extractors::tests::streamable_matches ... ok
+test extractors::tests::x_com_matches_twitter ... ok
+test extractors::tests::youtu_be_matches ... ok
+test extractors::tests::youtube_matches ... ok
+test filename_resolver::tests::auto_rename_minimal_n ... ok
+test extractors::tests::unknown_host ... ok
+test filename_resolver::tests::resolve_skip_returns_skip_item ... ok
+test filename_resolver::tests::sanitize_strips_forbidden ... ok
+test extractors::tests::viralhog_matches ... ok
+test progress_parser::tests::aria2_eta_minutes ... ok
+test progress_parser::tests::aria2_full_line ... ok
+test progress_parser::tests::dlprog_basic ... ok
+test progress_parser::tests::dlprog_unknown_total ... ok
+test progress_parser::tests::returns_none_for_garbage ... ok
+test progress_parser::tests::stage_markers ... ok
+test queue::tests::base_key_reduces_all_streams_to_same_title ... ok
+test progress_parser::tests::fallback_parses_default_line ... ok
+test queue::tests::illegal_transitions ... ok
+test queue::tests::legal_transitions ... ok
+test queue::tests::norm_key_matches_despite_special_chars ... ok
+test queue::tests::retry_delays ... ok
+test queue::tests::temp_file_detection_never_matches_completed ... ok
+test queue::tests::twin_key_same_video_matches_other_video_does_not ... ok
+test daychuyen::tests::don_phieu_cu_hon_14_ngay_chi_dung_mau_ten ... ok
+test daychuyen::tests::d19_file_ban_hang_rong_dang_tai_tam_dung ... ok
+test queue::tests_don_bo_qua::nhan_dung_file_do_khong_cham_video_xong ... ok
+test daychuyen::tests::sua7_don_hang_ngay_tmp_va_phieu_cu ... ok
+test daychuyen::tests::e9_dau_cap_nhat_co_han_10_phut ... ok
+test daychuyen::tests::e8_dau_thoat_em_cho_bot ... ok
+test douyin_scraper::tests_cookie::doc_dung_field_cookies_file_trong_settings ... ok
+test daychuyen::tests::d13_bi_giet_luc_ghi_tmp_phieu_that_van_la_ban_truoc ... ok
+test instance_lock::tests::exclusive_until_guard_is_dropped ... ok
+test daychuyen::tests::b13_d7_job_cuoi_vao_phieu_khi_thoat_em ... ok
+test settings_store::tests::load_clamps_max_concurrency_on_disk ... ok
+test queue::tests_don_bo_qua::don_xoa_ca_cay_thu_muc_tam ... ok
+test settings_store::tests::normalize_keys_trims_dedups_drops_empty ... ok
+test daychuyen::tests::e7_thoat_2_lan_lan_sau_khong_ghi_de ... ok
+test daychuyen::tests::b11_ghi_loi_keo_dai_giu_moc_dau_tien_het_loi_thi_xoa ... ok
+test settings_store::tests_settings_cu_van_doc_duoc::ghi_roi_doc_lai_giu_nguyen_o_tung_trang ... ok
+test settings_store::tests::migrates_aria2c_off_once_then_respects_user ... ok
+test settings_store::tests_settings_cu_van_doc_duoc::khoa_ten_trang_hop_le_cho_o_cookie ... ok
+test settings_store::tests_settings_cu_van_doc_duoc::settings_cu_khong_co_sitecookies_van_parse_du_truong ... ok
+test short_id::tests::generates_length_6_id_by_default ... ok
+test startup_shortcut::tests::loi_tao_loi_tat_giu_cho_bot_bao_va_xoa_khi_on ... ok
+test short_id::tests::avoids_collision ... ok
+test startup_shortcut::tests::script_tao_loi_tat_co_minimized_va_thoat_nhay_don ... ok
+test settings_store::tests_settings_cu_van_doc_duoc::khoa_goi_settings_that_gui_len_giao_dien ... ok
+test settings_store::tests::load_creates_defaults_when_file_missing ... ok
+test settings_store::tests::migrates_old_po_token_off_to_on_once ... ok
+test settings_store::tests::apply_patch_persists_changes ... ok
+test queue::tests::cleanup_removes_only_this_items_temp_files ... ok
+test settings_store::tests::migrates_single_youtube_key_to_list ... ok
+test url_validator::tests::invalid_syntax ... ok
+test url_validator::tests::invalid_scheme ... ok
+test url_validator::tests::resolve_extractor_helper ... ok
+test daychuyen::tests::s3_phieu_dang_mo_van_dong_het_han_khi_lich_da_tat ... ok
+test url_validator::tests::valid_https ... ok
+test daychuyen::tests::s2_file_ban_khong_phu_thuoc_lich_tai_va_thoat_em_ghi_ban_false ... ok
+test watcher::tests::auto_chon_view_cao_nhat_chua_lam ... ok
+test daychuyen::tests::sua9_so_hong_thi_dong_phieu_mo_coi_het_han ... ok
+test watcher::tests::auto_mac_dinh_chi_vet_video_dai_bo_shorts ... ok
+test settings_store::tests::apply_patch_sets_youtube_api_keys ... ok
+test watcher::tests::auto_thieu_view_giu_thu_tu_kenh_va_khu_trung ... ok
+test watcher::tests::backfill_chi_ghi_phan_thieu_va_khu_trung ... ok
+test watcher::tests::bo_qua_thu_cong_khong_rot_khong_vet ... ok
+test watcher::tests::chay_dung_nhom_dang_xem_khong_kich_nhom_khac ... ok
+test watcher::tests::drip_hang_rong_khong_rot ... ok
+test watcher::tests::drip_bo_video_da_lam_va_han_muc_kep ... ok
+test watcher::tests::doc_file_watchlist_cu_khong_vo ... ok
+test watcher::tests::drip_lay_dung_han_muc_theo_thu_tu ... ok
+test watcher::tests::drip_video_moi_da_chiem_suat ... ok
+test watcher::tests::fmt_views_gon_kieu_viet ... ok
+test url_validator::tests::unknown_extractor ... ok
+test watcher::tests::gom_nguon_theo_kenh_dich_giu_thu_tu ... ok
+test watcher::tests::live_bi_chan_mai_thi_bo_han_khong_lap_vo_tan ... ok
+test watcher::tests::luot_quet_khac_dem_ca_check_all_lan_khoa_tung_kenh ... ok
+test watcher::tests::nguon_du_phong_khong_tai_them_khi_nguon_chinh_da_tai ... ok
+test url_resolver::tests::iframe_regex_matches_real_html ... ok
+test watcher::tests::parse_archive_lay_dung_id_va_bo_dong_rong ... ok
+test watcher::tests::pick_auto_lay_dung_video_nhieu_view_nhat ... ok
+test watcher::tests::reconcile_dang_tai_thi_giu_nguyen ... ok
+test watcher::tests::reconcile_huy_loi_thi_tra_suat ... ok
+test watcher::tests::reconcile_tai_xong_thi_chot_da_lam ... ok
+test watcher::tests::tang_han_muc_giua_ngay_mo_lai_quet_kho ... ok
+test watcher::tests::ten_thu_muc_duoc_lam_sach_ky_tu_cam ... ok
+test watcher::tests::thu_muc_uu_tien_dung_thu_tu_va_khong_lan ... ok
+test watcher::tests::vet_loai_video_da_co_trong_archive ... ok
+test watcher::tests::video_moi_khong_tai_qua_han_muc_ngay ... ok
+test watcher::tests::vet_video_dai_khong_ron_shorts ... ok
+test watcher::tests_hang_cho_giu_ngay_va_tim::ngay_dang_va_tim_song_sot_ca_vong_tron ... ok
+test watcher::tests_hang_cho_giu_ngay_va_tim::thieu_so_thi_de_trong_chu_khong_bia_0 ... ok
+test watcher::tests_tu_chua_bo_dem::dang_tai_thi_giu_nguyen ... ok
+test watcher::tests_tu_chua_bo_dem::khong_ha_bo_dem_dang_cao_hon ... ok
+test url_resolver::tests::extract_id_from_modal ... ok
+test watcher::tests_tu_chua_bo_dem::loi_cung_van_tra_suat ... ok
+test url_resolver::tests::extract_id_returns_none_for_homepage ... ok
+test watcher::tests_tu_chua_bo_dem::mot_xong_mot_loi_cung_luot ... ok
+test watcher::tests_tu_chua_bo_dem::sang_ngay_moi_dat_lai_dung ... ok
+test url_resolver::tests::extract_id_from_video_path ... ok
+test watcher::tests_tu_chua_bo_dem::tai_xong_2_video_dem_du_2 ... ok
+test watcher::tests_tu_chua_bo_dem::tai_xong_sau_khi_bo_dem_bi_tru_oan ... ok
+test url_resolver::tests::extract_id_from_share_path ... ok
+test watchlist_store::tests_watchlist_cu_van_doc_duoc::ca_kenh_theo_doi_doi_cu_van_giu_nguyen_hang_cho ... ok
+test watchlist_store::tests_watchlist_cu_van_doc_duoc::ghi_roi_doc_lai_giu_duoc_ngay_dang_va_luot_tim ... ok
+test watchlist_store::tests_watchlist_cu_van_doc_duoc::hang_cho_doi_cu_thieu_ngay_va_tim_van_parse_du ... ok
+test youtube_api::tests::api_note_none_when_no_failover ... ok
+test youtube_api::tests::api_note_reports_dead_key_and_current ... ok
+test youtube_api::tests::extracts_hashtags_dedup_unicode ... ok
+test youtube_api::tests::hashtags_empty_when_none ... ok
+test youtube_api::tests::bo_video_live_va_cho_live_duong_api ... ok
+test youtube_api::tests::keypool_advances_and_records_exhausted ... ok
+test youtube_api::tests::keypool_advance_idempotent_on_same_index ... ok
+test youtube_api::tests::keypool_errors_when_all_exhausted ... ok
+test youtube_api::tests::merge_incremental_prepends_new_dedups_caps ... ok
+test youtube_api::tests::merge_incremental_respects_cap ... ok
+test youtube_api::tests::parses_iso8601_durations ... ok
+test youtube_api::tests::published_at_to_yyyymmdd ... ok
+test youtube_api::tests::quota_reason_detection ... ok
+test youtube_api::tests::urlencodes_spaces_and_unicode ... ok
+test ytdlp_runner::live_gate_tests::detects_filter_and_upcoming_without_matching_titles ... ok
+test ytdlp_runner::live_gate_tests::titles_mentioning_premieres_are_not_live ... ok
+test settings_store::tests::update_with_rolls_back_on_closure_error ... ok
+test ytdlp_runner::tests_cookie_moi_trang::thu_lai_khong_cookie_phai_bo_ca_o_rieng ... ok
+test ytdlp_update::stamp_tests::other_install_or_old_stamp_forces_check ... ok
+test ytdlp_runner::tests_cookie_moi_trang::chi_dat_o_rieng_van_phai_tinh_la_co_cookie ... ok
+test settings_store::tests::load_reports_config_corrupt_and_overwrites_defaults ... ok
+test settings_store::tests::lich_tai_gio_sai_tu_choi_va_nhom_rong_khong_cho_bat ... ok
+test watchlist_store::tests::file_cu_thieu_truong_moi_van_giu_nguyen_kenh ... ok
+test ytdlp_runner::tests_cookie_moi_trang::o_rieng_dung_browser_thi_khong_lay_file_o_chung ... ok
+test commands::tests_don_updater::giu_bo_cai_vua_tao_con_xoa_bo_cai_cu ... ok
+test commands::tests_don_updater::giu_ban_sao_cookie_dang_dung ... ok
+test ytdlp_runner::tests_khong_cua_nao_duoc_sot_cookie::moi_cua_spawn_ytdlp_deu_qua_resolve_cookies_for ... ok
+test watchlist_store::tests::file_hong_han_duoc_sao_luu_khong_mat_goc ... ok
+test watcher::tests::khoa_ten_va_quet_dia_nhan_dien_file_da_tai ... ok
+test watchlist_store::tests::cuu_tung_phan_tu_khi_1_kenh_loi ... ok
+test daychuyen::tests::s4_ghi_phieu_loi_thi_ghi_lai_o_nhip_sau_ke_ca_lan_dong ... ok
+test ytdlp_runner::tests_cookie_moi_trang::cau_hinh_cu_chi_co_o_chung_van_chay_nhu_truoc ... ok
+test daychuyen::tests::e3_dung_sau_buoc_chot_khong_bi_mat ... ok
+test settings_store::tests::apply_patch_kep_so_luong_ngoai_khoang ... ok
+test ytdlp_runner::tests_cookie_moi_trang::chon_dung_o_cookie_theo_link ... ok
+test daychuyen::tests::e1_dau_cuoi_dung_giua_vong_va_nhip_cu_nhuong ... ok
+test ytdlp_runner::tests_cookie_moi_trang::moi_o_cookie_deu_dua_ban_sao_tam_cho_ytdlp ... ok
+test args_builder::tests::aria2c_when_enabled ... ok
+test daychuyen::tests::e2_dau_cuoi_chay_het_nhom_doi_han_chot_giua_chung ... ok
+test startup_shortcut::tests::tao_loi_tat_that_trong_thu_muc_tam ... ok
+test daychuyen::tests::d14_dang_bi_doc_thi_thu_lai_khong_mat_cap_nhat ... ok
+
+test result: ok. 316 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
+===== exit=0 =====
+
+===== cargo clippy --lib --message-format=short 2>&1 | grep -E 'daychuyen\.rs|^error' ; test ${PIPESTATUS[0]} -eq 0 =====
+(cwd: /c/Users/Admin/Downloads/prodowwn/src-tauri)
+===== exit=0 =====
+
+===== npx tsc -b =====
+(cwd: /c/Users/Admin/Downloads/prodowwn)
+===== exit=0 =====
+
+===== npx vitest run =====
+(cwd: /c/Users/Admin/Downloads/prodowwn)
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mC:/Users/Admin/Downloads/prodowwn[39m
+
+ [32m✓[39m src/lib/bulk-more.test.ts [2m([22m[2m29 tests[22m[2m)[22m[90m 7[2mms[22m[39m
+ [32m✓[39m src/lib/lich-nhom.test.ts [2m([22m[2m4 tests[22m[2m)[22m[90m 4[2mms[22m[39m
+ [32m✓[39m src/lib/watch-group.test.ts [2m([22m[2m24 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+ [32m✓[39m src/pages/SettingsPage.daychuyen.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[90m 101[2mms[22m[39m
+ [32m✓[39m src/pages/SettingsPage.daychuyen1b.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[90m 131[2mms[22m[39m
+ [32m✓[39m src/pages/SettingsPage.cookies.seam.test.tsx [2m([22m[2m8 tests[22m[2m)[22m[90m 250[2mms[22m[39m
+ [32m✓[39m src/components/ChannelInput.seam.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[33m 313[2mms[22m[39m
+ [32m✓[39m src/components/ChannelInput.douyin.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[33m 655[2mms[22m[39m
+   [33m[2m✓[22m[39m Kênh Douyin — nút tải phải đếm ĐÚNG số bài đang tích[2m > [22mĐÚNG ẢNH ANH HÙNG GỬI: 250 bài, tích 2 -> nút phải ghi 'Tải 2 video' [33m403[2mms[22m[39m
+ [32m✓[39m src/pages/WatchPage.more.test.tsx [2m([22m[2m20 tests[22m[2m)[22m[33m 1121[2mms[22m[39m
+ [32m✓[39m src/pages/WatchPage.group.test.tsx [2m([22m[2m16 tests[22m[2m)[22m[33m 1385[2mms[22m[39m
+   [33m[2m✓[22m[39m LỖI 1 — thêm kênh phải vào ĐÚNG nhóm đang xem[2m > [22mđang lọc nhóm 'Mỹ mới' → hộp Thêm kênh mặc định 'Mỹ mới' [33m319[2mms[22m[39m
+   [33m[2m✓[22m[39m ĐỔI NHÓM HÀNG LOẠT — chọn nhiều kênh rồi đổi một lượt[2m > [22mbấm HUỶ ở hộp xác nhận → KHÔNG đổi gì [33m334[2mms[22m[39m
+[90mstdout[2m | src/components/ChannelInput.perf.test.tsx[2m > [22m[2mDanh sách kênh — đo tốc độ khi số bài tăng 21 -> 3600[2m > [22m[2mdựng danh sách: 21 / 250 / 1000 bài — in số đo thật
+[22m[39m== DỰNG DANH SÁCH == { [32m'21 bài'[39m: [32m'65 ms'[39m, [32m'250 bài'[39m: [32m'198 ms'[39m, [32m'1000 bài'[39m: [32m'406 ms'[39m }
+
+[90mstdout[2m | src/components/ChannelInput.perf.test.tsx[2m > [22m[2mDanh sách kênh — đo tốc độ khi số bài tăng 21 -> 3600[2m > [22m[2mTÍCH 1 ô trong danh sách 250 bài phải nhanh (không dựng lại cả list)
+[22m[39m== TÍCH 1 Ô / 250 bài == 17 ms · 14 ms · 12 ms · 13 ms · 12 ms | trung bình 13 ms
+
+[90mstdout[2m | src/components/ChannelInput.perf.test.tsx[2m > [22m[2mDanh sách kênh — đo tốc độ khi số bài tăng 21 -> 3600[2m > [22m[2mCHỖ TỐN THẬT: mở 250 bài bắn bao nhiêu lượt tải ảnh về CDN Douyin
+[22m[39m== LƯỢT TẢI ẢNH khi mở 250 bài == 15 lượt (mỗi lượt = 1 IPC + 1 request tới douyinpic.com)
+
+[90mstdout[2m | src/components/ChannelInput.perf.test.tsx[2m > [22m[2mDanh sách kênh — đo tốc độ khi số bài tăng 21 -> 3600[2m > [22m[2m3600 bài (kênh to nhất) vẫn dựng được, không treo
+[22m[39m== DỰNG 3600 bài == 993 ms
+
+ [32m✓[39m src/components/ChannelInput.perf.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 2545[2mms[22m[39m
+   [33m[2m✓[22m[39m Danh sách kênh — đo tốc độ khi số bài tăng 21 -> 3600[2m > [22mdựng danh sách: 21 / 250 / 1000 bài — in số đo thật [33m762[2mms[22m[39m
+   [33m[2m✓[22m[39m Danh sách kênh — đo tốc độ khi số bài tăng 21 -> 3600[2m > [22mTÍCH 1 ô trong danh sách 250 bài phải nhanh (không dựng lại cả list) [33m301[2mms[22m[39m
+   [33m[2m✓[22m[39m Danh sách kênh — đo tốc độ khi số bài tăng 21 -> 3600[2m > [22m3600 bài (kênh to nhất) vẫn dựng được, không treo [33m1393[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m11 passed[39m[22m[90m (11)[39m
+[2m      Tests [22m [1m[32m139 passed[39m[22m[90m (139)[39m
+[2m   Start at [22m 15:04:49
+[2m   Duration [22m 4.26s[2m (transform 708ms, setup 0ms, collect 3.26s, tests 6.52s, environment 4.33s, prepare 1.72s)[22m
+
+===== exit=0 =====
+
+===== python -m unittest discover -s tests =====
+(cwd: /c/Users/Admin/Downloads/prodowwn/telegram-bot)
+...............................................................................................G\u1eedi th�ng b�o l\u1ed7i: chat 222 m\u1ea5t m\u1ea1ng
+...G\u1eedi th�ng b�o l\u1ed7i: m\u1ea5t m\u1ea1ng
+G\u1eedi th�ng b�o l\u1ed7i: m\u1ea5t m\u1ea1ng
+........................................
+----------------------------------------------------------------------
+Ran 138 tests in 3.596s
+
+OK
+===== exit=0 =====
+
+===== python scripts/test-live-filter.py =====
+(cwd: /c/Users/Admin/Downloads/prodowwn)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Downloads\prodowwn\scripts\test-live-filter.py", line 20, in <module>
+    assert (check(dict(title='live in downtown inwood', **fields)) is not None) == blocked, fields
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'live_status': 'was_live'}
+===== exit=1 =====
+
+DONE

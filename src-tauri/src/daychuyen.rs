@@ -1670,6 +1670,22 @@ pub fn xoa_dau_thoat(config_dir: &Path) {
     let _ = std::fs::remove_file(config_dir.join(TEN_DAU_THOAT));
 }
 
+/// Dấu "đang tự cập nhật" (có HẠN): trình cài kết thúc app KHÔNG qua đường
+/// thoát êm — bot thấy dấu này còn hạn thì KHÔNG mở lại bản cũ giữa lúc cài;
+/// quá hạn mà app chưa lên thì chỉ báo. App mở lên thì xoá.
+pub const TEN_DAU_CAP_NHAT: &str = "dang_cap_nhat.json";
+pub const CAP_NHAT_HAN_PHUT: i64 = 10;
+
+pub fn ghi_dau_cap_nhat(config_dir: &Path, now: DateTime<FixedOffset>) -> std::io::Result<()> {
+    let han = now.checked_add_signed(chrono::Duration::minutes(CAP_NHAT_HAN_PHUT)).unwrap_or(now);
+    let v = serde_json::json!({ "luc": iso(now), "het_han": iso(han), "pid": std::process::id() });
+    ghi_nguyen_tu(&config_dir.join(TEN_DAU_CAP_NHAT), &serde_json::to_vec(&v).unwrap_or_default())
+}
+
+pub fn xoa_dau_cap_nhat(config_dir: &Path) {
+    let _ = std::fs::remove_file(config_dir.join(TEN_DAU_CAP_NHAT));
+}
+
 fn ghi_ban_thoat_vao(dir: &Path, now: DateTime<FixedOffset>, phien_ban: &str) -> bool {
     let mut v = trang_thai_ban(&[], false, Some("app đã thoát".into()), now, phien_ban);
     if let Some(o) = v.as_object_mut() {
@@ -3349,6 +3365,17 @@ mod tests {
         assert!(!dc.thoat_em_voi(&huy, &khong_size, t(MO), &dir), "lần 2 bỏ qua");
         let p: PhieuTai = serde_json::from_slice(&std::fs::read(dir.join("20261104-01.json")).unwrap()).unwrap();
         assert_eq!(p.kenh[0].video[0].trang_thai, "dang_tai");
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn e9_dau_cap_nhat_co_han_10_phut() {
+        let (d, _dc) = dc_tam("e9");
+        ghi_dau_cap_nhat(&d, t(MO)).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(d.join(TEN_DAU_CAP_NHAT)).unwrap()).unwrap();
+        assert_eq!(v["het_han"], "2026-11-04T06:10:12+07:00");
+        xoa_dau_cap_nhat(&d);
+        assert!(!d.join(TEN_DAU_CAP_NHAT).exists());
         std::fs::remove_dir_all(d).ok();
     }
 

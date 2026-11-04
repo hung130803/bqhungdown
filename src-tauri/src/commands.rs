@@ -1533,6 +1533,25 @@ pub async fn daychuyen_stop(
         .map_err(AppError::Other)
 }
 
+/// Trước khi tự cập nhật: ghi dấu "đang cập nhật" (hạn 10 phút) để bot KHÔNG
+/// mở lại bản cũ khi trình cài tắt app giữa chừng.
+#[deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
+#[tauri::command]
+pub fn mark_updating(app: AppHandle) -> AppResult<()> {
+    let dir = app.path().app_config_dir().map_err(|e| AppError::Other(e.to_string()))?;
+    crate::daychuyen::ghi_dau_cap_nhat(&dir, chrono::Local::now().fixed_offset()).map_err(|e| AppError::Other(e.to_string()))
+}
+
+/// Cập nhật hỏng (app vẫn chạy tiếp) → gỡ dấu.
+#[deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
+#[tauri::command]
+pub fn clear_updating(app: AppHandle) -> AppResult<()> {
+    if let Ok(dir) = app.path().app_config_dir() {
+        crate::daychuyen::xoa_dau_cap_nhat(&dir);
+    }
+    Ok(())
+}
+
 /// ⏭ Bỏ qua hôm nay (mai chạy lại đúng giờ).
 #[deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 #[tauri::command]

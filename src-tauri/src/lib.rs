@@ -236,6 +236,7 @@ pub fn run() {
             // Mở lên = không còn "thoát êm" — bot thấy app mất mà không có dấu
             // này thì coi là tắt bất thường và tự mở lại.
             crate::daychuyen::xoa_dau_thoat(&config_dir);
+            crate::daychuyen::xoa_dau_cap_nhat(&config_dir);
             let daychuyen = crate::daychuyen::DayChuyen::load(&config_dir);
             crate::daychuyen::spawn_scheduler(
                 handle.clone(),
@@ -504,6 +505,8 @@ pub fn run() {
             commands::daychuyen_run_now,
             commands::daychuyen_stop,
             commands::daychuyen_skip_today,
+            commands::mark_updating,
+            commands::clear_updating,
             commands::reconcile_watched,
             commands::archived_video_ids,
             commands::downloaded_title_keys,
