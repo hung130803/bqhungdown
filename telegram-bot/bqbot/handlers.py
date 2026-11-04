@@ -938,8 +938,10 @@ class Router:
                 elif head == "han":
                     if not rest.isdigit():
                         raise AppError("Hạn chót phải là số giờ 1–24, ví dụ /lich han 3")
-                    self.app.settings(lichTaiHanChotGio=int(rest))
-                    note = f"✅ Hạn chót mỗi đợt: <b>{int(rest)} giờ</b> (áp cho đợt mở sau)."
+                    n = max(1, min(24, int(rest)))
+                    self.app.settings(lichTaiHanChotGio=n)
+                    kep = f" (đã kẹp {int(rest)} về khoảng 1–24)" if n != int(rest) else ""
+                    note = f"✅ Hạn chót mỗi đợt: <b>{n} giờ</b>{kep} (áp cho đợt mở sau)."
                 elif head == "nhom":
                     ds = [x.strip() for x in rest.split(",") if x.strip()]
                     ds = ["" if x.lower() in ("-", "chưa phân nhóm") else x for x in ds]
@@ -1002,10 +1004,15 @@ class Router:
                     note = f"✅ Hạn chót mỗi đợt: <b>{moi} giờ</b> (áp cho đợt mở sau)"
                 elif act == "up":
                     ds = list(self.app.daychuyen().get("nhom") or [])
-                    i = int(rest[0]) if rest and rest[0].isdigit() else 0
-                    if 0 < i < len(ds):
+                    i = next((k for k, g in enumerate(ds) if rest and fmt.ma_nhom(g) == rest[0]), -1)
+                    if i > 0:
                         ds[i - 1], ds[i] = ds[i], ds[i - 1]
                         self.app.settings(lichTaiNhom=ds)
+                        note = f"✅ Đưa «{fmt.esc(fmt.nhom_ten(ds[i - 1]))}» lên vị trí {i}"
+                    elif i == 0:
+                        note = f"«{fmt.esc(fmt.nhom_ten(ds[0]))}» đã ở đầu danh sách"
+                    else:
+                        note = "⌛ Nhóm này không còn trong Lịch tải"
                 elif act in ("chay", "boqua"):
                     note = ("▶ " if act == "chay" else "⏭ ") + fmt.esc(self.app.daychuyen_action(act).get("message", ""))
                 elif act == "dung?":

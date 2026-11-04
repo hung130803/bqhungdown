@@ -314,5 +314,169 @@ class DayChuyenAlertTests(NoNetworkCase):
         self.assertEqual(len([c for c in tg.calls if c[0] == "edit"]), 1, "đang hỏi xác nhận: không đè")
 
 
+# ───────────── Vòng duyệt cdb2d8e: app tắt bất thường, chống báo trùng, nút ↑ theo tên ─────────────
+
+class AppChetTests(NoNetworkCase):
+    def _mon(self, song=False, thoat_em=False):
+        tg = FakeTG()
+        app = FakeApp({"/api/queue": {"ok": True, "items": []}, "/api/daychuyen": {"ok": True}})
+        clock = {"t": 1000.0}
+        m = Monitor(tg, app, cfg(), clock=lambda: clock["t"])
+        wall = {"t": 1_800_000_000.0}
+        m.wall = lambda: wall["t"]
+        m.app_dang_chay = lambda: song
+        m.da_thoat_em = lambda: thoat_em
+        mo = []
+        m.mo_app = lambda: mo.append(1)
+        m.tick()  # app đang chạy
+        app.offline = True
+        m.tick()  # vừa mất
+        return tg, app, m, clock, wall, mo
+
+    def test_tien_trinh_mat_thi_bao_bat_thuong_va_tu_mo_lai(self):
+        tg, app, m, clock, wall, mo = self._mon()
+        self.assertEqual(mo, [], "chưa đủ 30 giây")
+        clock["t"] += 31
+        m.tick()
+        self.assertEqual(mo, [1])
+        self.assertIn("tắt bất thường", tg.texts()[-1])
+        self.assertIn("1/3", tg.texts()[-1])
+        clock["t"] += 600
+        m.tick()
+        self.assertEqual(mo, [1], "1 lần mất chỉ tự mở 1 lần")
+
+    def test_toi_da_3_lan_moi_gio(self):
+        tg, app, m, clock, wall, mo = self._mon()
+        for _ in range(4):
+            clock["t"] += 31
+            m.tick()
+            app.offline = False
+            m.tick()  # app lên
+            app.offline = True
+            m.tick()  # lại chết
+            wall["t"] += 60
+        clock["t"] += 31
+        m.tick()
+        self.assertEqual(len(mo), 3)
+        self.assertIn("THÔI tự mở", tg.texts()[-1])
+
+    def test_thoat_em_thi_khong_tu_mo(self):
+        tg, app, m, clock, wall, mo = self._mon(thoat_em=True)
+        clock["t"] += 400
+        m.tick()
+        self.assertEqual(mo, [])
+        self.assertFalse(any("bất thường" in t for t in tg.texts()))
+
+    def test_con_tien_trinh_ma_cong_im_3_phut_thi_bao_treo_khong_mo_ban_2(self):
+        tg, app, m, clock, wall, mo = self._mon(song=True)
+        clock["t"] += 120
+        m.tick()
+        self.assertFalse(any("treo" in t for t in tg.texts()), "chưa đủ 3 phút")
+        clock["t"] += 61
+        m.tick()
+        self.assertEqual(mo, [])
+        self.assertIn("treo", tg.texts()[-1])
+
+    def test_mo_lai_loi_thi_bao(self):
+        tg, app, m, clock, wall, mo = self._mon()
+
+        def hong():
+            raise OSError("không tìm thấy bqhungdown.exe")
+        m.mo_app = hong
+        clock["t"] += 31
+        m.tick()
+        self.assertIn("KHÔNG được", tg.texts()[-1])
+
+    def test_dau_thoat_em_doc_dung_file_app_ghi(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(launcher.da_thoat_em(Path(d)))
+            (Path(d) / "thoat_em.json").write_text('{"luc":"x"}', encoding="utf-8")
+            self.assertTrue(launcher.da_thoat_em(Path(d)))
+
+
+class ChongBaoTrungTests(NoNetworkCase):
+    def _mon(self, tg=None):
+        tg = tg or FakeTG()
+        state = {"dc": _dc(dangChay=None)}
+        app = FakeApp({"/api/queue": {"ok": True, "items": []}, "/api/daychuyen": lambda _b: state["dc"]})
+        m = Monitor(tg, app, cfg(notify_chat_ids=[CHAT, 222]))
+        clock = {"t": 1_800_000_000.0}
+        m.wall = lambda: clock["t"]
+        return tg, m, state, clock
+
+    def _tick(self, m):
+        m._last_daychuyen = float("-inf")
+        m.tick()
+
+    def test_s4_nhieu_id_khong_bi_rot_theo_chu_cai_roi_bao_lai(self):
+        with tempfile.TemporaryDirectory() as d:
+            tg, m, state, clock = self._mon()
+            m.state_path = Path(d) / "live_msgs.json"
+            ids = [f"ket-2026110406{i:04d}" for i in range(60)] + ["bo-sot-x-k1", "tre-20261104-01"]
+            state["dc"]["canhBao"] = [{"id": i, "loai": i.split("-")[0], "luc": "", "text": i} for i in ids]
+            for _ in range(3):
+                self._tick(m)
+                clock["t"] += 3601
+            n = len(tg.texts())
+            # Bot khởi động lại, 3 giờ sau: không báo lại id nào.
+            tg2, m2, state2, clock2 = self._mon()
+            m2.state_path = m.state_path
+            state2["dc"]["canhBao"] = state["dc"]["canhBao"]
+            clock2["t"] = clock["t"] + 3 * 3600
+            self._tick(m2)
+            self.assertEqual(tg2.texts(), [], "không báo lại cảnh báo đã gửi")
+            self.assertGreater(n, 0)
+            # Id app đã bỏ khỏi danh sách thì sổ cũng bỏ (sổ không phình mãi).
+            state2["dc"]["canhBao"] = []
+            self._tick(m2)
+            self.assertEqual(m2._canh_bao_da_gui, set())
+
+    def test_gui_loi_1_phan_chi_gui_lai_chat_chua_nhan(self):
+        class TG1(FakeTG):
+            def send_message(self, chat_id, *a, **k):
+                if chat_id == 222 and self.hong:
+                    raise OSError("chat 222 mất mạng")
+                return super().send_message(chat_id, *a, **k)
+        tg = TG1()
+        tg.hong = True
+        tg, m, state, clock = self._mon(tg)
+        state["dc"]["vanDe"] = [{"loai": "loi_tat", "text": "Không tạo được lối tắt"}]
+        self._tick(m)
+        tg.hong = False
+        self._tick(m)
+        nhan = [c[1] for c in tg.calls if c[0] == "send" and "lối tắt" in c[2]]
+        self.assertEqual(sorted(nhan), sorted([222, CHAT]), "mỗi chat nhận ĐÚNG 1 lần")
+
+
+class LichNutTheoTenTests(LichBoardTests):
+    def test_s10_nut_len_theo_ten_bam_lap_khong_hoan_tac(self):
+        tg, app, r, state = self._router(_dc(nhom=["MỸ", "HÀN", "NHẬT"]))
+        r._cmd_lich(CHAT, "")
+        up_nhat = [b["callback_data"] for row in tg.calls[-1][3]["inline_keyboard"] for b in row
+                   if b["text"].startswith("↑ NHẬT")][0]
+
+        def settings(b):
+            state["dc"] = {**state["dc"], "nhom": b["lichTaiNhom"]}
+            return {"ok": True}
+        app.routes["/api/settings"] = settings
+        self._cb(r, up_nhat)
+        self.assertEqual(state["dc"]["nhom"], ["MỸ", "NHẬT", "HÀN"])
+        self._cb(r, up_nhat)  # bấm lặp đúng nút đó
+        self.assertEqual(state["dc"]["nhom"], ["NHẬT", "MỸ", "HÀN"], "lên tiếp, không đổi ngược lại")
+        self._cb(r, up_nhat)
+        self.assertEqual(state["dc"]["nhom"], ["NHẬT", "MỸ", "HÀN"], "đã ở đầu thì thôi")
+        self.assertIn("đã ở đầu", tg.texts()[-1])
+
+    def test_lich_han_ngoai_khoang_hien_so_da_kep(self):
+        tg, app, r, _ = self._router()
+        r._cmd_lich(CHAT, "han 99")
+        posts = [b for m, p, b in app.requests if p == "/api/settings"]
+        self.assertEqual(posts, [{"lichTaiHanChotGio": 24}])
+        self.assertIn("<b>24 giờ</b>", tg.texts()[-1])
+        self.assertIn("kẹp 99", tg.texts()[-1])
+        r._cmd_lich(CHAT, "han 0")
+        self.assertIn("<b>1 giờ</b>", tg.texts()[-1])
+
+
 if __name__ == "__main__":
     unittest.main()

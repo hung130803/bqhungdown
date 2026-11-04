@@ -352,7 +352,7 @@ async fn route(app: &AppHandle, req: &Request) -> ApiResult {
         ("POST", ["api", "cookies", site]) => cookies_set(app, site, req.json().map_err(bad)?).await,
         ("POST", ["api", "settings"]) => settings_patch(app, req.json().map_err(bad)?).await,
         ("GET", ["api", "daychuyen"]) => Ok(daychuyen_status(app)),
-        ("POST", ["api", "daychuyen", action]) => daychuyen_action(app, action, req.json().map_err(bad)?),
+        ("POST", ["api", "daychuyen", action]) => daychuyen_action(app, action, req.json().map_err(bad)?).await,
         ("POST", ["api", "engine", "fix"]) => {
             let msg = crate::commands::fix_download_engine(app.clone(), app.state()).await?;
             Ok(json!({ "ok": true, "message": msg }))
@@ -966,12 +966,12 @@ async fn settings_patch(app: &AppHandle, body: Value) -> ApiResult {
 }
 
 /// Nút Lịch tải trên bot — gọi ĐÚNG lệnh của nút trong app.
-fn daychuyen_action(app: &AppHandle, action: &str, body: Value) -> ApiResult {
+async fn daychuyen_action(app: &AppHandle, action: &str, body: Value) -> ApiResult {
     let msg = match action {
         "chay" => crate::commands::daychuyen_run_now(app.clone(), app.state(), app.state(), app.state(), app.state(), app.state())?,
         "dung" => {
             let huy = body.get("huyJob").and_then(|v| v.as_bool()).unwrap_or(false);
-            crate::commands::daychuyen_stop(huy, app.state(), app.state(), app.state(), app.state())?
+            crate::commands::daychuyen_stop(huy, app.state(), app.state(), app.state(), app.state()).await?
         }
         "boqua" => crate::commands::daychuyen_skip_today(app.state())?,
         _ => return Err(bad(format!("Không có thao tác Lịch tải '{action}'"))),

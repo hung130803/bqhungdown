@@ -78,6 +78,22 @@ def find_app(configured: str | None = None) -> str | None:
     return str(max(found, key=lambda p: p.stat().st_mtime))
 
 
+DAU_THOAT_EM = "thoat_em.json"
+
+
+def dau_thoat_path(app_config_dir: Path | None = None) -> Path:
+    """`<config app>/thoat_em.json` — app ghi khi THOÁT ÊM (Thoát hẳn / lệnh đóng
+    app), xoá khi mở lên. App mất mà KHÔNG có dấu này = tắt bất thường."""
+    return registration_path(app_config_dir).with_name(DAU_THOAT_EM)
+
+
+def da_thoat_em(app_config_dir: Path | None = None) -> bool:
+    try:
+        return dau_thoat_path(app_config_dir).is_file()
+    except OSError:
+        return False
+
+
 class AppDangChay(OSError):
     """Đã có tiến trình bqhungdown.exe (vd vừa tự mở cùng Windows, cổng điều
     khiển chưa lên) — mở thêm bản nữa chỉ bật hộp thoại khoá 1-phiên của app."""

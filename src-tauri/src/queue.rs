@@ -662,6 +662,31 @@ impl QueueManager {
         Ok(())
     }
 
+    /// Huỷ CHỈ KHI mục vẫn đang Chờ — kiểm và chuyển trạng thái trong CÙNG 1
+    /// khoá (Dây chuyền "Dừng + huỷ job chưa tải"): job vừa được lấy ra tải
+    /// không bị huỷ nhầm. Trả `true` nếu đã huỷ.
+    #[deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
+    pub fn cancel_if_queued(self: &Arc<Self>, id: &str) -> bool {
+        let cloned = {
+            let mut map = self.items.write().unwrap_or_else(|e| e.into_inner());
+            let Some(item) = map.get_mut(id) else { return false };
+            if item.state != DownloadState::Queued {
+                return false;
+            }
+            let Ok(next) = transition(item.state, QueueEvent::Cancel) else { return false };
+            item.state = next;
+            item.clone()
+        };
+        self.emit_state(&cloned);
+        self.emit_queue_updated();
+        let tok = self.cancel_tokens.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+        match tok {
+            Some(t) => t.cancel(),
+            None => self.cleanup_partials_retry(cloned),
+        }
+        true
+    }
+
     /// Hủy TẤT CẢ mục đang chờ/tải/tạm dừng một phát. Tức thời: chỉ chuyển
     /// trạng thái + bấm cancel-token (kill tiến trình + dọn file `.part`
     /// chạy nền, không chặn). Trả về số mục đã hủy.

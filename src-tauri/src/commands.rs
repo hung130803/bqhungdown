@@ -1487,6 +1487,7 @@ pub async fn download_more_today(
 // Dùng CHUNG cho app và bot (control_api gọi lại đúng các hàm này).
 
 /// Tình trạng Lịch tải (tin trạng thái / bảng trong Cài đặt).
+#[deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 #[tauri::command]
 pub fn daychuyen_status(
     dc: State<'_, Arc<crate::daychuyen::DayChuyen>>,
@@ -1499,6 +1500,7 @@ pub fn daychuyen_status(
 }
 
 /// ▶ Chạy ngay: các nhóm hôm nay chưa quét. Bấm nhiều lần chỉ chạy 1 lượt.
+#[deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 #[tauri::command]
 pub fn daychuyen_run_now(
     app: AppHandle,
@@ -1517,8 +1519,9 @@ pub fn daychuyen_run_now(
 
 /// ⏹ Dừng (đã hỏi xác nhận): ngừng xếp nhóm tiếp, phiếu ghi `huy`;
 /// `huy_job` = huỷ luôn job của đợt CHƯA BẮT ĐẦU tải. File đang tải không bị đụng.
+#[deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 #[tauri::command]
-pub fn daychuyen_stop(
+pub async fn daychuyen_stop(
     huy_job: bool,
     dc: State<'_, Arc<crate::daychuyen::DayChuyen>>,
     queue: State<'_, Arc<QueueManager>>,
@@ -1526,10 +1529,12 @@ pub fn daychuyen_stop(
     history: State<'_, Arc<HistoryStore>>,
 ) -> AppResult<String> {
     crate::daychuyen::dung_that(queue.inner(), history.inner(), dc.inner(), &settings.get(), huy_job)
+        .await
         .map_err(AppError::Other)
 }
 
 /// ⏭ Bỏ qua hôm nay (mai chạy lại đúng giờ).
+#[deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 #[tauri::command]
 pub fn daychuyen_skip_today(dc: State<'_, Arc<crate::daychuyen::DayChuyen>>) -> AppResult<String> {
     Ok(dc.bo_qua_hom_nay(chrono::Local::now().fixed_offset()))

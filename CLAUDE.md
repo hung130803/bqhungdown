@@ -92,7 +92,15 @@
   **Đợt 1b:** nút điều khiển ở app (Cài đặt) VÀ bot (`/lich`) gọi CÙNG lệnh
   `commands::daychuyen_*`. Bấm nhiều lần chỉ 1 lượt (`DayChuyen::chiem_luot`).
   Dừng chỉ ngừng xếp nhóm sau và đóng phiếu `huy`, KHÔNG đụng file đang tải.
-  Lượt chạy có guard `GiuQuet` (panic vẫn nhả cờ). Kiểm ổ + so ngày trước MỖI
+  **Bản release là `panic = "abort"` (Cargo.toml)**: panic ở bất cứ đâu = CHẾT
+  CẢ APP — guard `GiuQuet` / bắt panic trong `chay_co_bao_ve` chỉ là LỚP PHỤ
+  (chạy ở debug/test). Lớp chính: `daychuyen.rs` đặt `#![deny(clippy::unwrap_used,
+  expect_used, indexing_slicing, panic, unreachable…)]` — sửa module này phải qua
+  `cargo clippy --lib` sạch. App chết thì bot biết: app mất mà không có dấu
+  `<config>/thoat_em.json` (app ghi khi thoát êm, xoá khi mở) → bot báo "tắt bất
+  thường" + tự mở lại tối đa 3 lần/giờ (`monitor._check_app_chet`). Cờ Dừng ở
+  `DayChuyen.co` (cùng khoá với chiếm/nhả lượt); nhịp quét cũ nhường khi
+  `lich_dang_chay()`; ghi nốt khi thoát chỉ 1 lần (`thoat_em`). Kiểm ổ + so ngày trước MỖI
   nhóm (`truoc_nhom`). Giờ sai / bật khi chưa có nhóm → `settings_store` TỪ
   CHỐI. Lỗi báo bot theo loại (`tinh_van_de` + `canh_bao.loai`), bot gửi tối đa
   1 tin/giờ mỗi loại + "đã ổn lại". Chi tiết: docs/QUY_TRINH_DAY_CHUYEN_TU_DONG.md

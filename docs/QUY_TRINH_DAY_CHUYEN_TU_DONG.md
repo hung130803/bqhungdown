@@ -419,6 +419,23 @@ Tin trạng thái gồm: đang làm nhóm nào, lần chạy tới lúc mấy gi
 
 **Test (bqhungdown):** Rust `daychuyen::tests::b1`–`b14`, `settings_store::lich_tai_gio_sai_tu_choi_va_nhom_rong_khong_cho_bat`, `startup_shortcut::loi_tao_loi_tat_giu_cho_bot_bao_va_xoa_khi_on`. Gồm bấm 2 lần, tắt giữa chừng, đổi giờ giữa chừng, ngủ qua ngày, qua nửa đêm, đồng hồ lùi, panic. Vitest `SettingsPage.daychuyen1b.test.tsx` và `lib/lich-nhom.test.ts`. Bot `tests/test_daychuyen.py` (`LichBoardTests`, `DayChuyenAlertTests`).
 
+**Vòng sửa sau duyệt `cdb2d8e`:**
+
+| Mã | Việc | Cách sửa |
+| --- | --- | --- |
+| B1 | Bảo vệ panic vô tác dụng ở release (`panic = "abort"`) | Không đổi chiến lược panic của app. `daychuyen.rs` cấm mọi đường panic bằng clippy (`unwrap_used`, `expect_used`, `indexing_slicing`, `panic`, `unreachable`, `todo`, `unimplemented`), sửa hết chỗ vi phạm (chỉ số mảng, cộng trừ giờ có thể tràn, `unreachable!`). Bot phát hiện app chết: app mất mà không có dấu thoát êm `thoat_em.json` → sau 30 giây (mất tiến trình) báo "tắt bất thường" + tự mở lại, tối đa 3 lần/giờ; còn tiến trình mà cổng im 3 phút → báo treo, không mở bản thứ 2. |
+| S2 | Chạy ngay khi Lịch tắt mà nhịp cũ bật: nhịp cũ chen giữa nhóm | Nhịp cũ nhường khi `lich_dang_chay()` (lượt đã chiếm, kể cả chạy tay và lượt dở sau khi tắt Lịch), thử lại sau 1 phút. |
+| S3 | Dừng bị xoá trong khe chiếm lượt / sau kiểm tra cuối | Cờ Dừng gom vào `DayChuyen.co`, xoá ngay lúc chiếm lượt (cùng khoá). Cuối lượt "chốt" cờ: Dừng bấm sau đó tự đóng phiếu `huy` ngay. |
+| S4 | Bot cắt sổ id theo chữ cái → báo lại | Sổ id giữ đúng các id app còn trả trong `canhBao`. |
+| S5 | Ghi phiếu lần 2 sau `queue.shutdown()` | `thoat_em` chỉ chạy 1 lần. |
+| S6 | Dừng chạy SQLite/đĩa trên worker tokio / luồng chính | `dung_that` async + `spawn_blocking`; lệnh `daychuyen_stop` async. |
+| S7 | Dừng lúc không chạy làm mất lượt 06:00 | Chỉ đặt "xong hôm nay" khi đang có lượt; đóng đợt cũ thì báo rõ lượt hôm nay không bị ảnh hưởng. |
+| S8 | "Huỷ job chưa tải" kiểm rồi huỷ 2 bước | `QueueManager::cancel_if_queued`: kiểm Chờ + huỷ trong cùng 1 khoá. |
+| S10 | Nút ↑ bot theo chỉ số | Nút mang mã tên nhóm; bấm lặp = lên tiếp, không hoàn tác. |
+| Nhỏ | | `#[cfg(windows)]` về đúng test; `/lich han 0/99` hiện số đã kẹp; Dừng 2 lần khác lựa chọn báo lựa chọn đang dùng; gửi lỗi 1 phần chỉ gửi lại chat chưa nhận. |
+
+Test thêm: `chay_luot` đầu-cuối bằng môi trường giả (`daychuyen::tests::e1`–`e8`: Dừng giữa vòng, nhịp cũ chen, Dừng sau bước chốt, Dừng ngay sau chiếm lượt, thoát 2 lần, Dừng lúc 01:00), bot `AppChetTests`, `ChongBaoTrungTests`, `LichNutTheoTenTests`.
+
 ## Điều phối và kiểm soát
 
 Phiên "Quy trình khởi tạo công việc tự động" làm điều phối và không tự sửa code. Code do phiên của từng dự án sửa, vì phiên đó nắm luật test và cách phát hành riêng.

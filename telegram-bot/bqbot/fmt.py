@@ -637,10 +637,18 @@ def lich_markup(d: dict, tok: str) -> dict:
         [("🕐 −30 phút", p + "gio:-30"), ("🕐 +30 phút", p + "gio:30")],
         [("⏳ Hạn −1 giờ", p + "han:-1"), ("⏳ Hạn +1 giờ", p + "han:1")],
     ]
-    up = [(f"↑ {short(nhom_ten(g), 18)}", p + f"up:{i}") for i, g in enumerate(d.get("nhom") or []) if i > 0]
+    # Nút ↑ mang MÃ TÊN nhóm (không phải chỉ số): bảng cũ / bấm lặp vẫn áp đúng
+    # nhóm đó, bấm 2 lần = lên 2 bậc chứ không đổi ngược lại.
+    up = [(f"↑ {short(nhom_ten(g), 18)}", p + f"up:{ma_nhom(g)}") for i, g in enumerate(d.get("nhom") or []) if i > 0]
     rows += [up[i:i + 2] for i in range(0, len(up), 2)]
     rows.append([("🔄 Làm mới", p + "r"), ("🏠 Menu", "m")])
     return {"inline_keyboard": [[{"text": t, "callback_data": c} for t, c in r] for r in rows if r]}
+
+
+def ma_nhom(g: str) -> str:
+    """Mã ngắn của tên nhóm cho callback_data (giới hạn 64 byte của Telegram)."""
+    import hashlib
+    return hashlib.sha1((g or "").encode("utf-8")).hexdigest()[:8]
 
 
 def doi_gio(gio: str, phut: int) -> str:

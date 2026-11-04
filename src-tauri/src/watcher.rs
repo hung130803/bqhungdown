@@ -2156,6 +2156,13 @@ pub fn spawn_monitor(
             // Lịch tải (dây chuyền) bật thì nhịp này NGHỈ — không chạy cả hai;
             // giá trị watch_auto_enabled của anh giữ nguyên.
             if crate::daychuyen::nhip_cu_duoc_chay(&settings_store.get()) {
+                // Lịch đang chạy 1 lượt (kể cả Chạy ngay khi Lịch tắt, hoặc lượt
+                // dở sau khi vừa tắt Lịch) → NHƯỜNG, thử lại sau 1 phút; không
+                // chen vào giữa nhóm làm job không vào phiếu đợt.
+                if !crate::daychuyen::nhip_cu_chay_ngay(&settings_store.get(), crate::daychuyen::lich_dang_chay()) {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    continue;
+                }
                 // Nền canh MỌI nhóm.
                 let _ = check_all(&app, &store, &queue, &settings_store, &history, None).await;
             }

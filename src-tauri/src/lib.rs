@@ -68,16 +68,26 @@ pub fn quit_gracefully(app: &tauri::AppHandle) {
 /// (luôn ghi — mục 12 giao kèo không phụ thuộc công tắc Lịch tải).
 /// Trước đó ghi NỐT phiếu đợt + sổ (job vừa xếp hàng chưa kịp vào phiếu) —
 /// gọi TRƯỚC `queue.shutdown()` (1b-D7).
+/// CHỈ CHẠY 1 LẦN: `quit_gracefully` rồi `WindowEvent::Destroyed` gọi lại SAU
+/// `queue.shutdown()` — lần 2 bỏ qua, kẻo job bị ngắt ghi nhầm `loi` (S5).
+/// Ghi thêm dấu `thoat_em.json` để bot biết đây là thoát êm, không tự mở lại.
 fn daychuyen_khi_thoat(app: &tauri::AppHandle) {
     if let Some(dc) = app.try_state::<Arc<crate::daychuyen::DayChuyen>>() {
-        if let (Some(q), Some(h), Some(s)) = (
+        let lan_dau = match (
             app.try_state::<Arc<QueueManager>>(),
             app.try_state::<Arc<HistoryStore>>(),
             app.try_state::<Arc<SettingsStore>>(),
         ) {
-            dc.thoat_em(&q, &h, &crate::daychuyen::thu_muc_phieu(&s.get()));
+            (Some(q), Some(h), Some(s)) => dc.thoat_em(&q, &h, &crate::daychuyen::thu_muc_phieu(&s.get())),
+            _ => true,
+        };
+        if !lan_dau {
+            return;
         }
         dc.ghi_ban_khi_thoat(&app.package_info().version.to_string());
+    }
+    if let Ok(dir) = app.path().app_config_dir() {
+        crate::daychuyen::ghi_dau_thoat(&dir, chrono::Local::now().fixed_offset());
     }
 }
 
@@ -223,6 +233,9 @@ pub fn run() {
             // DÂY CHUYỀN: Lịch tải chạy CẠNH vòng theo dõi cũ. Công tắc
             // `lich_tai_enabled` (mặc định TẮT) chỉ quyết định MỞ lượt quét;
             // file trạng thái bận + phiếu đang mở vẫn được cập nhật.
+            // Mở lên = không còn "thoát êm" — bot thấy app mất mà không có dấu
+            // này thì coi là tắt bất thường và tự mở lại.
+            crate::daychuyen::xoa_dau_thoat(&config_dir);
             let daychuyen = crate::daychuyen::DayChuyen::load(&config_dir);
             crate::daychuyen::spawn_scheduler(
                 handle.clone(),
