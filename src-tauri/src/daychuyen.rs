@@ -1068,6 +1068,39 @@ async fn cho_luot_quet_khac() {
     }
 }
 
+/// CHỜ lượt quét khác xong RỒI mới mở/nối đợt — `mo_luc`/`han_chot` tính từ
+/// lúc nhóm thật sự bắt đầu quét, lượt quét tay đang chạy dở không ăn vào
+/// hạn chót 3 giờ của đợt. `dong_ho` đọc giờ SAU khi chờ.
+pub async fn mo_dot_sau_khi_cho<F, T>(
+    cho: F,
+    dong_ho: impl Fn() -> DateTime<FixedOffset>,
+    mo: impl FnOnce(DateTime<FixedOffset>) -> T,
+) -> T
+where
+    F: std::future::Future<Output = ()>,
+{
+    cho.await;
+    mo(dong_ho())
+}
+
+/// Mở đợt mới cho nhóm, hoặc nối đợt hôm nay đang mở. Trả `dot_id`.
+fn mo_hoac_noi_dot(st: &mut TrangThaiLich, nhom: &str, now: DateTime<FixedOffset>, han_gio: u32, dir: &Path) -> String {
+    if let Some(d) = tim_dot_hom_nay(st, nhom, now) {
+        return d.phieu.dot_id.clone();
+    }
+    let mut da_co: Vec<String> = st.dot.iter().map(|d| d.phieu.dot_id.clone()).collect();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        da_co.extend(rd.flatten().filter_map(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            la_ten_phieu(&n).then(|| n.trim_end_matches(".json").to_string())
+        }));
+    }
+    let d = mo_dot(dot_id_moi(&now.format("%Y%m%d").to_string(), &da_co), nhom, now, han_gio);
+    let id = d.phieu.dot_id.clone();
+    st.dot.push(d);
+    id
+}
+
 /// 1 lượt Lịch tải trong ngày: kiểm tra ổ → quét LẦN LƯỢT từng nhóm (mỗi nhóm
 /// 1 phiếu). Nhóm trước xếp hết vào hàng là sang nhóm sau — không chờ tải
 /// xong. Không giữ khoá `CHECKING` xuyên nhóm (mỗi nhóm 1 lần `check_all`),
@@ -1115,30 +1148,16 @@ async fn chay_ngay(
         if !settings.get().lich_tai_enabled {
             break; // anh tắt giữa chừng → dừng sau nhóm đang chạy
         }
-        let now = chrono::Local::now().fixed_offset();
-        let dot_id = {
-            let mut st = dc.lock();
-            match tim_dot_hom_nay(&mut st, nhom, now) {
-                Some(d) => d.phieu.dot_id.clone(),
-                None => {
-                    let mut da_co: Vec<String> = st.dot.iter().map(|d| d.phieu.dot_id.clone()).collect();
-                    if let Ok(rd) = std::fs::read_dir(&dir) {
-                        da_co.extend(rd.flatten().filter_map(|e| {
-                            let n = e.file_name().to_string_lossy().into_owned();
-                            la_ten_phieu(&n).then(|| n.trim_end_matches(".json").to_string())
-                        }));
-                    }
-                    let d = mo_dot(dot_id_moi(&now.format("%Y%m%d").to_string(), &da_co), nhom, now, s.lich_tai_han_chot_gio);
-                    let id = d.phieu.dot_id.clone();
-                    st.dot.push(d);
-                    id
-                }
-            }
-        };
+        co.doi(format!("nhóm {} (chờ lượt quét tay xong)", ten_nhom_hien_thi(nhom)));
+        let dot_id = mo_dot_sau_khi_cho(
+            cho_luot_quet_khac(),
+            || chrono::Local::now().fixed_offset(),
+            |now| mo_hoac_noi_dot(&mut dc.lock(), nhom, now, s.lich_tai_han_chot_gio, &dir),
+        )
+        .await;
         dc.danh_dau_doi();
         co.doi(format!("{dot_id} ({})", ten_nhom_hien_thi(nhom)));
         nhip_nen(dc, queue, history, dir.clone(), false, None).await;
-        cho_luot_quet_khac().await;
         let sink: JobSink = Arc::default();
         let thu_muc: Vec<String> = thu_muc_cua_nhom(store, &s, Some(nhom)).into_iter().map(|(f, _)| f).collect();
         *dc.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some((dot_id.clone(), sink.clone()));
@@ -1790,6 +1809,34 @@ mod tests {
         }
         assert_eq!(dot_dang_chay(), None, "hết lượt (kể cả return sớm) là gỡ");
         // Phía chờ lượt quét khác: xem test `luot_quet_khac_dem_ca_check_all_lan_khoa_tung_kenh` (watcher).
+    }
+
+    // ── N1: chờ lượt quét tay xong RỒI mới mở đợt (hạn chót tính từ lúc mở thật) ──
+    #[tokio::test]
+    async fn n1_cho_luot_quet_khac_xong_roi_moi_mo_dot() {
+        let gio = std::sync::Arc::new(Mutex::new(t(MO)));
+        let mo_luc_cho = {
+            let gio = gio.clone();
+            async move {
+                // Lượt quét tay chạy dở thêm 30 phút.
+                tokio::task::yield_now().await;
+                *gio.lock().unwrap() = t("2026-11-04T06:30:12+07:00");
+            }
+        };
+        let mut st = TrangThaiLich::default();
+        let dir = std::env::temp_dir().join(format!("bqd-n1-khong-co-{}", std::process::id()));
+        let g = gio.clone();
+        let id = mo_dot_sau_khi_cho(mo_luc_cho, move || *g.lock().unwrap(), |now| {
+            assert!(st.dot.is_empty(), "chưa được mở đợt trong lúc còn chờ");
+            mo_hoac_noi_dot(&mut st, "A", now, 3, &dir)
+        })
+        .await;
+        assert_eq!(id, "20261104-01");
+        assert_eq!(st.dot[0].phieu.mo_luc, "2026-11-04T06:30:12+07:00", "mở SAU khi chờ");
+        assert_eq!(st.dot[0].phieu.han_chot, "2026-11-04T09:30:12+07:00", "đủ 3 giờ, không bị ăn mất 30 phút");
+        // Mở lại trong ngày: nối đúng đợt cũ, không mở đợt mới.
+        let id2 = mo_hoac_noi_dot(&mut st, "A", t("2026-11-04T07:00:00+07:00"), 3, &dir);
+        assert_eq!((id2.as_str(), st.dot.len()), ("20261104-01", 1));
     }
 
     // ── Sửa 6: `xong` chỉ khi có output_path ──

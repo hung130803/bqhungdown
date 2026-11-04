@@ -89,4 +89,7 @@
   giữ khoảng 1–1440 (< 30 phút chỉ cảnh báo); file bận + phiếu đang mở chạy
   LUÔN, kể cả khi Lịch tắt; ▶ Chạy tất cả lúc Lịch đang quét báo "đang chạy đợt X".
   Khớp kênh 2 tool THEO THƯ MỤC qua `chuan_hoa_duong_dan` (ca mẫu D18 = V18).
-  Đợt 2 chưa làm: #14 Douyin, #15 18+, #24 nửa đêm, #26 bài ảnh.
+  CHƯA XỬ LÝ: đổi `daychuyen_dir` lúc còn đợt mở thì phiếu ở thư mục CŨ nằm
+  `dang_tai` mãi (sổ ghi tiếp sang thư mục mới); cửa sổ chớp khi mở
+  `--minimized`; chưa có `huy`. Đợt 2 chưa làm: #14 Douyin, #15 18+, #24 nửa
+  đêm, #26 bài ảnh.
