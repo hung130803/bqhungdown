@@ -58,6 +58,11 @@ DAYCHUYEN_NHIP_KET = 300
 APP_CHET_KHONG_TIEN_TRINH = 30
 APP_CHET_CONG_IM = 180
 APP_MO_LAI_MAX = 3
+# Giá trị "Lịch tải bật" biết lần cuối còn dùng được ngần này giây khi đọc lỗi
+# tạm / app vừa chết (không về False ngay → vẫn tự mở lại đúng lúc cần).
+LICH_TAI_NHO = 600
+# Tự mở lại mà app không lên sau ngần này giây → gỡ cờ chờ, báo 1 lần.
+APP_MO_LAI_CHO = 600
 
 
 class LichBoards:
@@ -134,6 +139,7 @@ class Monitor:
         # Dây chuyền (#28): Lịch tải bật thì bot tải KHÔNG mở "đợt tải" đoán
         # trộn nhóm nữa — báo cáo theo nhóm do bot cắt gửi (đọc phiếu đợt).
         self._lich_tai = False
+        self._lich_tai_luc: float | None = None  # lần đọc /api/daychuyen thành công gần nhất
         self._last_daychuyen = float("-inf")
         self._canh_bao_da_gui: set[str] | None = None
         # Lỗi Lịch tải theo loại đã báo (chờ báo "đã ổn lại") + giờ báo gần nhất.
@@ -153,6 +159,7 @@ class Monitor:
         self.dang_cap_nhat: Callable[[], float | None] = launcher.dang_cap_nhat
         self._tasklist: tuple[float, bool] | None = None  # (lúc hỏi, kết quả)
         self._cho_mo_lai = False  # bot vừa tự mở lại → lúc app lên khỏi báo "đã chạy lại" lặp
+        self._cho_mo_lai_luc = 0.0
         self.mo_app: Callable[[], None] = lambda: self._mo_app_that()
         # Nơi lưu id các tin đang tự cập nhật — bot khởi động lại thì chốt chúng
         # (không để tin "đang tải" đứng hình vĩnh viễn). None = không lưu (test).
@@ -532,11 +539,15 @@ class Monitor:
         try:
             d = self.app.daychuyen()
         except (AppOffline, AppError):
-            self._lich_tai = False
+            # Lỗi tạm: giữ giá trị biết cuối tối đa LICH_TAI_NHO giây. App bản cũ
+            # (chưa từng đọc được) → False, bot chạy y như trước.
+            if self._lich_tai_luc is None or self.clock() - self._lich_tai_luc > LICH_TAI_NHO:
+                self._lich_tai = False
             return
         if d.get("ok") is False:
             return
         self._lich_tai = bool(d.get("lichTaiEnabled"))
+        self._lich_tai_luc = self.clock()
         self._update_lich_boards(d)
         path = self.state_path.parent / "daychuyen_alerts.json" if self.state_path else None
         if self._canh_bao_da_gui is None:
@@ -610,6 +621,10 @@ class Monitor:
         """App đang chạy rồi MẤT mà không thoát êm (không có dấu `thoat_em.json`):
         báo "tắt bất thường" và tự mở lại (tối đa APP_MO_LAI_MAX lần/giờ). Còn tiến
         trình mà cổng im 3 phút = TREO → chỉ báo, không mở bản thứ 2."""
+        if self._cho_mo_lai and self.clock() - self._cho_mo_lai_luc > APP_MO_LAI_CHO:
+            self._cho_mo_lai = False
+            self._notify(f"⚠️ <b>Bot đã tự mở lại app tải nhưng {APP_MO_LAI_CHO // 60} phút vẫn chưa lên.</b> "
+                         "Kiểm tra máy rồi bấm ▶ Mở app.", _kb([[("▶ Mở app trên máy tính", "oa")]]))
         if self._offline_since is None or self._chet_da_xu_ly:
             return
         if self.da_thoat_em():
@@ -622,7 +637,7 @@ class Monitor:
             if self.wall() < han_cap_nhat:
                 return
             self._chet_da_xu_ly = True
-            self._notify("⚠️ <b>App tải tự cập nhật đã quá 10 phút mà chưa chạy lại.</b> "
+            self._notify("⚠️ <b>App tải tự cập nhật đã quá hạn chờ (30 phút) mà chưa chạy lại.</b> "
                          "Kiểm tra máy (trình cài có thể đang chờ) rồi bấm ▶ Mở app.",
                          _kb([[("▶ Mở app trên máy tính", "oa")]]))
             return
@@ -662,6 +677,7 @@ class Monitor:
             return
         self._lan_mo_lai.append(now)
         self._cho_mo_lai = True
+        self._cho_mo_lai_luc = self.clock()
         self._notify(f"⚠️ <b>App tải đã tắt bất thường</b> — bot đã tự mở lại "
                      f"(lần {len(self._lan_mo_lai)}/{APP_MO_LAI_MAX} trong giờ). Lịch tải tự nối đợt dở khi app lên.")
 

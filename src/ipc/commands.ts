@@ -822,7 +822,7 @@ export async function daychuyenStop(huyJob: boolean): Promise<string> {
   return invoke<string>("daychuyen_stop", { huyJob });
 }
 
-/** Ghi dấu "đang tự cập nhật" (hạn 10 phút) TRƯỚC khi cài — bot không mở lại
+/** Ghi dấu "đang tự cập nhật" (hạn 30 phút; gọi lại lúc tải xong) TRƯỚC khi cài — bot không mở lại
  *  bản cũ khi trình cài tắt app. Lỗi thì bỏ qua (không chặn việc cập nhật). */
 export async function markUpdating(): Promise<void> {
   if (IS_WEB) return;

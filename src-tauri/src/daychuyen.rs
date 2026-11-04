@@ -1674,7 +1674,8 @@ pub fn xoa_dau_thoat(config_dir: &Path) {
 /// thoát êm — bot thấy dấu này còn hạn thì KHÔNG mở lại bản cũ giữa lúc cài;
 /// quá hạn mà app chưa lên thì chỉ báo. App mở lên thì xoá.
 pub const TEN_DAU_CAP_NHAT: &str = "dang_cap_nhat.json";
-pub const CAP_NHAT_HAN_PHUT: i64 = 10;
+/// 30 phút + làm mới lúc tải xong (trước khi cài): tải chậm không bị báo nhầm.
+pub const CAP_NHAT_HAN_PHUT: i64 = 30;
 
 pub fn ghi_dau_cap_nhat(config_dir: &Path, now: DateTime<FixedOffset>) -> std::io::Result<()> {
     let han = now.checked_add_signed(chrono::Duration::minutes(CAP_NHAT_HAN_PHUT)).unwrap_or(now);
@@ -3369,11 +3370,11 @@ mod tests {
     }
 
     #[test]
-    fn e9_dau_cap_nhat_co_han_10_phut() {
+    fn e9_dau_cap_nhat_co_han_30_phut() {
         let (d, _dc) = dc_tam("e9");
         ghi_dau_cap_nhat(&d, t(MO)).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(d.join(TEN_DAU_CAP_NHAT)).unwrap()).unwrap();
-        assert_eq!(v["het_han"], "2026-11-04T06:10:12+07:00");
+        assert_eq!(v["het_han"], "2026-11-04T06:30:12+07:00");
         xoa_dau_cap_nhat(&d);
         assert!(!d.join(TEN_DAU_CAP_NHAT).exists());
         std::fs::remove_dir_all(d).ok();

@@ -56,6 +56,8 @@ export function UpdateSection() {
         } else if (event.event === "Progress") {
           done += event.data.chunkLength;
           setPct(total ? Math.floor((done / total) * 100) : null);
+        } else if (event.event === "Finished") {
+          void markUpdating(); // làm mới hạn ngay trước khi cài (tải lâu không bị báo nhầm)
         }
       });
       await relaunch();

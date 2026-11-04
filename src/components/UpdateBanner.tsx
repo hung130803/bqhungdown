@@ -49,6 +49,8 @@ export function UpdateBanner() {
           setProgress({ downloaded: 0, total: event.data.contentLength });
         } else if (event.event === "Progress") {
           setProgress((p) => ({ ...p, downloaded: p.downloaded + event.data.chunkLength }));
+        } else if (event.event === "Finished") {
+          void markUpdating(); // làm mới hạn ngay trước khi cài (tải lâu không bị báo nhầm)
         }
       });
       await relaunch();

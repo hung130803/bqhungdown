@@ -104,7 +104,7 @@
   CHƯA CHỐNG PANIC: watcher/queue/history vẫn còn `unwrap` — lớp bot mở lại app
   chỉ là DỰ PHÒNG. Bot tự mở lại CHỈ khi Lịch tải bật (hoặc `tu_mo_lai_app` trong
   config bot, mặc định tắt); Lịch tắt thì chỉ báo. Tự cập nhật ghi dấu
-  `<config>/dang_cap_nhat.json` (hạn 10 phút) TRƯỚC khi cài → bot không mở lại
+  `<config>/dang_cap_nhat.json` (hạn 30 phút, làm mới lúc tải xong) TRƯỚC khi cài → bot không mở lại
   bản cũ giữa lúc cài.
   **CỔNG BƯỚC 0** (`bash scripts/daychuyen_buoc0.sh docs/daychuyen_baseline_<tên>.txt`):
   `cargo test --lib` · `cargo clippy --lib` (exit 0 — deny của daychuyen.rs) · `npx tsc -b`

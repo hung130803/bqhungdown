@@ -22,7 +22,8 @@ from test_bot import CHAT, FakeApp, FakeTG, NoNetworkCase, cfg  # noqa: E402
 
 from bqbot import fmt, launcher  # noqa: E402
 from bqbot.handlers import Router  # noqa: E402
-from bqbot.monitor import Monitor  # noqa: E402
+from bqbot.app_client import AppError  # noqa: E402
+from bqbot.monitor import APP_MO_LAI_CHO, LICH_TAI_NHO, Monitor  # noqa: E402
 
 
 class OpenAppTests(NoNetworkCase):
@@ -510,7 +511,7 @@ class AppChetLichTatTests(NoNetworkCase):
         wall["t"] += 300  # quá hạn 10 phút mà app chưa lên
         m.tick()
         self.assertEqual(mo, [])
-        self.assertIn("quá 10 phút", tg.texts()[-1])
+        self.assertIn("quá hạn chờ", tg.texts()[-1])
         n = len(tg.texts())
         m.tick()
         self.assertEqual(len(tg.texts()), n, "báo 1 lần")
@@ -540,6 +541,41 @@ class AppChetLichTatTests(NoNetworkCase):
         wall["t"] += 4000
         m._notify_ok("x", key="moi")
         self.assertEqual(list(m._da_nhan), [], "khoá cũ > 1 giờ bị bỏ, khoá đã gửi đủ thì xoá")
+
+    def test_loi_doc_tam_giu_lich_tai_biet_cuoi_nen_van_tu_mo(self):
+        tg, app, m, clock, wall, mo = self._mon()  # đã đọc được Lịch BẬT
+        app.offline = False
+        app.routes["/api/daychuyen"] = {"ok": False, "error": "lỗi tạm"}
+        app._transport_cu = app._fake
+
+        def loi(method, path, body, timeout):
+            if path.startswith("/api/daychuyen"):
+                raise AppError("lỗi tạm")
+            return app._transport_cu(method, path, body, timeout)
+        app._transport = loi
+        m._last_daychuyen = float("-inf")
+        m.tick()
+        self.assertTrue(m._lich_tai, "lỗi tạm không xoá giá trị biết cuối")
+        clock["t"] += LICH_TAI_NHO + 1
+        m._last_daychuyen = float("-inf")
+        m.tick()
+        self.assertFalse(m._lich_tai, "quá hạn nhớ thì về TẮT")
+
+    def test_app_chet_ngay_sau_doc_loi_van_tu_mo(self):
+        tg, app, m, clock, wall, mo = self._mon()
+        clock["t"] += 31
+        m.tick()
+        self.assertEqual(mo, [1], "Lịch biết cuối là BẬT → vẫn tự mở")
+
+    def test_tu_mo_lai_ma_khong_len_thi_go_co_va_bao(self):
+        tg, app, m, clock, wall, mo = self._mon()
+        clock["t"] += 31
+        m.tick()
+        self.assertTrue(m._cho_mo_lai)
+        clock["t"] += APP_MO_LAI_CHO + 1
+        m.tick()
+        self.assertFalse(m._cho_mo_lai)
+        self.assertIn("vẫn chưa lên", tg.texts()[-1])
 
     def test_dau_cap_nhat_doc_han(self):
         with tempfile.TemporaryDirectory() as d:

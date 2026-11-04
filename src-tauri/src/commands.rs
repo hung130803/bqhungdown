@@ -1533,7 +1533,8 @@ pub async fn daychuyen_stop(
         .map_err(AppError::Other)
 }
 
-/// Trước khi tự cập nhật: ghi dấu "đang cập nhật" (hạn 10 phút) để bot KHÔNG
+/// Trước khi tự cập nhật (và lại lúc tải xong, trước khi cài): ghi dấu "đang
+/// cập nhật" (hạn 30 phút) để bot KHÔNG
 /// mở lại bản cũ khi trình cài tắt app giữa chừng.
 #[deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 #[tauri::command]
