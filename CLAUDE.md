@@ -86,6 +86,7 @@
   gọi `watcher::check_all_with` (id job lấy THẲNG tại `enqueue_new` qua sink,
   không đoán theo hàng); `check_all`/`check_channel` giữ chữ ký cũ. Lịch bật thì
   nhịp cũ nghỉ (`nhip_cu_duoc_chay`, KHÔNG sửa `watch_auto_enabled`), nhịp cũ
-  tối thiểu 30 phút; ▶ Chạy tất cả lúc Lịch đang quét báo "đang chạy đợt X".
+  giữ khoảng 1–1440 (< 30 phút chỉ cảnh báo); file bận + phiếu đang mở chạy
+  LUÔN, kể cả khi Lịch tắt; ▶ Chạy tất cả lúc Lịch đang quét báo "đang chạy đợt X".
   Khớp kênh 2 tool THEO THƯ MỤC qua `chuan_hoa_duong_dan` (ca mẫu D18 = V18).
   Đợt 2 chưa làm: #14 Douyin, #15 18+, #24 nửa đêm, #26 bài ảnh.

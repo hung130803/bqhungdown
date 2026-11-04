@@ -64,13 +64,11 @@ pub fn quit_gracefully(app: &tauri::AppHandle) {
     app.exit(0);
 }
 
-/// Dây chuyền: thoát êm thì ghi file trạng thái bận lần cuối `ban=false`.
+/// Dây chuyền: thoát êm thì ghi file trạng thái bận lần cuối `ban=false`
+/// (luôn ghi — mục 12 giao kèo không phụ thuộc công tắc Lịch tải).
 fn ghi_ban_khi_thoat(app: &tauri::AppHandle) {
-    if let (Some(dc), Some(s)) = (
-        app.try_state::<Arc<crate::daychuyen::DayChuyen>>(),
-        app.try_state::<Arc<SettingsStore>>(),
-    ) {
-        dc.ghi_ban_khi_thoat(&s.get(), &app.package_info().version.to_string());
+    if let Some(dc) = app.try_state::<Arc<crate::daychuyen::DayChuyen>>() {
+        dc.ghi_ban_khi_thoat(&app.package_info().version.to_string());
     }
 }
 
@@ -213,8 +211,9 @@ pub fn run() {
                 settings.clone(),
                 history.clone(),
             );
-            // DÂY CHUYỀN: Lịch tải chạy CẠNH vòng theo dõi cũ (công tắc
-            // `lich_tai_enabled` mặc định TẮT — tắt thì vòng không làm gì).
+            // DÂY CHUYỀN: Lịch tải chạy CẠNH vòng theo dõi cũ. Công tắc
+            // `lich_tai_enabled` (mặc định TẮT) chỉ quyết định MỞ lượt quét;
+            // file trạng thái bận + phiếu đang mở vẫn được cập nhật.
             let daychuyen = crate::daychuyen::DayChuyen::load(&config_dir);
             crate::daychuyen::spawn_scheduler(
                 handle.clone(),

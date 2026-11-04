@@ -360,6 +360,31 @@ static CHECKING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new(
 /// kênh đích quét song song sẽ cùng thấy "chưa ai tải hôm nay" → cùng tải.
 static CHECKING_TARGET: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
+/// Số lượt `check_all` KHÔNG thuộc Lịch tải (nút ▶, bot, nhịp cũ) đang chạy.
+static QUET_KHAC: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct QuetKhacGuard;
+
+impl QuetKhacGuard {
+    fn new() -> Self {
+        QUET_KHAC.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for QuetKhacGuard {
+    fn drop(&mut self) {
+        QUET_KHAC.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Có lượt quét tay / nhịp cũ đang chạy dở (cả "Chạy tất cả" lẫn ▶ 1 kênh)?
+/// Lịch tải chờ cái này xong mới quét nhóm — khỏi vướng khoá `CHECKING` 10 phút.
+pub fn co_luot_quet_khac() -> bool {
+    QUET_KHAC.load(std::sync::atomic::Ordering::SeqCst) > 0
+        || !CHECKING.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+}
+
 struct CheckingGuard(&'static std::sync::Mutex<Vec<String>>, String);
 
 impl CheckingGuard {
@@ -1405,6 +1430,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn luot_quet_khac_dem_ca_check_all_lan_khoa_tung_kenh() {
+        assert!(!co_luot_quet_khac());
+        {
+            let _g = QuetKhacGuard::new();
+            assert!(co_luot_quet_khac(), "Chạy tất cả / nhịp cũ đang chạy");
+        }
+        assert!(!co_luot_quet_khac());
+        {
+            let _k = CheckingGuard::try_new("kenh-test-s5").unwrap();
+            assert!(co_luot_quet_khac(), "▶ 1 kênh đang giữ khoá CHECKING");
+        }
+        assert!(!co_luot_quet_khac());
+    }
+
+    #[test]
     fn video_moi_khong_tai_qua_han_muc_ngay() {
         // limit 1, chưa tải hôm nay: 4 video mới -> chỉ lấy 1, dư 3 để dành.
         assert_eq!(new_take_count(4, 1, 0), 1);
@@ -2053,6 +2093,8 @@ pub async fn check_all_with(
     sink: Option<crate::daychuyen::JobSink>,
 ) -> Vec<crate::models::WatchedChannel> {
     use tokio::sync::Semaphore;
+    // Lượt không phải của Lịch tải → đếm để Lịch biết mà chờ (S5).
+    let _quet_khac = sink.is_none().then(QuetKhacGuard::new);
     use tokio::task::JoinSet;
 
     let chans: Vec<crate::models::WatchedChannel> = store
@@ -2105,7 +2147,7 @@ pub fn spawn_monitor(
                 // Nền canh MỌI nhóm.
                 let _ = check_all(&app, &store, &queue, &settings_store, &history, None).await;
             }
-            // Tối thiểu 30 phút (#25): quét 155 kênh mỗi phút dễ bị chặn bot.
+            // Khoảng cũ 1–1440 phút (Lịch tắt = y như cũ; < 30 phút chỉ cảnh báo).
             let interval_min = crate::daychuyen::nhip_cu_phut(&settings_store.get());
             tokio::time::sleep(Duration::from_secs(interval_min as u64 * 60)).await;
         }

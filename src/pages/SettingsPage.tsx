@@ -701,6 +701,11 @@ export function DayChuyenSection({ settings, onPatch }: { settings: Settings; on
           Nhịp quét nền cũ đang TẠM NGHỈ vì Lịch tải đang bật (không chạy cả hai).
         </p>
       )}
+      {!settings.lichTaiEnabled && settings.watchAutoEnabled && (settings.watchIntervalMin ?? 60) < 30 && (
+        <p role="alert" className="text-xs text-warning">
+          Nhịp quét nền cũ đang đặt {settings.watchIntervalMin} phút — nên ≥ 30 phút (quét nhiều kênh quá dày dễ bị YouTube chặn bot).
+        </p>
+      )}
       <Field label="Giờ bắt đầu (giờ máy)">
         <input
           type="time"

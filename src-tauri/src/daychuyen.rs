@@ -217,6 +217,10 @@ pub struct DotNoiBo {
     pub nhom_goc: String,
     pub jobs: Vec<JobRef>,
     pub quet_xong: bool,
+    /// Phiếu ngoài đĩa CHƯA khớp bản trong sổ (vừa đổi, hoặc lần ghi trước
+    /// lỗi sau 5 lần thử) → nhịp sau ghi lại, kể cả phiếu đã đóng.
+    #[serde(default)]
+    pub can_ghi: bool,
 }
 
 impl DotNoiBo {
@@ -323,6 +327,7 @@ pub fn mo_dot(dot_id: String, nhom: &str, now: DateTime<FixedOffset>, han_gio: u
         nhom_goc: nhom.to_string(),
         jobs: Vec::new(),
         quet_xong: false,
+        can_ghi: true,
     }
 }
 
@@ -357,6 +362,7 @@ pub fn them_job(dot: &mut DotNoiBo, j: &EnqueuedJob) -> bool {
     dot.jobs.push(JobRef { job: j.job_id.clone(), kenh: k, video: v, cuoi: false });
     dot.phieu.kenh_khong_co_video.retain(|t| chuan_hoa_duong_dan(t) != khoa);
     dot.phieu.seq += 1;
+    dot.can_ghi = true;
     true
 }
 
@@ -378,6 +384,7 @@ pub fn chot_quet(dot: &mut DotNoiBo, thu_muc_nhom: &[String]) {
     dot.phieu.kenh_khong_co_video = list;
     dot.quet_xong = true;
     dot.phieu.seq += 1;
+    dot.can_ghi = true;
 }
 
 /// Cập nhật phiếu theo hàng đợi + đóng phiếu khi đủ điều kiện. Phiếu ĐÃ ĐÓNG
@@ -403,6 +410,9 @@ pub fn cap_nhat_dot(
         match quan_sat(&r.job) {
             QuanSat::Cho => v.trang_thai = "cho".into(),
             QuanSat::DangTai => v.trang_thai = "dang_tai".into(),
+            // `xong` CHỈ khi đã biết tên file cuối (Douyin đổi tên xong mới
+            // có) — chưa có thì vẫn là đang tải, nhịp sau xét lại.
+            QuanSat::Xong { path: None, .. } => v.trang_thai = "dang_tai".into(),
             QuanSat::Xong { path, luc } => {
                 v.trang_thai = "xong".into();
                 v.file = path.as_deref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
@@ -445,6 +455,7 @@ pub fn cap_nhat_dot(
     }
     if dot.phieu != truoc {
         dot.phieu.seq = truoc.seq + 1;
+        dot.can_ghi = true;
         true
     } else {
         false
@@ -452,9 +463,46 @@ pub fn cap_nhat_dot(
 }
 
 fn dong(dot: &mut DotNoiBo, ly_do: &str, now: DateTime<FixedOffset>) {
-    dot.phieu.trang_thai = "da_dong".into();
-    dot.phieu.dong_luc = Some(iso(now));
-    dot.phieu.ly_do_dong = Some(ly_do.into());
+    dong_phieu(&mut dot.phieu, ly_do, now);
+}
+
+fn dong_phieu(p: &mut PhieuTai, ly_do: &str, now: DateTime<FixedOffset>) {
+    p.trang_thai = "da_dong".into();
+    p.dong_luc = Some(iso(now));
+    p.ly_do_dong = Some(ly_do.into());
+}
+
+/// Phiếu MỒ CÔI: còn `dang_tai` trên đĩa mà sổ `lich_tai.json` không biết (sổ
+/// hỏng/mất) → không ai cập nhật nữa, tool cắt sẽ chờ mãi. Đóng `het_han`,
+/// video chưa có kết quả ghi `tre`. Chỉ đụng file đúng mẫu tên. Trả số phiếu đã đóng.
+pub fn dong_phieu_mo_coi(dir: &Path, biet: &[String], now: DateTime<FixedOffset>) -> usize {
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !la_ten_phieu(&name) || biet.iter().any(|b| format!("{b}.json") == name) {
+            continue;
+        }
+        let Some(mut p) = std::fs::read(e.path()).ok().and_then(|b| serde_json::from_slice::<PhieuTai>(&b).ok()) else {
+            continue; // đọc không ra thì để nguyên, không ghi đè thứ mình không hiểu
+        };
+        if p.trang_thai != "dang_tai" || p.schema > SCHEMA {
+            continue;
+        }
+        for k in p.kenh.iter_mut() {
+            for v in k.video.iter_mut() {
+                if v.trang_thai == "cho" || v.trang_thai == "dang_tai" {
+                    v.trang_thai = "tre".into();
+                }
+            }
+        }
+        dong_phieu(&mut p, "het_han", now);
+        p.seq += 1;
+        if ghi_nguyen_tu(&e.path(), &serde_json::to_vec_pretty(&p).unwrap_or_default()).is_ok() {
+            n += 1;
+        }
+    }
+    n
 }
 
 // ───────────────────────── lịch tải (#4) ─────────────────────────
@@ -535,9 +583,15 @@ pub fn nhip_cu_duoc_chay(s: &Settings) -> bool {
     s.watch_auto_enabled && !s.lich_tai_enabled
 }
 
-/// Nhịp quét cũ tối thiểu 30 phút (#25): 155 kênh mỗi phút dễ bị chặn bot.
+/// Nhịp quét cũ: GIỮ đúng khoảng cũ 1–1440 phút (tắt Lịch = y như cũ).
 pub fn nhip_cu_phut(s: &Settings) -> u32 {
-    s.watch_interval_min.clamp(30, 1440)
+    s.watch_interval_min.clamp(1, 1440)
+}
+
+/// #25 chỉ là KHUYẾN NGHỊ: nhịp cũ đang bật mà < 30 phút thì cảnh báo (155
+/// kênh mỗi phút dễ bị YouTube chặn bot), không ép.
+pub fn nhip_cu_qua_day(s: &Settings) -> bool {
+    nhip_cu_duoc_chay(s) && s.watch_interval_min < 30
 }
 
 // ───────────────────────── ổ đĩa (#20) ─────────────────────────
@@ -668,6 +722,26 @@ fn dat_dot_dang_chay(v: Option<String>) {
     *DOT_DANG_CHAY.lock().unwrap_or_else(|e| e.into_inner()) = v;
 }
 
+/// Cờ chặn quét tay LIỀN MẠCH suốt 1 lượt Lịch (từ lúc kiểm ổ tới hết nhóm
+/// cuối) — không có khe "None" giữa các bước. Rơi guard (kể cả return sớm) là gỡ.
+pub struct CoChay;
+
+impl CoChay {
+    pub fn bat(nhan: String) -> Self {
+        dat_dot_dang_chay(Some(nhan));
+        CoChay
+    }
+    pub fn doi(&self, nhan: String) {
+        dat_dot_dang_chay(Some(nhan));
+    }
+}
+
+impl Drop for CoChay {
+    fn drop(&mut self) {
+        dat_dot_dang_chay(None);
+    }
+}
+
 /// Lời báo khi bấm ▶ Chạy tất cả đúng lúc Lịch tải đang quét (#29).
 pub fn bao_dang_chay(dot: &str) -> String {
     format!("Lịch tải đang chạy đợt {dot} — chờ đợt quét xong rồi bấm lại (tránh 2 lượt quét chồng nhau).")
@@ -682,25 +756,40 @@ pub struct DayChuyen {
     state_path: PathBuf,
     st: Mutex<TrangThaiLich>,
     /// Sink của nhóm đang quét — nhịp cập nhật rút job ra phiếu NGAY (kích sớm).
-    sink: Mutex<Option<(String, JobSink, Vec<String>)>>,
+    sink: Mutex<Option<(String, JobSink)>>,
     dang_quet: std::sync::atomic::AtomicBool,
     /// Ổ đầy → chưa kiểm tra lại trước mốc này (10 phút/lần, khỏi ghi sổ mỗi nhịp).
     kiem_o_lai_luc: Mutex<Option<std::time::Instant>>,
+    /// Sổ `lich_tai.json` đổi, chưa ghi xuống đĩa.
+    st_doi: std::sync::atomic::AtomicBool,
+    /// Tuần tự hoá MỌI lần ghi đĩa (phiếu, sổ, dọn rác) — 2 nhịp không ghi chồng
+    /// cùng file tạm. Chỉ giữ ở luồng chặn (`spawn_blocking`); khoá trạng thái
+    /// `st` KHÔNG BAO GIỜ bị giữ trong lúc chờ đổi tên file.
+    ghi: Mutex<()>,
 }
 
 impl DayChuyen {
     pub fn load(config_dir: &Path) -> Arc<Self> {
         let state_path = config_dir.join("lich_tai.json");
-        let st = std::fs::read_to_string(&state_path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default();
+        let st = match std::fs::read_to_string(&state_path) {
+            Err(_) => TrangThaiLich::default(),
+            Ok(t) => serde_json::from_str(&t).unwrap_or_else(|e| {
+                // Sổ hỏng: CẤT bản hỏng để xem lại, chạy tiếp với sổ rỗng.
+                // Phiếu còn `dang_tai` trên đĩa mà sổ không biết sẽ được
+                // `dong_phieu_mo_coi` đóng ở lượt dọn đầu tiên.
+                eprintln!("[daychuyen] lich_tai.json hỏng ({e}) — cất sang lich_tai.json.hong");
+                let _ = std::fs::rename(&state_path, state_path.with_extension("json.hong"));
+                TrangThaiLich::default()
+            }),
+        };
         Arc::new(Self {
             state_path,
             st: Mutex::new(st),
             sink: Mutex::new(None),
             dang_quet: std::sync::atomic::AtomicBool::new(false),
             kiem_o_lai_luc: Mutex::new(None),
+            st_doi: std::sync::atomic::AtomicBool::new(false),
+            ghi: Mutex::new(()),
         })
     }
 
@@ -712,61 +801,117 @@ impl DayChuyen {
         self.lock().clone()
     }
 
-    fn luu(&self, st: &TrangThaiLich) {
-        if let Ok(data) = serde_json::to_vec_pretty(st) {
-            if let Err(e) = ghi_nguyen_tu(&self.state_path, &data) {
-                log_mot_lan("luu-lich", &format!("[daychuyen] không lưu được lich_tai.json: {e}"));
-            }
-        }
-    }
-
-    fn ghi_phieu(dir: &Path, dot: &DotNoiBo) {
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            log_mot_lan("phieu-thu-muc", &format!("[daychuyen] không tạo được {}: {e}", dir.display()));
-            return;
-        }
-        let data = serde_json::to_vec_pretty(&dot.phieu).unwrap_or_default();
-        if let Err(e) = ghi_nguyen_tu(&dir.join(format!("{}.json", dot.phieu.dot_id)), &data) {
-            log_mot_lan("phieu-ghi", &format!("[daychuyen] ghi phiếu {} lỗi: {e}", dot.phieu.dot_id));
-        }
+    fn danh_dau_doi(&self) {
+        self.st_doi.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn co_dot_mo(&self) -> bool {
         self.dang_quet.load(std::sync::atomic::Ordering::SeqCst) || self.lock().dot.iter().any(DotNoiBo::dang_mo)
     }
 
-    /// Nhịp cập nhật: rút job mới từ sink, đối chiếu hàng đợi, đóng phiếu, ghi đĩa.
-    fn cap_nhat(&self, queue: &crate::queue::QueueManager, history: &crate::history_store::HistoryStore, s: &Settings) {
-        let now = chrono::Local::now().fixed_offset();
-        let dir = thu_muc_phieu(s);
+    /// Rút job mới từ sink, đối chiếu hàng đợi, đóng phiếu (xong / quá hạn).
+    /// KHÔNG phụ thuộc công tắc Lịch: tắt Lịch giữa chừng thì phiếu đang mở
+    /// vẫn được cập nhật và tự đóng `het_han`. Không ghi đĩa ở đây.
+    pub fn cap_nhat_voi(
+        &self,
+        qs: &dyn Fn(&str) -> QuanSat,
+        size: &dyn Fn(&Path) -> Option<u64>,
+        now: DateTime<FixedOffset>,
+    ) {
         let moi: Option<(String, Vec<EnqueuedJob>)> = self
             .sink
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .map(|(id, sink, _)| (id.clone(), std::mem::take(&mut *sink.lock().unwrap_or_else(|e| e.into_inner()))));
-        let qs = |job: &str| quan_sat_job(queue.get(job).as_ref(), history.get(job).ok().flatten().as_ref());
-        let size = |p: &Path| std::fs::metadata(p).ok().map(|m| m.len());
+            .map(|(id, sink)| (id.clone(), std::mem::take(&mut *sink.lock().unwrap_or_else(|e| e.into_inner()))));
         let mut st = self.lock();
-        let mut doi = false;
+        if st.dot.iter().all(|d| !d.dang_mo()) && moi.as_ref().is_none_or(|(_, j)| j.is_empty()) {
+            return;
+        }
+        let truoc = st.dot.clone();
         for d in st.dot.iter_mut() {
-            let mut d_doi = false;
             if let Some((id, jobs)) = &moi {
                 if &d.phieu.dot_id == id {
                     for j in jobs {
-                        d_doi |= them_job(d, j);
+                        them_job(d, j);
                     }
                 }
             }
-            d_doi |= cap_nhat_dot(d, &qs, &size, now);
-            if d_doi {
-                Self::ghi_phieu(&dir, d);
-                doi = true;
+            cap_nhat_dot(d, qs, size, now);
+        }
+        if st.dot != truoc {
+            self.danh_dau_doi();
+        }
+    }
+
+    fn cap_nhat(&self, queue: &crate::queue::QueueManager, history: &crate::history_store::HistoryStore) {
+        let qs = |job: &str| quan_sat_job(queue.get(job).as_ref(), history.get(job).ok().flatten().as_ref());
+        let size = |p: &Path| std::fs::metadata(p).ok().map(|m| m.len());
+        self.cap_nhat_voi(&qs, &size, chrono::Local::now().fixed_offset());
+    }
+
+    /// Ghi mọi phiếu `can_ghi` + sổ (nếu đổi). Phiếu ghi lỗi sau 5 lần thử thì
+    /// GIỮ cờ `can_ghi` → nhịp sau ghi lại (cả lần ghi ĐÓNG phiếu). Gọi ở luồng
+    /// chặn: có thể chờ tool cắt nhả file. Trả số phiếu còn chưa ghi được.
+    pub fn ghi_xuong_dia(&self, dir: &Path) -> usize {
+        let _g = self.ghi.lock().unwrap_or_else(|e| e.into_inner());
+        let (phieu, so) = {
+            let mut st = self.lock();
+            let co_phieu = st.dot.iter().any(|d| d.can_ghi);
+            // Sổ chụp TRƯỚC khi gỡ cờ: bị giết giữa chừng thì mở lại vẫn biết phải ghi lại.
+            let so = (self.st_doi.swap(false, std::sync::atomic::Ordering::SeqCst) || co_phieu)
+                .then(|| serde_json::to_vec_pretty(&*st).unwrap_or_default());
+            let phieu: Vec<(String, Vec<u8>)> = st
+                .dot
+                .iter_mut()
+                .filter(|d| d.can_ghi)
+                .map(|d| {
+                    d.can_ghi = false;
+                    (d.phieu.dot_id.clone(), serde_json::to_vec_pretty(&d.phieu).unwrap_or_default())
+                })
+                .collect();
+            (phieu, so)
+        };
+        let mut loi: Vec<String> = Vec::new();
+        if !phieu.is_empty() {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                log_mot_lan("phieu-thu-muc", &format!("[daychuyen] không tạo được {}: {e}", dir.display()));
+                loi = phieu.iter().map(|(id, _)| id.clone()).collect();
+            } else {
+                for (id, data) in &phieu {
+                    if let Err(e) = ghi_nguyen_tu(&dir.join(format!("{id}.json")), data) {
+                        log_mot_lan(&format!("phieu-ghi-{id}"), &format!("[daychuyen] ghi phiếu {id} lỗi (sẽ ghi lại): {e}"));
+                        loi.push(id.clone());
+                    }
+                }
             }
         }
-        if doi {
-            // Ghi sổ TRONG khoá: 2 nhịp không ghi chồng cùng file tạm.
-            self.luu(&st);
+        if !loi.is_empty() {
+            let mut st = self.lock();
+            for d in st.dot.iter_mut().filter(|d| loi.contains(&d.phieu.dot_id)) {
+                d.can_ghi = true;
+            }
+            self.danh_dau_doi();
+        }
+        if let Some(data) = so {
+            if let Err(e) = ghi_nguyen_tu(&self.state_path, &data) {
+                log_mot_lan("luu-lich", &format!("[daychuyen] không lưu được lich_tai.json: {e}"));
+                self.danh_dau_doi();
+            }
+        }
+        loi.len()
+    }
+
+    /// Dọn MỖI NGÀY 1 lần (không chỉ lúc mở app): `.json.tmp` mồ côi, phiếu
+    /// của mình cũ hơn 14 ngày, và đóng phiếu mồ côi sổ không biết (sổ hỏng).
+    pub fn don_hang_ngay(&self, dir: &Path, now: DateTime<FixedOffset>) {
+        let _g = self.ghi.lock().unwrap_or_else(|e| e.into_inner());
+        don_tmp_mo_coi(dir);
+        don_phieu_cu(dir, now.date_naive());
+        let biet: Vec<String> = self.lock().dot.iter().map(|d| d.phieu.dot_id.clone()).collect();
+        let n = dong_phieu_mo_coi(dir, &biet, now);
+        if n > 0 {
+            eprintln!("[daychuyen] đã đóng {n} phiếu mồ côi (sổ lich_tai.json không biết)");
         }
     }
 
@@ -780,15 +925,54 @@ impl DayChuyen {
         }
     }
 
-    /// Ghi `ban=false` lần cuối khi thoát êm.
-    pub fn ghi_ban_khi_thoat(&self, s: &Settings, phien_ban: &str) {
-        if !s.lich_tai_enabled {
-            return;
-        }
-        let mut v = trang_thai_ban(&[], false, Some("app đã thoát".into()), chrono::Local::now().fixed_offset(), phien_ban);
-        v["ban"] = serde_json::Value::Bool(false);
-        ghi_file_ban(Path::new(THU_MUC_EXCHANGE), &v);
+    /// File trạng thái bận HIỆN TẠI — ghi LUÔN khi app chạy (mục 12 không phụ
+    /// thuộc Lịch). Lý do chặn (ổ đầy) chỉ kèm khi Lịch đang bật.
+    pub fn trang_thai_ban_hien_tai(
+        &self,
+        items: &[DownloadItem],
+        lich_bat: bool,
+        now: DateTime<FixedOffset>,
+        phien_ban: &str,
+    ) -> serde_json::Value {
+        let ly_do = if lich_bat { self.lock().ly_do_chan.clone() } else { None };
+        trang_thai_ban(items, self.co_dot_mo(), ly_do, now, phien_ban)
     }
+
+    /// Ghi `ban=false` lần cuối khi thoát êm (luôn ghi, không phụ thuộc Lịch).
+    pub fn ghi_ban_khi_thoat(&self, phien_ban: &str) {
+        ghi_ban_thoat_vao(Path::new(THU_MUC_EXCHANGE), chrono::Local::now().fixed_offset(), phien_ban);
+    }
+}
+
+fn ghi_ban_thoat_vao(dir: &Path, now: DateTime<FixedOffset>, phien_ban: &str) -> bool {
+    let mut v = trang_thai_ban(&[], false, Some("app đã thoát".into()), now, phien_ban);
+    v["ban"] = serde_json::Value::Bool(false);
+    ghi_file_ban(dir, &v)
+}
+
+/// Chạy ở luồng chặn: cập nhật phiếu + ghi đĩa (+ dọn hằng ngày, + file bận).
+async fn nhip_nen(
+    dc: &Arc<DayChuyen>,
+    queue: &Arc<crate::queue::QueueManager>,
+    history: &Arc<crate::history_store::HistoryStore>,
+    dir: PathBuf,
+    don: bool,
+    ban: Option<(bool, String)>,
+) {
+    let (dc, queue, history) = (dc.clone(), queue.clone(), history.clone());
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let now = chrono::Local::now().fixed_offset();
+        if don {
+            dc.don_hang_ngay(&dir, now);
+        }
+        dc.cap_nhat(&queue, &history);
+        dc.ghi_xuong_dia(&dir);
+        if let Some((lich_bat, phien_ban)) = ban {
+            let v = dc.trang_thai_ban_hien_tai(&queue.list(), lich_bat, now, &phien_ban);
+            ghi_file_ban(Path::new(THU_MUC_EXCHANGE), &v);
+        }
+    })
+    .await;
 }
 
 /// Thư mục đích (đúng `resolve_watch_folder`) + tên kênh đích của các kênh
@@ -817,8 +1001,9 @@ pub fn ten_dich_cua(c: &crate::models::WatchedChannel) -> String {
         .unwrap_or_else(|| c.url.clone())
 }
 
-/// Vòng Lịch tải — chạy CẠNH `watcher::spawn_monitor`. Công tắc tắt thì vòng
-/// không làm gì (không ghi phiếu, không ghi file bận).
+/// Vòng Lịch tải — chạy CẠNH `watcher::spawn_monitor`. File trạng thái bận,
+/// cập nhật/đóng phiếu đang mở và dọn hằng ngày chạy LUÔN; chỉ việc MỞ lượt
+/// quét mới cần công tắc `lich_tai_enabled` (mặc định TẮT).
 pub fn spawn_scheduler(
     app: tauri::AppHandle,
     store: Arc<crate::watchlist_store::WatchlistStore>,
@@ -830,20 +1015,24 @@ pub fn spawn_scheduler(
     tauri::async_runtime::spawn(async move {
         // Như vòng theo dõi cũ: chờ hàng đợi khôi phục xong rồi mới chạy.
         tokio::time::sleep(Duration::from_secs(60)).await;
-        let mut don_luc_dau = false;
+        let mut ngay_don: Option<chrono::NaiveDate> = None;
         let mut lan_ghi_ban = std::time::Instant::now() - Duration::from_secs(3600);
         let phien_ban = app.package_info().version.to_string();
         loop {
             let s = settings.get();
+            let now = chrono::Local::now().fixed_offset();
+            let don = ngay_don != Some(now.date_naive());
+            if don {
+                ngay_don = Some(now.date_naive());
+            }
+            let ban = if lan_ghi_ban.elapsed() >= Duration::from_secs(60) {
+                lan_ghi_ban = std::time::Instant::now();
+                Some((s.lich_tai_enabled, phien_ban.clone()))
+            } else {
+                None
+            };
+            nhip_nen(&dc, &queue, &history, thu_muc_phieu(&s), don, ban).await;
             if s.lich_tai_enabled {
-                if !don_luc_dau {
-                    don_luc_dau = true;
-                    let dir = thu_muc_phieu(&s);
-                    don_tmp_mo_coi(&dir);
-                    don_phieu_cu(&dir, chrono::Local::now().date_naive());
-                }
-                dc.cap_nhat(&queue, &history, &s);
-                let now = chrono::Local::now().fixed_offset();
                 let cho_o = dc
                     .kiem_o_lai_luc
                     .lock()
@@ -858,21 +1047,25 @@ pub fn spawn_scheduler(
                         (app.clone(), store.clone(), queue.clone(), settings.clone(), history.clone(), dc.clone());
                     tauri::async_runtime::spawn(async move {
                         chay_ngay(&app, &store, &queue, &settings, &history, &dc).await;
-                        dat_dot_dang_chay(None);
                         *dc.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
                         dc.dang_quet.store(false, std::sync::atomic::Ordering::SeqCst);
                     });
-                }
-                if lan_ghi_ban.elapsed() >= Duration::from_secs(60) {
-                    lan_ghi_ban = std::time::Instant::now();
-                    let ly_do = dc.lock().ly_do_chan.clone();
-                    let v = trang_thai_ban(&queue.list(), dc.co_dot_mo(), ly_do, chrono::Local::now().fixed_offset(), &phien_ban);
-                    ghi_file_ban(Path::new(THU_MUC_EXCHANGE), &v);
                 }
             }
             tokio::time::sleep(Duration::from_secs(15)).await;
         }
     });
+}
+
+/// Có lượt quét tay / nhịp cũ đang chạy dở → chờ nó xong rồi mới quét nhóm
+/// (khỏi vướng khoá `CHECKING` 10 phút). Tối đa 30 phút rồi đi tiếp —
+/// `check_channel` vẫn tự chờ khoá từng kênh như mọi lượt.
+async fn cho_luot_quet_khac() {
+    let mut waited = 0u32;
+    while crate::watcher::co_luot_quet_khac() && waited < 900 {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        waited += 1;
+    }
 }
 
 /// 1 lượt Lịch tải trong ngày: kiểm tra ổ → quét LẦN LƯỢT từng nhóm (mỗi nhóm
@@ -887,15 +1080,13 @@ async fn chay_ngay(
     history: &Arc<crate::history_store::HistoryStore>,
     dc: &Arc<DayChuyen>,
 ) {
+    // Cờ chặn quét tay bật NGAY từ bước kiểm ổ, giữ liền tới hết nhóm cuối.
+    let co = CoChay::bat("chuẩn bị (kiểm tra ổ đĩa)".into());
     let s = settings.get();
     let now = chrono::Local::now().fixed_offset();
     let dir = thu_muc_phieu(&s);
-    {
-        let mut st = dc.lock();
-        vao_ngay(&mut st, now);
-        // Ghi sổ TRONG khoá: 2 nhịp không ghi chồng cùng file tạm.
-        dc.luu(&st);
-    }
+    vao_ngay(&mut dc.lock(), now);
+    dc.danh_dau_doi();
     // #20: ổ trống trước khi mở đợt.
     let folders: Vec<PathBuf> = s
         .lich_tai_nhom
@@ -904,28 +1095,30 @@ async fn chay_ngay(
         .map(|(f, _)| PathBuf::from(f))
         .collect();
     if let Some(ly_do) = kiem_tra_o_dia(&folders, &dung_luong_trong) {
-        let mut st = dc.lock();
-        if st.ly_do_chan.as_deref() != Some(ly_do.as_str()) {
-            log_mot_lan(&format!("o-dia-{}", now.format("%Y%m%d")), &format!("[daychuyen] {ly_do}"));
+        {
+            let mut st = dc.lock();
+            if st.ly_do_chan.as_deref() != Some(ly_do.as_str()) {
+                log_mot_lan(&format!("o-dia-{}", now.format("%Y%m%d")), &format!("[daychuyen] {ly_do}"));
+            }
+            st.ly_do_chan = Some(ly_do.clone());
+            DayChuyen::them_canh_bao(&mut st, format!("o-dia-{}", now.format("%Y%m%d")), ly_do, now);
         }
-        st.ly_do_chan = Some(ly_do.clone());
-        DayChuyen::them_canh_bao(&mut st, format!("o-dia-{}", now.format("%Y%m%d")), ly_do, now);
-        // Ghi sổ TRONG khoá: 2 nhịp không ghi chồng cùng file tạm.
-        dc.luu(&st);
+        dc.danh_dau_doi();
         *dc.kiem_o_lai_luc.lock().unwrap_or_else(|e| e.into_inner()) =
             Some(std::time::Instant::now() + Duration::from_secs(600));
+        nhip_nen(dc, queue, history, dir, false, None).await;
         return;
     }
     dc.lock().ly_do_chan = None;
     let con_lai = nhom_can_quet(&s.lich_tai_nhom, &dc.lock().nhom_da_quet);
     for nhom in &con_lai {
         if !settings.get().lich_tai_enabled {
-            return; // anh tắt giữa chừng → dừng sau nhóm đang chạy
+            break; // anh tắt giữa chừng → dừng sau nhóm đang chạy
         }
         let now = chrono::Local::now().fixed_offset();
         let dot_id = {
             let mut st = dc.lock();
-            let id = match tim_dot_hom_nay(&mut st, nhom, now) {
+            match tim_dot_hom_nay(&mut st, nhom, now) {
                 Some(d) => d.phieu.dot_id.clone(),
                 None => {
                     let mut da_co: Vec<String> = st.dot.iter().map(|d| d.phieu.dot_id.clone()).collect();
@@ -936,20 +1129,19 @@ async fn chay_ngay(
                         }));
                     }
                     let d = mo_dot(dot_id_moi(&now.format("%Y%m%d").to_string(), &da_co), nhom, now, s.lich_tai_han_chot_gio);
-                    DayChuyen::ghi_phieu(&dir, &d);
                     let id = d.phieu.dot_id.clone();
                     st.dot.push(d);
                     id
                 }
-            };
-            // Ghi sổ TRONG khoá: 2 nhịp không ghi chồng cùng file tạm.
-            dc.luu(&st);
-            id
+            }
         };
-        dat_dot_dang_chay(Some(format!("{dot_id} ({})", ten_nhom_hien_thi(nhom))));
+        dc.danh_dau_doi();
+        co.doi(format!("{dot_id} ({})", ten_nhom_hien_thi(nhom)));
+        nhip_nen(dc, queue, history, dir.clone(), false, None).await;
+        cho_luot_quet_khac().await;
         let sink: JobSink = Arc::default();
         let thu_muc: Vec<String> = thu_muc_cua_nhom(store, &s, Some(nhom)).into_iter().map(|(f, _)| f).collect();
-        *dc.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some((dot_id.clone(), sink.clone(), thu_muc.clone()));
+        *dc.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some((dot_id.clone(), sink.clone()));
         let fut = crate::watcher::check_all_with(app, store, queue, settings, history, Some(nhom.clone()), Some(sink.clone()));
         tokio::pin!(fut);
         // Trong lúc quét: 2 giây rút job ra phiếu 1 lần (app bị giết giữa
@@ -957,26 +1149,31 @@ async fn chay_ngay(
         loop {
             tokio::select! {
                 _ = &mut fut => break,
-                _ = tokio::time::sleep(Duration::from_secs(2)) => dc.cap_nhat(queue, history, &settings.get()),
+                _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                    nhip_nen(dc, queue, history, dir.clone(), false, None).await;
+                }
             }
         }
-        dc.cap_nhat(queue, history, &settings.get());
+        nhip_nen(dc, queue, history, dir.clone(), false, None).await;
         *dc.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        let mut st = dc.lock();
-        if let Some(d) = st.dot.iter_mut().find(|d| d.phieu.dot_id == dot_id) {
-            chot_quet(d, &thu_muc);
-            DayChuyen::ghi_phieu(&dir, d);
+        {
+            let mut st = dc.lock();
+            if let Some(d) = st.dot.iter_mut().find(|d| d.phieu.dot_id == dot_id) {
+                chot_quet(d, &thu_muc);
+            }
+            if !st.nhom_da_quet.contains(nhom) {
+                st.nhom_da_quet.push(nhom.clone());
+            }
         }
-        if !st.nhom_da_quet.contains(nhom) {
-            st.nhom_da_quet.push(nhom.clone());
-        }
-        // Ghi sổ TRONG khoá: 2 nhịp không ghi chồng cùng file tạm.
-        dc.luu(&st);
+        dc.danh_dau_doi();
+        nhip_nen(dc, queue, history, dir.clone(), false, None).await;
     }
-    let mut st = dc.lock();
-    st.xong_ngay = true;
-    // Ghi sổ TRONG khoá: 2 nhịp không ghi chồng cùng file tạm.
-    dc.luu(&st);
+    if settings.get().lich_tai_enabled {
+        dc.lock().xong_ngay = true;
+        dc.danh_dau_doi();
+    }
+    nhip_nen(dc, queue, history, dir, false, None).await;
+    drop(co);
 }
 
 // ───────────────────────── test ─────────────────────────
@@ -1192,11 +1389,28 @@ mod tests {
         s.lich_tai_enabled = true;
         assert!(!nhip_cu_duoc_chay(&s), "không chạy cả hai");
         assert!(s.watch_auto_enabled, "giá trị của anh giữ nguyên");
-        // #25: nhịp cũ tối thiểu 30 phút.
+    }
+
+    // ── Sửa 1 (S1): Lịch TẮT = y như cũ — giữ khoảng 1–1440, < 30 chỉ cảnh báo ──
+    #[test]
+    fn s1_nhip_cu_giu_khoang_cu_duoi_30_phut_chi_canh_bao() {
+        let mut s = Settings::default();
+        s.watch_auto_enabled = true;
         s.watch_interval_min = 1;
-        assert_eq!(nhip_cu_phut(&s), 30);
-        s.watch_interval_min = 90;
-        assert_eq!(nhip_cu_phut(&s), 90);
+        assert_eq!(nhip_cu_phut(&s), 1, "không ép lên 30 phút");
+        assert!(nhip_cu_qua_day(&s), "nhịp < 30 phút thì cảnh báo");
+        s.watch_interval_min = 0;
+        assert_eq!(nhip_cu_phut(&s), 1);
+        s.watch_interval_min = 5000;
+        assert_eq!(nhip_cu_phut(&s), 1440);
+        s.watch_interval_min = 30;
+        assert!(!nhip_cu_qua_day(&s));
+        s.watch_interval_min = 1;
+        s.lich_tai_enabled = true;
+        assert!(!nhip_cu_qua_day(&s), "Lịch bật thì nhịp cũ nghỉ — không cảnh báo");
+        s.lich_tai_enabled = false;
+        s.watch_auto_enabled = false;
+        assert!(!nhip_cu_qua_day(&s), "nhịp cũ tắt — không cảnh báo");
     }
 
     #[test]
@@ -1467,6 +1681,182 @@ mod tests {
         DayChuyen::them_canh_bao(&mut st, "o-dia-20261104".into(), ly_do.clone(), t(MO));
         DayChuyen::them_canh_bao(&mut st, "o-dia-20261104".into(), ly_do, t(MO));
         assert_eq!(st.canh_bao.len(), 1);
+    }
+
+
+    fn dc_tam(ten: &str) -> (PathBuf, Arc<DayChuyen>) {
+        let d = tmp_dir(ten);
+        let dc = DayChuyen::load(&d);
+        (d, dc)
+    }
+
+    // ── Sửa 2 (S2): file bận ghi LUÔN, không phụ thuộc công tắc Lịch ──
+    #[test]
+    fn s2_file_ban_khong_phu_thuoc_lich_tai_va_thoat_em_ghi_ban_false() {
+        let (d, dc) = dc_tam("s2");
+        dc.lock().ly_do_chan = Some("ổ đầy".into());
+        let dang = [item("a", DownloadState::Downloading, None, None)];
+        // Lịch TẮT: vẫn có nội dung đúng (bận vì đang tải), không kèm lý do chặn cũ.
+        let v = dc.trang_thai_ban_hien_tai(&dang, false, t(MO), "x");
+        assert_eq!((v["ban"].as_bool(), v["ly_do"].is_null()), (Some(true), true));
+        let v = dc.trang_thai_ban_hien_tai(&dang, true, t(MO), "x");
+        assert_eq!(v["ly_do"], "ổ đầy");
+        // Tắt Lịch lúc đang chạy: nhịp sau ghi theo hàng thật → không kẹt `ban=true` cũ.
+        assert!(ghi_file_ban(&d, &dc.trang_thai_ban_hien_tai(&dang, true, t(MO), "x")));
+        assert!(ghi_file_ban(&d, &dc.trang_thai_ban_hien_tai(&[], false, t(MO), "x")));
+        let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(d.join(TEN_FILE_BAN)).unwrap()).unwrap();
+        assert_eq!(doc["ban"], false);
+        // Thoát êm: ghi ban=false dù Lịch đang tắt.
+        assert!(ghi_file_ban(&d, &dc.trang_thai_ban_hien_tai(&dang, false, t(MO), "x")));
+        assert!(ghi_ban_thoat_vao(&d, t(MO), "x"));
+        let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(d.join(TEN_FILE_BAN)).unwrap()).unwrap();
+        assert_eq!(doc["ban"], false);
+        assert_eq!(doc["ly_do"], "app đã thoát");
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // ── Sửa 3 (S3): Lịch đã tắt — phiếu đang mở vẫn cập nhật + tự đóng het_han ──
+    #[test]
+    fn s3_phieu_dang_mo_van_dong_het_han_khi_lich_da_tat() {
+        let (d, dc) = dc_tam("s3");
+        let dir = d.join("dot");
+        {
+            let mut st = dc.lock();
+            let mut dot = mo_dot("20261104-01".into(), "A", t(MO), 3);
+            them_job(&mut dot, &job("a", r"D:\v\kênh 1"));
+            chot_quet(&mut dot, &[]);
+            st.dot.push(dot);
+        }
+        // `cap_nhat_voi`/`ghi_xuong_dia` không nhận công tắc Lịch → chạy y như nhau.
+        dc.cap_nhat_voi(&|_| QuanSat::DangTai, &khong_size, t("2026-11-04T07:00:00+07:00"));
+        assert_eq!(dc.ghi_xuong_dia(&dir), 0);
+        assert!(dc.co_dot_mo());
+        dc.cap_nhat_voi(&|_| QuanSat::DangTai, &khong_size, t("2026-11-04T09:00:12+07:00"));
+        assert_eq!(dc.ghi_xuong_dia(&dir), 0);
+        let p: PhieuTai = serde_json::from_slice(&std::fs::read(dir.join("20261104-01.json")).unwrap()).unwrap();
+        assert_eq!((p.trang_thai.as_str(), p.ly_do_dong.as_deref()), ("da_dong", Some("het_han")));
+        assert_eq!(p.kenh[0].video[0].trang_thai, "tre");
+        assert!(!dc.co_dot_mo());
+        // Sổ cũng được lưu: mở lại app thấy phiếu đã đóng.
+        let dc2 = DayChuyen::load(&d);
+        assert!(!dc2.snapshot().dot[0].dang_mo());
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // ── Sửa 4 (S4): ghi phiếu lỗi → đánh dấu bẩn, nhịp sau ghi lại (cả lần đóng) ──
+    #[test]
+    fn s4_ghi_phieu_loi_thi_ghi_lai_o_nhip_sau_ke_ca_lan_dong() {
+        let (d, dc) = dc_tam("s4");
+        let hong = d.join("khong-phai-thu-muc");
+        std::fs::write(&hong, b"x").unwrap(); // "thư mục" phiếu thực ra là FILE → ghi hỏng
+        {
+            let mut st = dc.lock();
+            let mut dot = mo_dot("20261104-01".into(), "A", t(MO), 3);
+            them_job(&mut dot, &job("a", r"D:\v\kênh 1"));
+            chot_quet(&mut dot, &[]);
+            st.dot.push(dot);
+        }
+        let xong = |_: &str| QuanSat::Xong { path: Some(r"D:\v\kênh 1\a.mp4".into()), luc: None };
+        dc.cap_nhat_voi(&xong, &khong_size, t("2026-11-04T06:10:00+07:00"));
+        assert_eq!(dc.snapshot().dot[0].phieu.ly_do_dong.as_deref(), Some("xong"), "đã đóng trong sổ");
+        assert_eq!(dc.ghi_xuong_dia(&hong), 1, "lần ghi đóng phiếu lỗi");
+        assert!(dc.snapshot().dot[0].can_ghi, "giữ cờ bẩn");
+        assert_eq!(dc.ghi_xuong_dia(&hong), 1, "vẫn lỗi thì vẫn giữ");
+        // Đĩa hết lỗi: nhịp sau ghi lại dù phiếu đã ĐÓNG và không đổi gì thêm.
+        std::fs::remove_file(&hong).unwrap();
+        assert_eq!(dc.ghi_xuong_dia(&hong), 0);
+        let p: PhieuTai = serde_json::from_slice(&std::fs::read(hong.join("20261104-01.json")).unwrap()).unwrap();
+        assert_eq!(p.ly_do_dong.as_deref(), Some("xong"));
+        assert!(!dc.snapshot().dot[0].can_ghi);
+        // Ghi xong rồi thì nhịp sau không ghi lại vô ích.
+        let truoc = std::fs::metadata(hong.join("20261104-01.json")).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        dc.ghi_xuong_dia(&hong);
+        assert_eq!(std::fs::metadata(hong.join("20261104-01.json")).unwrap().modified().unwrap(), truoc);
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // ── Sửa 5 (S5): cờ chặn liền mạch từ kiểm ổ tới hết nhóm cuối ──
+    #[test]
+    fn s5_co_chan_quet_tay_lien_mach_va_tu_go_khi_xong() {
+        assert_eq!(dot_dang_chay(), None);
+        {
+            let co = CoChay::bat("chuẩn bị (kiểm tra ổ đĩa)".into());
+            assert!(dot_dang_chay().is_some(), "chặn ngay từ bước kiểm ổ");
+            co.doi("20261104-01 (A)".into());
+            assert_eq!(dot_dang_chay().as_deref(), Some("20261104-01 (A)"));
+            co.doi("20261104-02 (B)".into());
+            assert!(dot_dang_chay().is_some(), "giữa 2 nhóm không có khe None");
+        }
+        assert_eq!(dot_dang_chay(), None, "hết lượt (kể cả return sớm) là gỡ");
+        // Phía chờ lượt quét khác: xem test `luot_quet_khac_dem_ca_check_all_lan_khoa_tung_kenh` (watcher).
+    }
+
+    // ── Sửa 6: `xong` chỉ khi có output_path ──
+    #[test]
+    fn sua6_xong_chi_khi_co_output_path() {
+        let mut d = mo_dot("20261104-01".into(), "A", t(MO), 3);
+        them_job(&mut d, &job("a", r"D:\v\kênh 1"));
+        chot_quet(&mut d, &[]);
+        let chua = |_: &str| QuanSat::Xong { path: None, luc: None };
+        cap_nhat_dot(&mut d, &chua, &khong_size, t(MO));
+        assert_eq!(d.phieu.kenh[0].video[0].trang_thai, "dang_tai");
+        assert!(d.dang_mo() && !d.jobs[0].cuoi, "chưa có tên file cuối thì chưa xong");
+        let co = |_: &str| QuanSat::Xong { path: Some(r"D:\v\kênh 1\Tên thật.mp4".into()), luc: None };
+        cap_nhat_dot(&mut d, &co, &khong_size, t(MO));
+        assert_eq!(d.phieu.kenh[0].video[0].trang_thai, "xong");
+        assert_eq!(d.phieu.kenh[0].video[0].file.as_deref(), Some("Tên thật.mp4"));
+    }
+
+    // ── Sửa 7: dọn hằng ngày (tmp mồ côi + phiếu 14 ngày) qua `don_hang_ngay` ──
+    #[test]
+    fn sua7_don_hang_ngay_tmp_va_phieu_cu() {
+        let (d, dc) = dc_tam("sua7");
+        let dir = d.join("dot");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("20261001-01.json"), b"{}").unwrap();
+        std::fs::write(dir.join("20261104-01.json.tmp"), b"{").unwrap();
+        dc.don_hang_ngay(&dir, t(MO));
+        assert!(!dir.join("20261001-01.json").exists() && !dir.join("20261104-01.json.tmp").exists());
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // ── Sửa 9: sổ lich_tai.json hỏng → không để phiếu `dang_tai` mồ côi ──
+    #[test]
+    fn sua9_so_hong_thi_dong_phieu_mo_coi_het_han() {
+        let d = tmp_dir("sua9");
+        let dir = d.join("dot");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut a = mo_dot("20261104-01".into(), "A", t(MO), 3);
+        them_job(&mut a, &job("x", r"D:\v\kênh 1"));
+        std::fs::write(dir.join("20261104-01.json"), serde_json::to_vec(&a.phieu).unwrap()).unwrap();
+        let mut b = mo_dot("20261104-02".into(), "B", t(MO), 3);
+        chot_quet(&mut b, &[]);
+        dong(&mut b, "xong", t(MO));
+        std::fs::write(dir.join("20261104-02.json"), serde_json::to_vec(&b.phieu).unwrap()).unwrap();
+        std::fs::write(dir.join("20261104-03.json"), b"{ hong").unwrap();
+        std::fs::write(d.join("lich_tai.json"), b"{\"ngay\": [hong").unwrap();
+        let dc = DayChuyen::load(&d);
+        assert_eq!(dc.snapshot(), TrangThaiLich::default(), "sổ hỏng → chạy với sổ rỗng");
+        assert!(d.join("lich_tai.json.hong").exists(), "cất bản hỏng");
+        let now = t("2026-11-04T07:00:00+07:00");
+        dc.don_hang_ngay(&dir, now);
+        let pa: PhieuTai = serde_json::from_slice(&std::fs::read(dir.join("20261104-01.json")).unwrap()).unwrap();
+        assert_eq!((pa.trang_thai.as_str(), pa.ly_do_dong.as_deref()), ("da_dong", Some("het_han")));
+        assert_eq!(pa.kenh[0].video[0].trang_thai, "tre");
+        assert!(pa.seq > a.phieu.seq);
+        let pb: PhieuTai = serde_json::from_slice(&std::fs::read(dir.join("20261104-02.json")).unwrap()).unwrap();
+        assert_eq!(pb, b.phieu, "phiếu đã đóng không bị sửa");
+        assert_eq!(std::fs::read(dir.join("20261104-03.json")).unwrap(), b"{ hong", "không ghi đè thứ đọc không ra");
+        // Phiếu sổ CÒN biết (đang theo dõi) thì không bị đóng nhầm.
+        let mut c = mo_dot("20261104-04".into(), "C", t(MO), 3);
+        c.can_ghi = false;
+        std::fs::write(dir.join("20261104-04.json"), serde_json::to_vec(&c.phieu).unwrap()).unwrap();
+        dc.lock().dot.push(c);
+        dc.don_hang_ngay(&dir, now);
+        let pc: PhieuTai = serde_json::from_slice(&std::fs::read(dir.join("20261104-04.json")).unwrap()).unwrap();
+        assert_eq!(pc.trang_thai, "dang_tai");
+        std::fs::remove_dir_all(d).ok();
     }
 
     #[cfg(windows)]

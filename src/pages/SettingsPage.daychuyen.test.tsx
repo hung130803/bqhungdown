@@ -60,4 +60,14 @@ describe("Dây chuyền tự động — Cài đặt", () => {
     render(<DayChuyenSection settings={{ ...GÓI_RUST, lichTaiEnabled: true, watchAutoEnabled: true }} onPatch={vi.fn()} />);
     expect(screen.getByRole("note")).toHaveTextContent("TẠM NGHỈ");
   });
+
+  it("nhịp cũ < 30 phút chỉ CẢNH BÁO, không tự đổi giá trị (#25)", () => {
+    const onPatch = vi.fn();
+    render(<DayChuyenSection settings={{ ...GÓI_RUST, watchAutoEnabled: true, watchIntervalMin: 1 }} onPatch={onPatch} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("1 phút");
+    expect(onPatch).not.toHaveBeenCalled();
+    cleanup();
+    render(<DayChuyenSection settings={{ ...GÓI_RUST, watchAutoEnabled: true, watchIntervalMin: 30 }} onPatch={vi.fn()} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });
