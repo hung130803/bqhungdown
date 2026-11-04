@@ -268,7 +268,7 @@ export function SettingsPage() {
         onChange={v => set("minimizeToTray", v)}
       />
 
-      <DayChuyenSection settings={settings} onPatch={p => void update(p)} />
+      <DayChuyenSection settings={settings} onPatch={p => update(p)} api={DAYCHUYEN_API} />
 
       <Field label="Bị giới hạn tốc độ → tự tải lại sau (phút)">
         <input
@@ -670,7 +670,109 @@ function SiteCookieRow({
 
 /** DÂY CHUYỀN TỰ ĐỘNG (04/11/2026): Lịch tải + mở cùng Windows. Mọi công tắc
  *  mặc định TẮT. Thứ tự nhóm ở đây = thứ tự tải (nhóm trước về trước). */
-export function DayChuyenSection({ settings, onPatch }: { settings: Settings; onPatch: (p: Partial<Settings>) => void }) {
+/** Nút điều khiển Lịch tải — CÙNG lệnh với nút trên bot. */
+export type DayChuyenApi = {
+  status: () => Promise<cmd.DayChuyenStatus | null>;
+  chayNgay: () => Promise<string>;
+  dung: (huyJob: boolean) => Promise<string>;
+  boQua: () => Promise<string>;
+};
+
+export const DAYCHUYEN_API: DayChuyenApi = {
+  status: cmd.daychuyenStatus,
+  chayNgay: cmd.daychuyenRunNow,
+  dung: cmd.daychuyenStop,
+  boQua: cmd.daychuyenSkipToday,
+};
+
+/** "2026-11-05T06:00:00+07:00" → "06:00 05/11" (giờ máy, đúng chuỗi app trả). */
+function gioNgay(iso: string | null | undefined): string {
+  if (!iso || iso.length < 16) return "—";
+  return `${iso.slice(11, 16)} ${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+}
+
+export function DieuKhienLich({ api }: { api: DayChuyenApi }) {
+  const [st, setSt] = useState<cmd.DayChuyenStatus | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [ban, setBan] = useState(false);
+  const [hoiDung, setHoiDung] = useState(false);
+  const [huyJob, setHuyJob] = useState(false);
+  // Ref (không phải state): 2 cú bấm trong cùng 1 nhịp render vẫn chỉ chạy 1 lần.
+  const dangLam = useRef(false);
+  const tai = () => api.status().then(v => setSt(v)).catch(() => {});
+  useEffect(() => {
+    void tai();
+    const id = setInterval(() => void tai(), 15000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api]);
+  const lam = async (fn: () => Promise<string>) => {
+    if (dangLam.current) return;
+    dangLam.current = true;
+    setBan(true);
+    setMsg(null);
+    try {
+      setMsg(await fn());
+    } catch (e) {
+      setMsg(`Không làm được: ${formatError(e)}`);
+    } finally {
+      dangLam.current = false;
+      setBan(false);
+      setHoiDung(false);
+      void tai();
+    }
+  };
+  const mo = (st?.dots ?? []).filter(d => d.trangThai === "dang_tai");
+  const nut = "px-3 py-1.5 rounded-md bg-surface-2 border border-border text-sm text-fg disabled:opacity-50";
+  return (
+    <div className="space-y-2 rounded-md bg-surface-2/40 p-2">
+      {st && (
+        <ul className="text-xs text-fg space-y-0.5" aria-label="Tình trạng Lịch tải">
+          <li>Đang làm: {st.dangChay ? `${st.dangChay}${st.dangDung ? " — đang dừng (chờ nhóm đang quét xong)" : ""}` : "không"}</li>
+          <li>Lần chạy tới: {st.lanToi ? gioNgay(st.lanToi) : "— (Lịch tắt)"}{st.boQuaHomNay ? " · hôm nay đã bỏ qua" : ""}</li>
+          {st.lyDoHoan && <li>Lý do hoãn gần nhất: {st.lyDoHoan}</li>}
+          <li>Đợt đang mở: {mo.length ? mo.map(d => `${d.dotId} (${d.nhom}: ${d.xong}/${d.video} xong)`).join("; ") : "không"}</li>
+          <li>Video trễ hôm nay: {st.tre}</li>
+          {st.vanDe.map(v => <li key={v.loai} className="text-warning">⚠ {v.text}</li>)}
+        </ul>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={nut} disabled={ban} onClick={() => void lam(api.chayNgay)}>▶ Chạy ngay</button>
+        <button type="button" className={nut} disabled={ban} onClick={() => setHoiDung(true)}>⏹ Dừng lượt…</button>
+        <button type="button" className={nut} disabled={ban} onClick={() => void lam(api.boQua)}>⏭ Bỏ qua hôm nay</button>
+      </div>
+      {hoiDung && (
+        <div className="space-y-1 rounded border border-border p-2 text-xs text-fg">
+          <p>Dừng lượt Lịch tải? Nhóm đang quét xong thì dừng, không xếp nhóm sau; phiếu đợt ghi «huy». File đang tải không bị đụng.</p>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={huyJob} onChange={e => setHuyJob(e.target.checked)} />
+            Huỷ luôn job của đợt chưa bắt đầu tải
+          </label>
+          <div className="flex gap-2">
+            <button type="button" className={nut} disabled={ban} onClick={() => void lam(() => api.dung(huyJob))}>Xác nhận dừng</button>
+            <button type="button" className={nut} onClick={() => setHoiDung(false)}>Thôi</button>
+          </div>
+        </div>
+      )}
+      {msg && <p aria-live="polite" className="text-xs text-fg">{msg}</p>}
+    </div>
+  );
+}
+
+export function DayChuyenSection({ settings, onPatch, api }: {
+  settings: Settings;
+  onPatch: (p: Partial<Settings>) => void | Promise<unknown>;
+  api?: DayChuyenApi;
+}) {
+  const [loiLuu, setLoiLuu] = useState<string | null>(null);
+  // Lưu bị app từ chối (giờ sai, bật khi chưa có nhóm…) → hiện lý do, không nuốt lỗi.
+  const gui = (p: Partial<Settings>) => {
+    setLoiLuu(null);
+    const r = onPatch(p);
+    if (r && typeof (r as Promise<unknown>).catch === "function") {
+      (r as Promise<unknown>).catch(e => setLoiLuu(formatError(e)));
+    }
+  };
   const chon = settings.lichTaiNhom ?? [];
   const tatCa = ["", ...(settings.watchGroups ?? [])];
   const conLai = tatCa.filter(g => !chon.includes(g));
@@ -679,7 +781,7 @@ export function DayChuyenSection({ settings, onPatch }: { settings: Settings; on
     if (j < 0 || j >= chon.length) return;
     const next = [...chon];
     [next[i], next[j]] = [next[j], next[i]];
-    onPatch({ lichTaiNhom: next });
+    gui({ lichTaiNhom: next });
   };
   const [gio, setGio] = useState(settings.lichTaiGio ?? "06:00");
   useEffect(() => setGio(settings.lichTaiGio ?? "06:00"), [settings.lichTaiGio]);
@@ -689,13 +791,17 @@ export function DayChuyenSection({ settings, onPatch }: { settings: Settings; on
       <Toggle
         label="Mở cùng Windows (thu nhỏ xuống khay)"
         checked={settings.moCungWindows ?? false}
-        onChange={v => onPatch({ moCungWindows: v })}
+        onChange={v => gui({ moCungWindows: v })}
       />
       <Toggle
         label="Bật Lịch tải — mỗi ngày tự tải lần lượt từng nhóm"
         checked={settings.lichTaiEnabled ?? false}
-        onChange={v => onPatch({ lichTaiEnabled: v })}
+        onChange={v => gui({ lichTaiEnabled: v })}
       />
+      {chon.length === 0 && (
+        <p className="text-xs text-warning">Chưa chọn nhóm nào bên dưới — chưa bật được Lịch tải.</p>
+      )}
+      {api && <DieuKhienLich api={api} />}
       {settings.lichTaiEnabled && settings.watchAutoEnabled && (
         <p role="note" className="text-xs text-warning">
           Nhịp quét nền cũ đang TẠM NGHỈ vì Lịch tải đang bật (không chạy cả hai).
@@ -712,7 +818,11 @@ export function DayChuyenSection({ settings, onPatch }: { settings: Settings; on
           aria-label="Giờ bắt đầu Lịch tải"
           value={gio}
           onChange={e => setGio(e.target.value)}
-          onBlur={() => { if (/^\d{2}:\d{2}$/.test(gio) && gio !== settings.lichTaiGio) onPatch({ lichTaiGio: gio }); }}
+          onBlur={() => {
+            if (gio === settings.lichTaiGio) return;
+            if (/^\d{2}:\d{2}$/.test(gio)) gui({ lichTaiGio: gio });
+            else setLoiLuu("Giờ bắt đầu sai định dạng — nhập dạng HH:MM, ví dụ 06:00.");
+          }}
           className="px-3 py-2 rounded-md bg-surface border border-border text-fg"
         />
       </Field>
@@ -724,7 +834,7 @@ export function DayChuyenSection({ settings, onPatch }: { settings: Settings; on
           value={settings.lichTaiHanChotGio ?? 3}
           onChange={e => {
             const n = parseInt(e.target.value, 10);
-            if (Number.isFinite(n) && n >= 1 && n <= 24) onPatch({ lichTaiHanChotGio: n });
+            if (Number.isFinite(n) && n >= 1 && n <= 24) gui({ lichTaiHanChotGio: n });
           }}
           className="w-24 px-3 py-2 rounded-md bg-surface border border-border text-fg"
         />
@@ -738,14 +848,14 @@ export function DayChuyenSection({ settings, onPatch }: { settings: Settings; on
               <span className="flex-1">{ten(g)}</span>
               <button type="button" aria-label={`Đưa ${ten(g)} lên`} onClick={() => doiCho(i, i - 1)} className="px-2 rounded bg-surface-2 border border-border">↑</button>
               <button type="button" aria-label={`Đưa ${ten(g)} xuống`} onClick={() => doiCho(i, i + 1)} className="px-2 rounded bg-surface-2 border border-border">↓</button>
-              <button type="button" aria-label={`Bỏ ${ten(g)}`} onClick={() => onPatch({ lichTaiNhom: chon.filter(x => x !== g) })} className="px-2 rounded bg-surface-2 border border-border">Bỏ</button>
+              <button type="button" aria-label={`Bỏ ${ten(g)}`} onClick={() => gui({ lichTaiNhom: chon.filter(x => x !== g) })} className="px-2 rounded bg-surface-2 border border-border">Bỏ</button>
             </li>
           ))}
         </ol>
         {conLai.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {conLai.map(g => (
-              <button type="button" key={`a-${g}`} onClick={() => onPatch({ lichTaiNhom: [...chon, g] })} className="px-2 py-1 rounded bg-surface-2 border border-border text-xs text-fg">
+              <button type="button" key={`a-${g}`} onClick={() => gui({ lichTaiNhom: [...chon, g] })} className="px-2 py-1 rounded bg-surface-2 border border-border text-xs text-fg">
                 + {ten(g)}
               </button>
             ))}
@@ -757,7 +867,7 @@ export function DayChuyenSection({ settings, onPatch }: { settings: Settings; on
           defaultValue={settings.daychuyenDir ?? ""}
           onBlur={e => {
             const v = e.target.value.trim();
-            if (v !== (settings.daychuyenDir ?? "")) onPatch({ daychuyenDir: v === "" ? null : v });
+            if (v !== (settings.daychuyenDir ?? "")) gui({ daychuyenDir: v === "" ? null : v });
           }}
           className="w-full px-3 py-2 rounded-md bg-surface border border-border text-fg"
         />
@@ -766,6 +876,7 @@ export function DayChuyenSection({ settings, onPatch }: { settings: Settings; on
         Phiếu đợt chỉ để báo cáo cho tool cắt — tool cắt vẫn cắt theo thư mục kể cả khi phiếu mất.
         Ổ chứa video dưới 30 GB (hoặc ổ C dưới 10 GB) thì không mở đợt mới và báo qua bot.
       </p>
+      {loiLuu && <p aria-live="polite" className="text-xs text-danger">Không lưu được: {loiLuu}</p>}
     </section>
   );
 }

@@ -52,7 +52,7 @@ use crate::ytdlp_runner::YtDlpRunner;
 /// THOÁT HẲN êm (dùng chung cho "Thoát hẳn" ở khay và lệnh đóng app từ bot):
 /// lưu hàng đợi + dừng lượt tải, tắt server PO token rồi mới thoát.
 pub fn quit_gracefully(app: &tauri::AppHandle) {
-    ghi_ban_khi_thoat(app);
+    daychuyen_khi_thoat(app);
     if let Some(q) = app.try_state::<Arc<QueueManager>>() {
         q.shutdown();
     }
@@ -66,8 +66,17 @@ pub fn quit_gracefully(app: &tauri::AppHandle) {
 
 /// Dây chuyền: thoát êm thì ghi file trạng thái bận lần cuối `ban=false`
 /// (luôn ghi — mục 12 giao kèo không phụ thuộc công tắc Lịch tải).
-fn ghi_ban_khi_thoat(app: &tauri::AppHandle) {
+/// Trước đó ghi NỐT phiếu đợt + sổ (job vừa xếp hàng chưa kịp vào phiếu) —
+/// gọi TRƯỚC `queue.shutdown()` (1b-D7).
+fn daychuyen_khi_thoat(app: &tauri::AppHandle) {
     if let Some(dc) = app.try_state::<Arc<crate::daychuyen::DayChuyen>>() {
+        if let (Some(q), Some(h), Some(s)) = (
+            app.try_state::<Arc<QueueManager>>(),
+            app.try_state::<Arc<HistoryStore>>(),
+            app.try_state::<Arc<SettingsStore>>(),
+        ) {
+            dc.thoat_em(&q, &h, &crate::daychuyen::thu_muc_phieu(&s.get()));
+        }
         dc.ghi_ban_khi_thoat(&app.package_info().version.to_string());
     }
 }
@@ -397,7 +406,7 @@ pub fn run() {
                 }
             }
             tauri::WindowEvent::Destroyed => {
-                ghi_ban_khi_thoat(window.app_handle());
+                daychuyen_khi_thoat(window.app_handle());
                 if let Some(queue) = window.try_state::<Arc<QueueManager>>() {
                     queue.shutdown();
                 }
@@ -478,6 +487,10 @@ pub fn run() {
             commands::set_watched_max_height,
             commands::check_watched_one,
             commands::download_more_today,
+            commands::daychuyen_status,
+            commands::daychuyen_run_now,
+            commands::daychuyen_stop,
+            commands::daychuyen_skip_today,
             commands::reconcile_watched,
             commands::archived_video_ids,
             commands::downloaded_title_keys,

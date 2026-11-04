@@ -92,3 +92,17 @@ export function hoiChuyenNhom(ten: string[], nhomMoi: string): string {
     + "Chỉ đổi NHÓM — không đụng tên kênh, thư mục lưu, hàng chờ hay video đã tải."
   );
 }
+
+/** Đổi tên (`moi` = tên mới) / xoá (`moi` = null) nhóm → danh sách nhóm của
+ *  Lịch tải theo kèm, GIỮ thứ tự (1b-D1). `null` = Lịch không có nhóm này,
+ *  khỏi lưu. Trước đây đổi tên nhóm thì Lịch vẫn giữ tên cũ → nhóm "biến mất". */
+export function lichSauDoiNhom(lich: string[] | undefined, cu: string, moi: string | null): string[] | null {
+  const ds = lich ?? [];
+  if (!ds.includes(cu)) return null;
+  const out: string[] = [];
+  for (const g of ds) {
+    const v = g === cu ? moi : g;
+    if (v !== null && !out.includes(v)) out.push(v);
+  }
+  return out;
+}

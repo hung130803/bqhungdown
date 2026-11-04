@@ -572,3 +572,79 @@ def guess_cookie_site(text: str, sites: dict[str, tuple[str, ...]]) -> str | Non
     if not best or best[0][1] == 0 or (len(best) > 1 and best[0][1] == best[1][1]):
         return None
     return best[0][0]
+
+
+# ───────────────────────── Lịch tải (dây chuyền, Đợt 1b) ─────────────────────────
+
+def nhom_ten(g: str | None) -> str:
+    return g or "Chưa phân nhóm"
+
+
+def gio_hien(iso: str | None, now: float | None = None) -> str:
+    """"06:00 hôm nay" / "06:00 ngày mai" / "06:00 ngày 07/11" (giờ của máy chạy app)."""
+    if not iso:
+        return "—"
+    try:
+        t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return iso
+    hom_nay = datetime.fromtimestamp(now if now is not None else time.time(), t.tzinfo).date()
+    d = (t.date() - hom_nay).days
+    ngay = "hôm nay" if d == 0 else "ngày mai" if d == 1 else f"ngày {t:%d/%m}"
+    return f"{t:%H:%M} {ngay}"
+
+
+def lich_text(d: dict, now: float | None = None) -> str:
+    """Tin trạng thái Lịch tải (bot TỰ SỬA tin này mỗi phút khi có thay đổi)."""
+    bat = bool(d.get("lichTaiEnabled"))
+    lines = [f"<b>🗓 Lịch tải: {'BẬT' if bat else 'TẮT'}</b> · bắt đầu <b>{esc(d.get('gio'))}</b>"
+             f" · hạn chót mỗi đợt <b>{esc(d.get('hanChotGio'))} giờ</b>"]
+    nhom = d.get("nhom") or []
+    da = set(d.get("nhomDaQuet") or [])
+    if nhom:
+        lines.append("📋 Thứ tự nhóm: " + " → ".join(("✅" if g in da else "") + esc(nhom_ten(g)) for g in nhom))
+    else:
+        lines.append("📋 Chưa chọn nhóm nào — chưa bật được (thêm nhóm: <code>/lich nhom A, B</code>).")
+    if d.get("dangChay"):
+        dung = " — <b>đang dừng</b> (chờ nhóm đang quét xong)" if d.get("dangDung") else ""
+        lines.append(f"⚙️ Đang làm: <b>{esc(d['dangChay'])}</b>{dung}")
+    else:
+        lines.append("⚙️ Đang làm: không")
+    lines.append("⏰ Lần chạy tới: " + (esc(gio_hien(d.get("lanToi"), now)) if d.get("lanToi") else "— (Lịch tắt)"))
+    if d.get("boQuaHomNay"):
+        lines.append("⏭ Hôm nay: đã bỏ qua")
+    if d.get("lyDoHoan"):
+        lines.append("ℹ️ Lý do hoãn gần nhất: " + esc(d["lyDoHoan"]))
+    mo = [x for x in d.get("dots") or [] if x.get("trangThai") == "dang_tai"]
+    if mo:
+        lines.append("📦 Đợt đang mở: " + "; ".join(
+            f"{esc(x.get('dotId'))} ({esc(x.get('nhom'))}: {x.get('xong', 0)}/{x.get('video', 0)} xong)" for x in mo))
+    else:
+        lines.append("📦 Đợt đang mở: không")
+    lines.append(f"🐢 Video trễ hôm nay: {d.get('tre', 0)}")
+    for v in d.get("vanDe") or []:
+        lines.append("⚠️ " + esc(v.get("text")))
+    return "\n".join(lines)
+
+
+def lich_markup(d: dict, tok: str) -> dict:
+    """Nút của bảng Lịch tải. `tok` = mã bảng: bấm nút trên bảng CŨ → báo hết hạn."""
+    p = f"lt:{tok}:"
+    bat = bool(d.get("lichTaiEnabled"))
+    rows = [
+        [("⏸ Tắt Lịch" if bat else "▶ Bật Lịch", p + ("off" if bat else "on")), ("▶ Chạy ngay", p + "chay")],
+        [("⏹ Dừng lượt…", p + "dung?"), ("⏭ Bỏ qua hôm nay", p + "boqua")],
+        [("🕐 −30 phút", p + "gio:-30"), ("🕐 +30 phút", p + "gio:30")],
+        [("⏳ Hạn −1 giờ", p + "han:-1"), ("⏳ Hạn +1 giờ", p + "han:1")],
+    ]
+    up = [(f"↑ {short(nhom_ten(g), 18)}", p + f"up:{i}") for i, g in enumerate(d.get("nhom") or []) if i > 0]
+    rows += [up[i:i + 2] for i in range(0, len(up), 2)]
+    rows.append([("🔄 Làm mới", p + "r"), ("🏠 Menu", "m")])
+    return {"inline_keyboard": [[{"text": t, "callback_data": c} for t, c in r] for r in rows if r]}
+
+
+def doi_gio(gio: str, phut: int) -> str:
+    """"06:00" + 30 phút → "06:30" (vòng qua nửa đêm)."""
+    h, m = (int(x) for x in gio.split(":"))
+    t = (h * 60 + m + phut) % 1440
+    return f"{t // 60:02d}:{t % 60:02d}"

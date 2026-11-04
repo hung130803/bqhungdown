@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { lichSauDoiNhom } from "@/lib/watch-group";
 import * as cmd from "@/ipc/commands";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useQueueStore } from "@/stores/useQueueStore";
@@ -597,8 +598,11 @@ export function WatchPage() {
     const n = newName.trim();
     if (!n || n === oldName) return;
     try {
+      const lich = lichSauDoiNhom(settings?.lichTaiNhom, oldName, n);
       await updateSettings({
         watchGroups: savedGroups.map((g) => (g === oldName ? n : g)),
+        // Lịch tải theo tên mới, giữ thứ tự (1b-D1).
+        ...(lich ? { lichTaiNhom: lich } : {}),
       });
       // Đổi tên lan sang mọi kênh đang mang nhóm cũ.
       for (const c of channels.filter((c) => c.group === oldName)) {
@@ -612,7 +616,11 @@ export function WatchPage() {
 
   const deleteGroup = async (name: string) => {
     try {
-      await updateSettings({ watchGroups: savedGroups.filter((g) => g !== name) });
+      const lich = lichSauDoiNhom(settings?.lichTaiNhom, name, null);
+      await updateSettings({
+        watchGroups: savedGroups.filter((g) => g !== name),
+        ...(lich ? { lichTaiNhom: lich } : {}),
+      });
       // Kênh thuộc nhóm bị xóa → về "chưa phân nhóm" (không đụng gì khác).
       for (const c of channels.filter((c) => c.group === name)) {
         await cmd.setWatchedGroup(c.id, null);

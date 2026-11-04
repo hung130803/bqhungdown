@@ -1454,6 +1454,10 @@ pub async fn check_watched_one(
     settings: State<'_, Arc<SettingsStore>>,
     history: State<'_, Arc<HistoryStore>>,
 ) -> AppResult<u32> {
+    // Lịch tải đang chạy → TỪ CHỐI có báo (không chen vào phiếu đợt, 1b-D3).
+    if let Some(dot) = crate::daychuyen::dot_dang_chay() {
+        return Err(AppError::Other(crate::daychuyen::bao_dang_chay(&dot)));
+    }
     Ok(crate::watcher::check_channel(
         &app, store.inner(), queue.inner(), settings.inner(), history.inner(), &id,
     ).await)
@@ -1471,9 +1475,64 @@ pub async fn download_more_today(
     settings: State<'_, Arc<SettingsStore>>,
     history: State<'_, Arc<HistoryStore>>,
 ) -> AppResult<u32> {
+    if let Some(dot) = crate::daychuyen::dot_dang_chay() {
+        return Err(AppError::Other(crate::daychuyen::bao_dang_chay(&dot)));
+    }
     Ok(crate::watcher::force_one_more(
         &app, store.inner(), queue.inner(), settings.inner(), history.inner(), &id,
     ).await)
+}
+
+// ───────────────────────── Dây chuyền: nút điều khiển ─────────────────────────
+// Dùng CHUNG cho app và bot (control_api gọi lại đúng các hàm này).
+
+/// Tình trạng Lịch tải (tin trạng thái / bảng trong Cài đặt).
+#[tauri::command]
+pub fn daychuyen_status(
+    dc: State<'_, Arc<crate::daychuyen::DayChuyen>>,
+    store: State<'_, Arc<WatchlistStore>>,
+    settings: State<'_, Arc<SettingsStore>>,
+) -> AppResult<serde_json::Value> {
+    let s = settings.get();
+    let co = crate::daychuyen::nhom_dang_co(&store, &s);
+    Ok(dc.trang_thai_json(&s, &co, chrono::Local::now().fixed_offset()))
+}
+
+/// ▶ Chạy ngay: các nhóm hôm nay chưa quét. Bấm nhiều lần chỉ chạy 1 lượt.
+#[tauri::command]
+pub fn daychuyen_run_now(
+    app: AppHandle,
+    dc: State<'_, Arc<crate::daychuyen::DayChuyen>>,
+    store: State<'_, Arc<WatchlistStore>>,
+    queue: State<'_, Arc<QueueManager>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    history: State<'_, Arc<HistoryStore>>,
+) -> AppResult<String> {
+    let s = settings.get();
+    let co = crate::daychuyen::nhom_dang_co(&store, &s);
+    let msg = dc.chuan_bi_chay_tay(&s, &co, chrono::Local::now().fixed_offset()).map_err(AppError::Other)?;
+    crate::daychuyen::khoi_chay(&app, store.inner(), queue.inner(), settings.inner(), history.inner(), dc.inner(), true);
+    Ok(msg)
+}
+
+/// ⏹ Dừng (đã hỏi xác nhận): ngừng xếp nhóm tiếp, phiếu ghi `huy`;
+/// `huy_job` = huỷ luôn job của đợt CHƯA BẮT ĐẦU tải. File đang tải không bị đụng.
+#[tauri::command]
+pub fn daychuyen_stop(
+    huy_job: bool,
+    dc: State<'_, Arc<crate::daychuyen::DayChuyen>>,
+    queue: State<'_, Arc<QueueManager>>,
+    settings: State<'_, Arc<SettingsStore>>,
+    history: State<'_, Arc<HistoryStore>>,
+) -> AppResult<String> {
+    crate::daychuyen::dung_that(queue.inner(), history.inner(), dc.inner(), &settings.get(), huy_job)
+        .map_err(AppError::Other)
+}
+
+/// ⏭ Bỏ qua hôm nay (mai chạy lại đúng giờ).
+#[tauri::command]
+pub fn daychuyen_skip_today(dc: State<'_, Arc<crate::daychuyen::DayChuyen>>) -> AppResult<String> {
+    Ok(dc.bo_qua_hom_nay(chrono::Local::now().fixed_offset()))
 }
 
 /// Đối soát tức thì video đang tải dở của MỌI kênh (tải xong → chốt đã

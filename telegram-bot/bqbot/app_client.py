@@ -177,6 +177,11 @@ class AppClient:
         """Lịch tải (dây chuyền): bật chưa, đợt đang quét, cảnh báo (ổ đầy…)."""
         return self.get("/api/daychuyen")
 
+    def daychuyen_action(self, action: str, **body: Any) -> dict:
+        """Nút Lịch tải: `chay` (Chạy ngay) | `dung` (huyJob=bool) | `boqua` — gọi
+        ĐÚNG lệnh của nút trong app (bấm nhiều lần app chỉ chạy 1 lượt)."""
+        return self.post(f"/api/daychuyen/{action}", body)
+
     def quit_app(self) -> dict:
         return self.post("/api/app/quit", timeout=15)
 

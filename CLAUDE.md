@@ -89,7 +89,14 @@
   giữ khoảng 1–1440 (< 30 phút chỉ cảnh báo); file bận + phiếu đang mở chạy
   LUÔN, kể cả khi Lịch tắt; ▶ Chạy tất cả lúc Lịch đang quét báo "đang chạy đợt X".
   Khớp kênh 2 tool THEO THƯ MỤC qua `chuan_hoa_duong_dan` (ca mẫu D18 = V18).
+  **Đợt 1b:** nút điều khiển ở app (Cài đặt) VÀ bot (`/lich`) gọi CÙNG lệnh
+  `commands::daychuyen_*`. Bấm nhiều lần chỉ 1 lượt (`DayChuyen::chiem_luot`).
+  Dừng chỉ ngừng xếp nhóm sau và đóng phiếu `huy`, KHÔNG đụng file đang tải.
+  Lượt chạy có guard `GiuQuet` (panic vẫn nhả cờ). Kiểm ổ + so ngày trước MỖI
+  nhóm (`truoc_nhom`). Giờ sai / bật khi chưa có nhóm → `settings_store` TỪ
+  CHỐI. Lỗi báo bot theo loại (`tinh_van_de` + `canh_bao.loai`), bot gửi tối đa
+  1 tin/giờ mỗi loại + "đã ổn lại". Chi tiết: docs/QUY_TRINH_DAY_CHUYEN_TU_DONG.md
+  mục "Đợt 1b".
   CHƯA XỬ LÝ: đổi `daychuyen_dir` lúc còn đợt mở thì phiếu ở thư mục CŨ nằm
   `dang_tai` mãi (sổ ghi tiếp sang thư mục mới); cửa sổ chớp khi mở
-  `--minimized`; chưa có `huy`. Đợt 2 chưa làm: #14 Douyin, #15 18+, #24 nửa
-  đêm, #26 bài ảnh.
+  `--minimized`. Đợt 2 chưa làm: #14 Douyin, #15 18+, #24 nửa đêm, #26 bài ảnh.

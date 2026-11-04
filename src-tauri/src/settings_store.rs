@@ -272,10 +272,16 @@ impl SettingsStore {
             if let Some(v) = patch.lich_tai_enabled {
                 s.lich_tai_enabled = v;
             }
+            // Giờ sai định dạng → TỪ CHỐI cả lần lưu và báo rõ (trước đây
+            // âm thầm bỏ qua: anh tưởng đã đổi giờ mà Lịch vẫn chạy giờ cũ).
             if let Some(g) = patch.lich_tai_gio {
-                if crate::daychuyen::gio_hop_le(&g) {
-                    s.lich_tai_gio = g.trim().to_string();
+                if !crate::daychuyen::gio_hop_le(&g) {
+                    return Err(AppError::Other(format!(
+                        "Giờ bắt đầu Lịch tải «{}» sai định dạng — nhập dạng HH:MM, ví dụ 06:00.",
+                        g.trim()
+                    )));
                 }
+                s.lich_tai_gio = g.trim().to_string();
             }
             // Thứ tự nhóm GIỮ NGUYÊN như anh xếp; "" (Chưa phân nhóm) hợp lệ.
             if let Some(list) = patch.lich_tai_nhom {
@@ -296,6 +302,12 @@ impl SettingsStore {
             }
             if let Some(v) = patch.mo_cung_windows {
                 s.mo_cung_windows = v;
+            }
+            // Danh sách nhóm rỗng thì KHÔNG cho bật Lịch (bật cũng chẳng chạy gì).
+            if patch.lich_tai_enabled == Some(true) && s.lich_tai_nhom.is_empty() {
+                return Err(AppError::Other(
+                    "Chưa chọn nhóm nào cho Lịch tải — thêm ít nhất 1 nhóm rồi mới bật được.".into(),
+                ));
             }
             Ok(())
         })
@@ -596,6 +608,32 @@ mod tests {
             "   ".into(),
         ]);
         assert_eq!(out, vec!["k1".to_string(), "k2".to_string()]);
+    }
+
+    #[test]
+    fn lich_tai_gio_sai_tu_choi_va_nhom_rong_khong_cho_bat() {
+        let path = unique_tmp_path();
+        let (store, _) = SettingsStore::load(path.clone());
+        let e = store
+            .apply_patch(SettingsPatch { lich_tai_gio: Some("6h".into()), ..Default::default() })
+            .unwrap_err();
+        assert!(e.to_string().contains("sai định dạng"), "{e}");
+        assert_eq!(store.get().lich_tai_gio, "06:00", "giữ giờ cũ, không lưu nửa vời");
+        // Giờ sai đi kèm thay đổi khác: TỪ CHỐI cả lần lưu.
+        assert!(store
+            .apply_patch(SettingsPatch { lich_tai_gio: Some("25:00".into()), lich_tai_han_chot_gio: Some(5), ..Default::default() })
+            .is_err());
+        assert_eq!(store.get().lich_tai_han_chot_gio, 3);
+        assert_eq!(store.apply_patch(SettingsPatch { lich_tai_gio: Some(" 07:30 ".into()), ..Default::default() }).unwrap().lich_tai_gio, "07:30");
+        // Danh sách nhóm rỗng → không cho bật.
+        let e = store.apply_patch(SettingsPatch { lich_tai_enabled: Some(true), ..Default::default() }).unwrap_err();
+        assert!(e.to_string().contains("Chưa chọn nhóm"), "{e}");
+        assert!(!store.get().lich_tai_enabled);
+        let s = store
+            .apply_patch(SettingsPatch { lich_tai_enabled: Some(true), lich_tai_nhom: Some(vec!["A".into()]), ..Default::default() })
+            .unwrap();
+        assert!(s.lich_tai_enabled);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

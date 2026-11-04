@@ -49,6 +49,36 @@ FIREFOX_REMIND_EVERY = 24 * 3600
 RESTORE_MAX_AGE = 6 * 3600
 # Đọc trạng thái Lịch tải (dây chuyền) của app mỗi ngần này giây.
 DAYCHUYEN_EVERY = 60
+# Báo lỗi Lịch tải tối đa 1 tin/giờ MỖI LOẠI; vòng lịch im quá ngần này = kẹt.
+DAYCHUYEN_ALERT_EVERY = 3600
+DAYCHUYEN_NHIP_KET = 300
+
+
+class LichBoards:
+    """Bảng Lịch tải đang mở ở mỗi chat: (tin, mã bảng). Mã đổi khi gửi bảng
+    MỚI → nút trên bảng cũ hết hạn. `pause` = đang hỏi xác nhận, khỏi tự sửa đè."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic):
+        self.clock = clock
+        self._b: dict[int, dict] = {}
+        self._lock = threading.Lock()
+
+    def set(self, chat_id: int, mid: int, tok: str, text: str, pause: float = 0.0) -> None:
+        with self._lock:
+            self._b[chat_id] = {"mid": mid, "tok": tok, "text": text, "pause": self.clock() + pause}
+
+    def get(self, chat_id: int) -> dict | None:
+        with self._lock:
+            b = self._b.get(chat_id)
+            return dict(b) if b else None
+
+    def remove(self, chat_id: int) -> None:
+        with self._lock:
+            self._b.pop(chat_id, None)
+
+    def items(self) -> list[tuple[int, dict]]:
+        with self._lock:
+            return [(c, dict(b)) for c, b in self._b.items()]
 
 
 def _kb(rows):
@@ -100,6 +130,11 @@ class Monitor:
         self._lich_tai = False
         self._last_daychuyen = float("-inf")
         self._canh_bao_da_gui: set[str] | None = None
+        # Lỗi Lịch tải theo loại đã báo (chờ báo "đã ổn lại") + giờ báo gần nhất.
+        self._dc_active: dict[str, str] = {}
+        self._dc_last: dict[str, float] = {}
+        self.wall: Callable[[], float] = time.time
+        self.lich_boards = LichBoards(clock)
         # Nơi lưu id các tin đang tự cập nhật — bot khởi động lại thì chốt chúng
         # (không để tin "đang tải" đứng hình vĩnh viễn). None = không lưu (test).
         self.state_path: Path | None = None
@@ -233,11 +268,18 @@ class Monitor:
 
     # ── gửi ──
     def _notify(self, text: str, markup: dict | None = None) -> None:
+        self._notify_ok(text, markup)
+
+    def _notify_ok(self, text: str, markup: dict | None = None) -> bool:
+        """Gửi mọi chat nhận báo; True khi TẤT CẢ đều gửi được."""
+        ok = bool(self.cfg.notify_chat_ids)
         for chat in self.cfg.notify_chat_ids:
             try:
                 self.tg.send_message(chat, text, markup)
             except Exception as e:  # noqa: BLE001
                 log.warning("Gửi thông báo lỗi: %s", e)
+                ok = False
+        return ok
 
     # ── bảng theo dõi ──
     def add_board(self, chat_id: int, message_id: int) -> None:
@@ -437,31 +479,89 @@ class Monitor:
         self._prev = cur
 
     def _check_daychuyen(self) -> None:
-        """Lịch tải bật/tắt + cảnh báo của app (ổ đầy → không mở đợt). App bản cũ
-        chưa có route này → coi như Lịch tải tắt, bot chạy y như trước."""
+        """Lịch tải bật/tắt, tự sửa bảng Lịch tải, và BÁO LỖI của app:
+        - lỗi ĐANG CÓ (`vanDe`, theo loại): báo khi mới có / đổi nội dung, tối đa
+          1 tin/giờ mỗi loại; hết lỗi thì báo "đã ổn lại";
+        - sự kiện 1 lần (`canhBao`, theo id): gộp theo loại, 1 tin/giờ mỗi loại.
+        Chỉ đánh dấu ĐÃ BÁO khi gửi thành công (lỗi mạng thì nhịp sau gửi lại).
+        App bản cũ chưa có route → coi như Lịch tải tắt, bot chạy y như trước."""
         try:
             d = self.app.daychuyen()
         except (AppOffline, AppError):
             self._lich_tai = False
             return
+        if d.get("ok") is False:
+            return
         self._lich_tai = bool(d.get("lichTaiEnabled"))
+        self._update_lich_boards(d)
         path = self.state_path.parent / "daychuyen_alerts.json" if self.state_path else None
         if self._canh_bao_da_gui is None:
             self._canh_bao_da_gui = set()
             if path and path.exists():
                 try:
-                    self._canh_bao_da_gui = set(json.loads(path.read_text(encoding="utf-8")).get("sent", []))
-                except (OSError, ValueError):
+                    saved = json.loads(path.read_text(encoding="utf-8"))
+                    self._canh_bao_da_gui = set(saved.get("sent", []))
+                    self._dc_active = dict(saved.get("active", {}))
+                    self._dc_last = {k: float(v) for k, v in saved.get("last", {}).items()}
+                except (OSError, ValueError, AttributeError, TypeError):
                     pass
-        moi = [c for c in d.get("canhBao") or [] if c.get("id") and c["id"] not in self._canh_bao_da_gui]
-        for c in moi:
-            self._canh_bao_da_gui.add(c["id"])
-            self._notify("⚠️ <b>Dây chuyền tải</b>: " + fmt.esc(c.get("text", "")))
-        if moi and path:
+        now = self.wall()
+        changed = False
+        van_de = {v["loai"]: v.get("text", "") for v in d.get("vanDe") or [] if v.get("loai")}
+        nhip = d.get("nhipCuoi")
+        if nhip:
             try:
-                path.write_text(json.dumps({"sent": sorted(self._canh_bao_da_gui)[-50:]}), encoding="utf-8")
+                im = now - fmt.parse_time(nhip)
+            except ValueError:
+                im = 0
+            if im > DAYCHUYEN_NHIP_KET:
+                van_de.setdefault("ket", f"Bộ Lịch tải đã {int(im // 60)} phút không chạy nhịp nào — bộ lịch có thể bị kẹt "
+                                         "(thử /closeapp rồi /openapp).")
+        for loai, text in sorted(van_de.items()):
+            moi_co = self._dc_active.get(loai) != text
+            if moi_co and now - self._dc_last.get(loai, float("-inf")) >= DAYCHUYEN_ALERT_EVERY:
+                if self._notify_ok("⚠️ <b>Dây chuyền tải</b>: " + fmt.esc(text)):
+                    self._dc_active[loai] = text
+                    self._dc_last[loai] = now
+                    changed = True
+        for loai in [k for k in self._dc_active if k not in van_de]:
+            if self._notify_ok("✅ <b>Dây chuyền tải</b> đã ổn lại: " + fmt.esc(self._dc_active[loai])):
+                del self._dc_active[loai]
+                changed = True
+        moi = [c for c in d.get("canhBao") or [] if c.get("id") and c["id"] not in self._canh_bao_da_gui]
+        theo_loai: dict[str, list[dict]] = {}
+        for c in moi:
+            theo_loai.setdefault(c.get("loai") or "", []).append(c)
+        for loai, ds in theo_loai.items():
+            key = "su_kien:" + loai
+            if now - self._dc_last.get(key, float("-inf")) < DAYCHUYEN_ALERT_EVERY:
+                continue  # đã báo loại này trong giờ qua → gộp vào tin sau
+            text = "\n".join("• " + fmt.esc(c.get("text", "")) for c in ds) if len(ds) > 1 else fmt.esc(ds[0].get("text", ""))
+            if self._notify_ok("⚠️ <b>Dây chuyền tải</b>: " + text):
+                self._canh_bao_da_gui.update(c["id"] for c in ds)
+                self._dc_last[key] = now
+                changed = True
+        if changed and path:
+            try:
+                path.write_text(json.dumps({"sent": sorted(self._canh_bao_da_gui)[-50:], "active": self._dc_active,
+                                            "last": self._dc_last}), encoding="utf-8")
             except OSError:
                 pass
+
+    def _update_lich_boards(self, d: dict) -> None:
+        """Tự sửa bảng Lịch tải đang mở (chỉ khi nội dung đổi, không đè màn xác nhận)."""
+        for chat, b in self.lich_boards.items():
+            if self.clock() < b["pause"]:
+                continue
+            text = fmt.lich_text(d)
+            if text == b["text"]:
+                continue
+            try:
+                self.tg.edit_message(chat, b["mid"], text, fmt.lich_markup(d, b["tok"]))
+                self.lich_boards.set(chat, b["mid"], b["tok"], text)
+            except Exception as e:  # noqa: BLE001
+                if "not found" in str(e).lower() or "can't be edited" in str(e).lower():
+                    self.lich_boards.remove(chat)
 
     def _open_batch(self, ids: list[str]) -> None:
         if self._lich_tai:

@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from test_bot import CHAT, FakeApp, FakeTG, NoNetworkCase, cfg  # noqa: E402
 
-from bqbot import launcher  # noqa: E402
+from bqbot import fmt, launcher  # noqa: E402
 from bqbot.handlers import Router  # noqa: E402
 from bqbot.monitor import Monitor  # noqa: E402
 
@@ -116,6 +116,202 @@ class MonitorDayChuyenTests(NoNetworkCase):
             m2.state_path = Path(d) / "live_msgs.json"
             m2.tick()
             self.assertFalse(any("Dây chuyền" in t for t in tg2.texts()), "khởi động lại không gửi lại")
+
+
+# ───────────── Đợt 1b: bảng Lịch tải + nút + báo lỗi theo loại ─────────────
+
+def _dc(**kw):
+    base = {"ok": True, "lichTaiEnabled": True, "gio": "06:00", "hanChotGio": 3, "nhom": ["MỸ", "HÀN", ""],
+            "nhomDaQuet": ["MỸ"], "dangChay": "20261104-02 (HÀN)", "dangDung": False,
+            "lanToi": "2026-11-05T06:00:00+07:00", "lyDoHoan": None, "dots": [], "tre": 0,
+            "canhBao": [], "vanDe": []}
+    base.update(kw)
+    return base
+
+
+class LichBoardTests(NoNetworkCase):
+    def _router(self, dc=None, actions=None):
+        tg = FakeTG()
+        state = {"dc": dc or _dc(), "chay": 0}
+
+        def chay(_b):
+            state["chay"] += 1
+            if state["chay"] > 1:  # app: compare_exchange → lượt 2 bị từ chối
+                return {"ok": False, "error": "Lịch tải đang chạy rồi (20261104-01 (MỸ)) — không chạy thêm lượt thứ 2."}
+            return {"ok": True, "message": "Bắt đầu Lịch tải 2 nhóm: HÀN → Chưa phân nhóm"}
+
+        routes = {"/api/daychuyen": lambda _b: state["dc"], "/api/daychuyen/chay": chay}
+        routes.update(actions or {})
+        app = FakeApp(routes)
+        return tg, app, Router(tg, app, cfg()), state
+
+    def _cb(self, r, data):
+        mid = r.lich_boards.get(CHAT)["mid"]
+        t = r.route_callback({"id": "c", "data": data, "message": {"chat": {"id": CHAT}, "message_id": mid}})
+        t.fn()
+        return mid
+
+    def _btn(self, tg, prefix):
+        markup = [c for c in tg.calls if c[0] in ("send", "edit")][-1][3]
+        for row in markup["inline_keyboard"]:
+            for b in row:
+                if b["callback_data"].split(":")[2:3] == [prefix]:
+                    return b["callback_data"]
+        raise AssertionError(f"không có nút {prefix}: {markup}")
+
+    def test_bang_trang_thai_du_thong_tin(self):
+        tg, app, r, _ = self._router(_dc(lyDoHoan="06:00 — ổ D đầy", tre=2,
+                                         dots=[{"dotId": "20261104-01", "nhom": "MỸ", "trangThai": "dang_tai",
+                                                "xong": 3, "video": 5}],
+                                         vanDe=[{"loai": "nhom_mat", "text": "Nhóm trong Lịch tải không còn: «X»"}]))
+        r._cmd_lich(CHAT, "")
+        t = tg.texts()[-1]
+        for want in ("BẬT", "06:00", "3 giờ", "✅MỸ", "HÀN", "Chưa phân nhóm", "Đang làm: <b>20261104-02 (HÀN)",
+                     "Lần chạy tới: 06:00", "ổ D đầy", "20261104-01 (MỸ: 3/5 xong)", "trễ hôm nay: 2", "«X»"):
+            self.assertIn(want, t)
+
+    def test_chay_ngay_bam_2_lan_chi_1_luot(self):
+        tg, app, r, state = self._router()
+        r._cmd_lich(CHAT, "")
+        self._cb(r, self._btn(tg, "chay"))
+        self.assertIn("Bắt đầu Lịch tải", tg.texts()[-1])
+        self._cb(r, self._btn(tg, "chay"))
+        self.assertIn("đang chạy rồi", tg.texts()[-1])
+        self.assertEqual(state["chay"], 2, "bot gửi đúng lệnh, app quyết định chỉ 1 lượt")
+
+    def test_nut_tren_bang_cu_het_han_thi_bao_khong_lam_gi(self):
+        tg, app, r, state = self._router()
+        r._cmd_lich(CHAT, "")
+        cu = self._btn(tg, "chay")
+        old_mid = r.lich_boards.get(CHAT)["mid"]
+        r._cmd_lich(CHAT, "")  # bảng mới → mã mới
+        t = r.route_callback({"id": "c", "data": cu, "message": {"chat": {"id": CHAT}, "message_id": old_mid}})
+        t.fn()
+        self.assertIn("hết hạn", tg.texts()[-1])
+        self.assertEqual(state["chay"], 0, "nút hết hạn KHÔNG chạy")
+
+    def test_dung_hoi_xac_nhan_roi_moi_dung_va_tuy_chon_huy_job(self):
+        sent = []
+        tg, app, r, _ = self._router(actions={"/api/daychuyen/dung": lambda b: sent.append(b) or
+                                              {"ok": True, "message": "Đã nhận lệnh Dừng"}})
+        r._cmd_lich(CHAT, "")
+        self._cb(r, self._btn(tg, "dung?"))
+        self.assertIn("Dừng lượt Lịch tải?", tg.texts()[-1])
+        self.assertEqual(sent, [], "chưa xác nhận thì chưa dừng")
+        markup = tg.calls[-1][3]
+        huy = [b["callback_data"] for row in markup["inline_keyboard"] for b in row
+               if b["callback_data"].endswith("dung:1")][0]
+        self._cb(r, huy)
+        self.assertEqual(sent, [{"huyJob": True}])
+        self.assertIn("Đã nhận lệnh Dừng", tg.texts()[-1])
+
+    def test_chinh_gio_han_thu_tu_nhom_qua_nut_va_lenh(self):
+        tg, app, r, state = self._router(_dc(gio="00:00"))
+        r._cmd_lich(CHAT, "")
+        self._cb(r, self._btn(tg, "gio").replace("gio:30", "gio:-30"))
+        self._cb(r, self._btn(tg, "han").replace("han:-1", "han:1"))
+        self._cb(r, self._btn(tg, "up"))  # ↑ HÀN
+        posts = [b for m, p, b in app.requests if p == "/api/settings"]
+        self.assertEqual(posts, [{"lichTaiGio": "23:30"}, {"lichTaiHanChotGio": 4},
+                                 {"lichTaiNhom": ["HÀN", "MỸ", ""]}])
+        r._cmd_lich(CHAT, "nhom MỸ, -, HÀN")
+        posts = [b for m, p, b in app.requests if p == "/api/settings"]
+        self.assertEqual(posts[-1], {"lichTaiNhom": ["MỸ", "", "HÀN"]})
+
+    def test_gio_sai_app_tu_choi_thi_bao_ro(self):
+        tg, app, r, _ = self._router(actions={"/api/settings": lambda b: {
+            "ok": False, "error": "Giờ bắt đầu Lịch tải «6h» sai định dạng — nhập dạng HH:MM"}})
+        r._cmd_lich(CHAT, "gio 6h")
+        self.assertIn("sai định dạng", tg.texts()[-1])
+        self.assertIn("🗓 Lịch tải", tg.texts()[-1], "vẫn hiện bảng để sửa tiếp")
+
+
+class DayChuyenAlertTests(NoNetworkCase):
+    def _mon(self, tg=None):
+        tg = tg or FakeTG()
+        state = {"dc": _dc(dangChay=None)}
+        app = FakeApp({"/api/queue": {"ok": True, "items": []}, "/api/daychuyen": lambda _b: state["dc"]})
+        m = Monitor(tg, app, cfg())
+        clock = {"t": 1_800_000_000.0}
+        m.wall = lambda: clock["t"]
+        return tg, m, state, clock
+
+    def _tick(self, m):
+        m._last_daychuyen = float("-inf")
+        m.tick()
+
+    def test_loi_theo_loai_1_lan_gio_va_bao_on_lai(self):
+        tg, m, state, clock = self._mon()
+        state["dc"]["vanDe"] = [{"loai": "khong_chay", "text": "Lịch tải không chạy được: ổ D đầy"}]
+        self._tick(m)
+        self._tick(m)
+        self.assertEqual(len([t for t in tg.texts() if "ổ D đầy" in t]), 1, "lỗi kéo dài không gửi lặp")
+        state["dc"]["vanDe"] = [{"loai": "khong_chay", "text": "Lịch tải không chạy được: ổ E đầy"}]
+        clock["t"] += 600
+        self._tick(m)
+        self.assertFalse(any("ổ E đầy" in t for t in tg.texts()), "cùng loại trong 1 giờ: chưa gửi")
+        clock["t"] += 3600
+        self._tick(m)
+        self.assertTrue(any("ổ E đầy" in t for t in tg.texts()), "qua 1 giờ: gửi nội dung mới")
+        state["dc"]["vanDe"] = []
+        self._tick(m)
+        self.assertIn("đã ổn lại", tg.texts()[-1])
+        n = len(tg.texts())
+        self._tick(m)
+        self.assertEqual(len(tg.texts()), n, "báo ổn lại 1 lần")
+
+    def test_gui_loi_that_bai_thi_khong_danh_dau_nhip_sau_gui_lai(self):
+        class TGHong(FakeTG):
+            hong = True
+
+            def send_message(self, *a, **k):
+                if self.hong:
+                    raise OSError("mất mạng")
+                return super().send_message(*a, **k)
+
+        tg, m, state, clock = self._mon(TGHong())
+        state["dc"]["vanDe"] = [{"loai": "loi_tat", "text": "Không tạo được lối tắt Mở cùng Windows: x"}]
+        state["dc"]["canhBao"] = [{"id": "tre-20261104-01", "loai": "tre", "luc": "",
+                                   "text": "Đợt 20261104-01 còn 3 video trễ"}]
+        self._tick(m)
+        self.assertEqual(m._dc_active, {})
+        tg.hong = False
+        self._tick(m)
+        self.assertTrue(any("lối tắt" in t for t in tg.texts()))
+        self.assertTrue(any("3 video trễ" in t for t in tg.texts()))
+
+    def test_su_kien_cung_loai_gop_1_tin_gio(self):
+        tg, m, state, clock = self._mon()
+        state["dc"]["canhBao"] = [{"id": "a", "loai": "o_day_giua", "luc": "", "text": "Ổ đầy giữa chừng A"}]
+        self._tick(m)
+        state["dc"]["canhBao"].append({"id": "b", "loai": "o_day_giua", "luc": "", "text": "Ổ đầy giữa chừng B"})
+        state["dc"]["canhBao"].append({"id": "c", "loai": "o_day_giua", "luc": "", "text": "Ổ đầy giữa chừng C"})
+        self._tick(m)
+        self.assertFalse(any("giữa chừng B" in t for t in tg.texts()), "trong 1 giờ: giữ lại")
+        clock["t"] += 3601
+        self._tick(m)
+        gop = [t for t in tg.texts() if "giữa chừng B" in t]
+        self.assertEqual(len(gop), 1)
+        self.assertIn("giữa chừng C", gop[0], "gộp 1 tin")
+
+    def test_vong_lich_im_lau_thi_bao_ket(self):
+        tg, m, state, clock = self._mon()
+        state["dc"]["nhipCuoi"] = "2026-01-15T08:00:00+07:00"
+        clock["t"] = fmt.parse_time("2026-01-15T08:20:00+07:00")
+        self._tick(m)
+        self.assertTrue(any("kẹt" in t for t in tg.texts()), tg.texts())
+
+    def test_bang_lich_tu_sua_khi_doi_va_khong_de_man_xac_nhan(self):
+        tg, m, state, clock = self._mon()
+        m.lich_boards.set(CHAT, 77, "abc", "cũ")
+        self._tick(m)
+        self.assertEqual(len([c for c in tg.calls if c[0] == "edit" and c[4] == 77]), 1)
+        self._tick(m)
+        self.assertEqual(len([c for c in tg.calls if c[0] == "edit"]), 1, "không đổi thì không sửa")
+        m.lich_boards.set(CHAT, 77, "abc", "xác nhận", pause=120)
+        state["dc"]["dangChay"] = "20261104-03 (X)"
+        self._tick(m)
+        self.assertEqual(len([c for c in tg.calls if c[0] == "edit"]), 1, "đang hỏi xác nhận: không đè")
 
 
 if __name__ == "__main__":

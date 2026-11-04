@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from . import compress, fmt, launcher, report
 from .app_client import AppClient, AppError, AppOffline
 from .cookie_check import CookieChecker
 from .dispatcher import Dispatcher, Task
+from .monitor import LichBoards
 
 log = logging.getLogger("bqbot.handlers")
 
@@ -52,6 +54,7 @@ BOT_COMMANDS = [
     ("file", "Gửi file đã tải (/file mã)"),
     ("board", "Bảng theo dõi tự cập nhật"),
     ("settings", "Cài đặt nhanh"),
+    ("lich", "Lịch tải: bật/tắt, giờ, nhóm, chạy/dừng"),
     ("fix", "Sửa lỗi bộ tải (cập nhật yt-dlp)"),
     ("openapp", "Mở app trên máy tính (khi app đang tắt)"),
     ("closeapp", "Đóng app trên máy tính (bot vẫn chạy)"),
@@ -63,6 +66,8 @@ HELP = """<b>🤖 Bot BQHungDown</b>
 • <code>/audio link</code> → tải âm thanh.
 • Gửi file <b>cookies.txt</b> → thay cookie (ghi tên trang ở chú thích nếu muốn: youtube, tiktok, douyin, facebook, instagram, bilibili, twitter).
 • /board → 1 tin tự cập nhật tiến độ (không spam).
+• /lich → bảng <b>Lịch tải</b> (bật/tắt, chạy ngay, dừng, bỏ qua hôm nay, giờ, hạn chót, thứ tự nhóm).
+  Gõ nhanh: <code>/lich gio 06:30</code> · <code>/lich han 3</code> · <code>/lich nhom MỸ, HÀN</code>.
 • Bot tự báo: tải xong / lỗi / video mới từ kênh / cookie sắp hết hạn / app tắt.
 • Các việc chính: bấm <b>nút dưới ô nhập</b> (Tình trạng, Đang tải, Lỗi, Kênh, Cookie…).
   Mất nút thì gửi /start. Lệnh khác: bấm nút <b>Menu</b> cạnh ô nhập."""
@@ -91,7 +96,7 @@ def main_menu() -> dict:
         [("❌ Lỗi", "q:failed:0"), ("✅ Xong", "q:completed:0")],
         [("📺 Kênh", "w:a:0"), ("🍪 Cookie", "ck")],
         [("📋 Báo cáo ngày", "rp"), ("⚙️ Cài đặt", "s")],
-        [("📡 Bảng theo dõi", "bd")],
+        [("📡 Bảng theo dõi", "bd"), ("🗓 Lịch tải", "lt")],
         [("🔧 Sửa lỗi tải", "fx"), ("🕘 Lịch sử", "h")],
     ])
 
@@ -143,6 +148,8 @@ class Router:
         self.cookie_checker = monitor.cookie_checker if monitor else CookieChecker()
         self._group_lock = threading.Lock()
         self._group_running: set[str] = set()
+        # Bảng Lịch tải mỗi chat (dùng chung với monitor để monitor tự sửa).
+        self.lich_boards = monitor.lich_boards if monitor else LichBoards()
         self.commands: dict[str, tuple[Callable[[dict, str], None], bool]] = {
             # tên: (hàm, nặng?)
             "start": (self._cmd_start, False),
@@ -162,6 +169,7 @@ class Router:
             "board": (self._cmd_board, True),
             "stopboard": (self._cmd_stopboard, False),
             "settings": (self._cmd_settings, True),
+            "lich": (self._cmd_lich, True),
             "fix": (self._cmd_fix, True),
             "id": (self._cmd_id, False),
             "openapp": (self._cmd_openapp, True),
@@ -220,7 +228,7 @@ class Router:
             "sc": self._cb_set_conc, "si": self._cb_set_interval, "fx": self._cb_fix, "bd": self._cb_board,
             "bx": self._cb_board_stop, "h": self._cb_history, "f": self._cb_file, "x": self._cb_noop,
             "oa": self._cb_openapp, "qx": self._cb_closeapp, "qf": self._cb_force_close,
-            "rp": self._cb_report,
+            "rp": self._cb_report, "lt": self._cb_lich,
         }.get(verb)
         if not handler:
             return None
@@ -871,7 +879,7 @@ class Router:
                     f" · mỗi {s.get('watchIntervalMin')} phút\n🧵 Số luồng tải: <b>{s.get('maxConcurrency')}</b>"
                     f"\n🌐 Proxy: {s.get('proxies', 0)}\n📁 Thư mục mặc định: <code>{fmt.esc(s.get('defaultFolder'))}</code>")
             self._show(chat_id, mid, text, kb([
-                [(("⏸ Tắt" if auto else "▶ Bật") + " tự quét", f"sa:{0 if auto else 1}")],
+                [(("⏸ Tắt" if auto else "▶ Bật") + " tự quét", f"sa:{0 if auto else 1}"), ("🗓 Lịch tải", "lt")],
                 [("➖ Luồng", "sc:-"), ("➕ Luồng", "sc:+")],
                 [("15 phút", "si:15"), ("30 phút", "si:30"), ("60 phút", "si:60")],
                 [HOME],
@@ -895,6 +903,121 @@ class Router:
             return
         self._guard(chat_id, mid, lambda: (self.app.settings(watchIntervalMin=int(args[0])),
                                            self._cb_settings(chat_id, mid, [])))
+
+    # ───────────────────────── Lịch tải (dây chuyền) ─────────────────────────
+    def _lich_board(self, chat_id: int, mid: int | None, note: str = "", d: dict | None = None) -> None:
+        """Gửi (mid=None → bảng MỚI, mã mới: nút bảng cũ hết hạn) hoặc sửa bảng."""
+        d = d if d is not None else self.app.daychuyen()
+        text = fmt.lich_text(d)
+        full = (note + "\n\n" + text) if note else text
+        cur = self.lich_boards.get(chat_id)
+        if mid is not None and cur and cur["mid"] == mid:
+            tok = cur["tok"]
+            self.tg.edit_message(chat_id, mid, full, fmt.lich_markup(d, tok))
+        else:
+            tok = secrets.token_hex(3)
+            res = self._send(chat_id, full, fmt.lich_markup(d, tok)) or {}
+            mid = res.get("message_id")
+            if mid is None:
+                return
+        # Ghi chú (kết quả nút) giữ ~1 phút rồi bảng mới tự sửa về tình trạng.
+        self.lich_boards.set(chat_id, mid, tok, full, pause=60 if note else 0)
+
+    def _cmd_lich(self, chat_id: int, arg: str) -> None:
+        head, _, rest = arg.strip().partition(" ")
+        head, rest = head.lower(), rest.strip()
+
+        def go():
+            note = ""
+            try:
+                if head in ("", "xem"):
+                    pass
+                elif head == "gio":
+                    self.app.settings(lichTaiGio=rest)
+                    note = f"✅ Giờ bắt đầu: <b>{fmt.esc(rest)}</b> (có hiệu lực từ nhịp kế)."
+                elif head == "han":
+                    if not rest.isdigit():
+                        raise AppError("Hạn chót phải là số giờ 1–24, ví dụ /lich han 3")
+                    self.app.settings(lichTaiHanChotGio=int(rest))
+                    note = f"✅ Hạn chót mỗi đợt: <b>{int(rest)} giờ</b> (áp cho đợt mở sau)."
+                elif head == "nhom":
+                    ds = [x.strip() for x in rest.split(",") if x.strip()]
+                    ds = ["" if x.lower() in ("-", "chưa phân nhóm") else x for x in ds]
+                    self.app.settings(lichTaiNhom=ds)
+                    note = "✅ Đã lưu thứ tự nhóm."
+                elif head in ("bat", "tat"):
+                    self.app.settings(lichTaiEnabled=head == "bat")
+                elif head in ("chay", "boqua"):
+                    note = ("▶ " if head == "chay" else "⏭ ") + fmt.esc(self.app.daychuyen_action(head).get("message", ""))
+                elif head == "dung":
+                    self._lich_board(chat_id, None)
+                    b = self.lich_boards.get(chat_id)
+                    if b:
+                        self._lich_confirm_stop(chat_id, b["mid"], b["tok"])
+                    return
+                else:
+                    note = ("Cách dùng: <code>/lich</code> · <code>/lich gio 06:30</code> · <code>/lich han 3</code> · "
+                            "<code>/lich nhom MỸ, HÀN, -</code> (- = Chưa phân nhóm) · <code>/lich bat|tat|chay|dung|boqua</code>")
+            except AppError as e:
+                note = f"❌ {fmt.esc(e)}"
+            self._lich_board(chat_id, None, note)
+        self._guard(chat_id, None, go)
+
+    def _lich_confirm_stop(self, chat_id: int, mid: int, tok: str) -> None:
+        p = f"lt:{tok}:"
+        text = ("<b>⏹ Dừng lượt Lịch tải?</b>\nNhóm đang quét xong thì dừng, không xếp nhóm sau; phiếu đợt ghi «huy». "
+                "File đang tải KHÔNG bị đụng.\nHôm nay Lịch không tự chạy lại (muốn chạy tiếp: ▶ Chạy ngay).")
+        self.tg.edit_message(chat_id, mid, text, kb([
+            [("⏹ Dừng (giữ job đã xếp)", p + "dung:0")],
+            [("🗑 Dừng + huỷ job chưa tải", p + "dung:1")],
+            [("↩ Thôi", p + "r")],
+        ]))
+        self.lich_boards.set(chat_id, mid, tok, text, pause=120)
+
+    def _cb_lich(self, chat_id: int, mid: int | None, args: list[str]) -> None:
+        if not args:  # từ menu: mở bảng mới
+            self._guard(chat_id, None, lambda: self._lich_board(chat_id, None))
+            return
+        tok, act, rest = args[0], (args[1] if len(args) > 1 else "r"), args[2:]
+        cur = self.lich_boards.get(chat_id)
+        if not cur or cur["tok"] != tok or mid is None or cur["mid"] != mid:
+            self._guard(chat_id, None, lambda: self._lich_board(
+                chat_id, None, "⌛ Nút trên tin cũ đã hết hạn (không làm gì) — dùng bảng mới này."))
+            return
+
+        def go():
+            note = ""
+            try:
+                if act in ("on", "off"):
+                    self.app.settings(lichTaiEnabled=act == "on")
+                elif act == "gio":
+                    gio = self.app.daychuyen().get("gio") or "06:00"
+                    moi = fmt.doi_gio(gio, int(rest[0]) if rest and rest[0].lstrip("-").isdigit() else 0)
+                    self.app.settings(lichTaiGio=moi)
+                    note = f"✅ Giờ bắt đầu: <b>{moi}</b>"
+                elif act == "han":
+                    cu = int(self.app.daychuyen().get("hanChotGio") or 3)
+                    moi = max(1, min(24, cu + (int(rest[0]) if rest and rest[0].lstrip("-").isdigit() else 0)))
+                    self.app.settings(lichTaiHanChotGio=moi)
+                    note = f"✅ Hạn chót mỗi đợt: <b>{moi} giờ</b> (áp cho đợt mở sau)"
+                elif act == "up":
+                    ds = list(self.app.daychuyen().get("nhom") or [])
+                    i = int(rest[0]) if rest and rest[0].isdigit() else 0
+                    if 0 < i < len(ds):
+                        ds[i - 1], ds[i] = ds[i], ds[i - 1]
+                        self.app.settings(lichTaiNhom=ds)
+                elif act in ("chay", "boqua"):
+                    note = ("▶ " if act == "chay" else "⏭ ") + fmt.esc(self.app.daychuyen_action(act).get("message", ""))
+                elif act == "dung?":
+                    self._lich_confirm_stop(chat_id, mid, tok)
+                    return
+                elif act == "dung":
+                    res = self.app.daychuyen_action("dung", huyJob=rest[:1] == ["1"])
+                    note = "⏹ " + fmt.esc(res.get("message", ""))
+            except AppError as e:
+                note = f"❌ {fmt.esc(e)}"
+            self._lich_board(chat_id, mid, note)
+        self._guard(chat_id, mid, go)
 
     # ───────────────────────── sửa bộ tải ─────────────────────────
     def _cmd_fix(self, chat_id: int, _arg: str) -> None:

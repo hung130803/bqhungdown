@@ -363,10 +363,10 @@ static CHECKING_TARGET: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Ve
 /// Số lượt `check_all` KHÔNG thuộc Lịch tải (nút ▶, bot, nhịp cũ) đang chạy.
 static QUET_KHAC: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-struct QuetKhacGuard;
+pub(crate) struct QuetKhacGuard;
 
 impl QuetKhacGuard {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         QUET_KHAC.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Self
     }
@@ -432,13 +432,22 @@ pub async fn check_channel_with(
     sink: Option<&crate::daychuyen::JobSink>,
 ) -> u32 {
     // Kênh này đang có lượt quét khác chạy → CHỜ lượt kia xong rồi mới quét
-    // (bấm ▶ đúng lúc quét nền không bị báo nhầm "0 video mới"). Tối đa 10 phút.
+    // (bấm ▶ đúng lúc quét nền không bị báo nhầm "0 video mới"). Tối đa 10
+    // phút; lượt của Lịch tải (`sink`) chờ tới 60 phút và hết chờ thì BÁO bot
+    // (không lặng lẽ bỏ sót kênh — 1b-D3).
+    let gioi_han: u32 = if sink.is_some() { 14_400 } else { 2400 };
+    let bao_sot = |ten: String| {
+        if let Some(h) = sink {
+            h.bo_sot(ten);
+        }
+    };
     let mut waited = 0u32;
     let _guard = loop {
         if let Some(g) = CheckingGuard::try_new(id) {
             break g;
         }
-        if waited >= 2400 {
+        if waited >= gioi_han {
+            bao_sot(store.get(id).map(|c| crate::daychuyen::ten_dich_cua(&c)).unwrap_or_else(|| id.to_string()));
             return 0;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -461,7 +470,8 @@ pub async fn check_channel_with(
                 if let Some(g) = CheckingGuard::try_in(&CHECKING_TARGET, &key) {
                     break Some(g);
                 }
-                if waited >= 2400 {
+                if waited >= gioi_han {
+                    bao_sot(crate::daychuyen::ten_dich_cua(&channel));
                     return 0;
                 }
                 tokio::time::sleep(Duration::from_millis(250)).await;
@@ -1393,7 +1403,7 @@ async fn enqueue_new(
                         .map(|it| it.short_id)
                 };
                 if let Some(job_id) = job_id {
-                    ctx.sink.lock().unwrap_or_else(|e| e.into_inner()).push(crate::daychuyen::EnqueuedJob {
+                    ctx.sink.day(crate::daychuyen::EnqueuedJob {
                         job_id,
                         video_id: format!("{}:{}", extractor.to_lowercase(), video_id_of(&url)),
                         folder: folder.clone(),
@@ -1969,6 +1979,8 @@ pub async fn force_one_more(
     history: &Arc<HistoryStore>,
     id: &str,
 ) -> u32 {
+    // Đếm là "lượt quét khác" → Lịch tải chờ cái này xong mới quét nhóm (1b-D3).
+    let _quet_khac = QuetKhacGuard::new();
     reconcile_all(store, queue, history);
     let channel = match store.get(id) {
         Some(c) => c,

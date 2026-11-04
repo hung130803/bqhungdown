@@ -364,6 +364,61 @@ Xong thì báo: tên nhánh, file đã sửa, kết quả nền vs sau sửa, ch
 
 **Tiêu chí nghiệm thu:** 62 ca test mới (D 22 + V 24 + P 8 + E 8) và mọi cổng test cũ của cả 3 dự án đều đạt. 30 dòng lỗ hổng đều có trạng thái "đã sửa" hoặc "anh chấp nhận giữ nguyên". 3 ngày chạy thử không ai phải chạm vào máy.
 
+## Đợt 1b: nút điều khiển, chỉnh giờ, rà mọi lối chạy (bqhungdown, 04/11/2026)
+
+Anh Hùng yêu cầu: mọi thứ có nút, chỉnh được giờ, rà mọi lối chạy (nhanh, chậm, tắt giữa chừng, bấm nhiều lần), và lỗi phải báo lên bot của CHÍNH app đó. Cùng nhánh `daychuyen-tu-dong`.
+
+**Chuẩn điều khiển (giống cả 3 app).** Trong app VÀ qua bot đều có:
+
+| Điều khiển | App (Cài đặt → Dây chuyền tự động) | Bot bqhungdown (`/lich`, menu 🗓 Lịch tải) |
+| --- | --- | --- |
+| Lịch tải Bật/Tắt | công tắc | ▶ Bật Lịch / ⏸ Tắt Lịch, `/lich bat`, `/lich tat` |
+| Giờ bắt đầu | ô giờ | 🕐 −30 / +30 phút, `/lich gio 06:30` |
+| Thứ tự nhóm | ↑ ↓ Bỏ + | ↑ từng nhóm, `/lich nhom MỸ, HÀN, -` (`-` = Chưa phân nhóm) |
+| Hạn chót | ô số giờ | ⏳ −1 / +1 giờ, `/lich han 3` |
+| Chạy ngay | ▶ Chạy ngay | ▶ Chạy ngay, `/lich chay` |
+| Dừng lượt đang chạy | ⏹ Dừng lượt… (hỏi xác nhận, ô "huỷ job chưa tải") | ⏹ Dừng lượt… → Dừng / Dừng + huỷ job chưa tải / Thôi |
+| Bỏ qua hôm nay | ⏭ Bỏ qua hôm nay | ⏭ Bỏ qua hôm nay, `/lich boqua` |
+| Tin trạng thái tự sửa | khối tình trạng, 15 giây/lần | 1 tin bot tự sửa mỗi phút khi nội dung đổi |
+
+Tin trạng thái gồm: đang làm nhóm nào, lần chạy tới lúc mấy giờ, lý do hoãn gần nhất, đợt đang mở, số video trễ, lỗi đang có. Cả app và bot đọc cùng `/api/daychuyen` (lệnh `daychuyen_status`) và gọi cùng lệnh Rust (`daychuyen_run_now`, `daychuyen_stop`, `daychuyen_skip_today`).
+
+**Luật bấm:**
+
+- Bấm nhiều lần chỉ chạy 1 lần: cờ `dang_quet` chiếm bằng compare-exchange; lượt thứ 2 báo "đang chạy rồi". Nút trong app khoá bằng ref trong lúc chờ.
+- Nút trên tin bot CŨ hết hạn: mỗi bảng có mã riêng, gửi bảng mới là mã đổi. Bấm nút bảng cũ thì không làm gì, bot gửi bảng mới kèm lời "đã hết hạn".
+- Đổi cài đặt có hiệu lực ở nhịp kế: lượt Lịch đọc lại cài đặt trước MỖI nhóm (thứ tự, hạn chót). Đã chạy xong hôm nay rồi mới dời giờ thì hôm nay không chạy lại.
+- Giờ sai định dạng → app TỪ CHỐI cả lần lưu và báo rõ (trước đây `settings_store.rs` âm thầm bỏ qua). Danh sách nhóm rỗng → không cho bật, báo rõ.
+- Dừng: không đụng file đang tải. Nhóm đang quét xong thì dừng, không xếp nhóm sau; phiếu đang mở đóng `ly_do_dong = huy`, video chưa xong ghi `tre`. Chọn "huỷ job chưa tải" thì chỉ huỷ job của đợt đang ở trạng thái Chờ (job đó ghi `loi` "đã huỷ"). Dừng = hôm nay không tự chạy lại; muốn chạy tiếp bấm Chạy ngay.
+- Chạy ngay: chạy các nhóm HÔM NAY CHƯA QUÉT, bỏ qua giờ bắt đầu và lệnh Bỏ qua hôm nay, chạy được cả khi công tắc Lịch đang tắt. Nhóm đã quét hôm nay không quét lại; hết nhóm thì báo rõ.
+
+**Việc đã sửa:**
+
+| Mã | Việc | Cách sửa |
+| --- | --- | --- |
+| 1b-D1 | Đổi tên / xoá nhóm phải cập nhật `lichTaiNhom` | `WatchPage` gửi `lichTaiNhom` mới cùng lần lưu `watchGroups` (`lichSauDoiNhom`, giữ thứ tự). Nhóm trong Lịch không còn thì Lịch bỏ qua nhóm đó và báo bot (`nhom_mat`). |
+| 1b-D2 | Nút + lệnh bot | `/lich` + menu 🗓 Lịch tải + nút trong Cài đặt nhanh (`handlers.py`), route `POST /api/daychuyen/{chay,dung,boqua}`, whitelist `lichTaiGio`, `lichTaiNhom`, `lichTaiHanChotGio`. |
+| 1b-D3 | ▶ từng kênh và "Tải thêm" lúc Lịch chạy | Từ chối có báo (app + bot 409 "Lịch tải đang chạy đợt X"). "Tải thêm" đếm là lượt quét khác nên Lịch chờ nó xong. Lượt Lịch chờ khoá kênh tới 60 phút; quá hạn thì báo bot `bo_sot`, không lặng lẽ bỏ sót. |
+| 1b-D4 | Bộ lịch không bao giờ kẹt | Lượt chạy trong task riêng có guard `GiuQuet`: rơi (kể cả panic) là nhả `dang_quet`. Panic → báo bot loại `ket`, hoãn 10 phút. `dot_id[..8]` đổi sang `get(..8)`. Lượt chạy quá 6 giờ, hoặc vòng lịch im quá 5 phút, đều báo "bộ lịch kẹt". |
+| 1b-D5 | Kiểm ổ trước MỖI nhóm | Kiểm ổ của nhóm đó + ổ C trước mỗi nhóm. Ổ đầy giữa chừng thì dừng các nhóm sau và báo bot `o_day_giua`. |
+| 1b-D6 | Ngủ đông qua ngày hôm sau | Trước mỗi nhóm so ngày bắt đầu lượt: đã sang ngày khác thì dừng lượt cũ, không ghi nhóm dở vào "đã quét" của ngày mới. Lượt ngày mới chạy 1 lần từ đầu, không chồng. Đồng hồ chỉnh lùi: giữ tiến độ, không coi là ngày mới. |
+| 1b-D7 | Thoát êm ghi nốt; job 2 giây cuối không rơi | Job vừa xếp hàng đánh thức vòng ghi phiếu NGAY (`HopJob.bao`). Thoát êm rút nốt hộp job, ghi phiếu + sổ TRƯỚC `queue.shutdown()`. |
+
+**Báo bot bqhungdown.** Tối đa 1 tin/giờ mỗi loại. Hết lỗi thì báo "đã ổn lại". Chỉ đánh dấu đã báo khi gửi thành công.
+
+| Loại | Khi nào | Kiểu |
+| --- | --- | --- |
+| `khong_chay` | Lịch bật mà không chạy được: danh sách nhóm trống, ổ dưới ngưỡng trước nhóm đầu | lỗi đang có |
+| `nhom_mat` | Nhóm trong Lịch không còn | lỗi đang có |
+| `ghi_loi` | Ghi phiếu / `lich_tai.json` lỗi liên tục ≥ 10 phút | lỗi đang có |
+| `ket` | Lượt chạy > 6 giờ, vòng lịch im > 5 phút (bot tự đo), hoặc panic | lỗi đang có / sự kiện |
+| `loi_tat` | Tạo lối tắt Startup lỗi | lỗi đang có |
+| `o_day_giua` | Ổ đầy giữa chừng, đã dừng các nhóm sau | sự kiện (gộp 1 tin/giờ) |
+| `tre` | Đợt đóng `het_han` còn video trễ (kèm số) | sự kiện |
+| `bo_sot` | Kênh bị bỏ sót vì chờ khoá quá 60 phút | sự kiện |
+
+**Test (bqhungdown):** Rust `daychuyen::tests::b1`–`b14`, `settings_store::lich_tai_gio_sai_tu_choi_va_nhom_rong_khong_cho_bat`, `startup_shortcut::loi_tao_loi_tat_giu_cho_bot_bao_va_xoa_khi_on`. Gồm bấm 2 lần, tắt giữa chừng, đổi giờ giữa chừng, ngủ qua ngày, qua nửa đêm, đồng hồ lùi, panic. Vitest `SettingsPage.daychuyen1b.test.tsx` và `lib/lich-nhom.test.ts`. Bot `tests/test_daychuyen.py` (`LichBoardTests`, `DayChuyenAlertTests`).
+
 ## Điều phối và kiểm soát
 
 Phiên "Quy trình khởi tạo công việc tự động" làm điều phối và không tự sửa code. Code do phiên của từng dự án sửa, vì phiên đó nắm luật test và cách phát hành riêng.

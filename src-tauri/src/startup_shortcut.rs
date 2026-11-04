@@ -64,18 +64,40 @@ pub fn tao(lnk: &Path, exe: &Path) -> Result<(), String> {
     }
 }
 
+static LOI: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Lỗi tạo lối tắt lần gần nhất (None = ổn) — bot báo qua `/api/daychuyen`.
+pub fn loi_gan_nhat() -> Option<String> {
+    LOI.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn dat_loi(v: Option<String>) {
+    *LOI.lock().unwrap_or_else(|e| e.into_inner()) = v;
+}
+
 /// Đồng bộ lối tắt theo công tắc: bật → tạo/cập nhật (trỏ exe đang chạy), tắt
-/// → xoá đúng file lối tắt của app. Lỗi chỉ ghi log, không ảnh hưởng việc chính.
+/// → xoá đúng file lối tắt của app. Lỗi ghi log + giữ lại cho bot báo, không
+/// ảnh hưởng việc chính.
 pub fn dong_bo(bat: bool) {
-    let Some(lnk) = duong_dan_loi_tat() else { return };
+    let Some(lnk) = duong_dan_loi_tat() else {
+        if bat {
+            dat_loi(Some("không tìm thấy thư mục Startup (%APPDATA%)".into()));
+        }
+        return;
+    };
+    dat_loi(None);
     if bat {
         match std::env::current_exe() {
             Ok(exe) => {
                 if let Err(e) = tao(&lnk, &exe) {
                     eprintln!("[startup] không tạo được lối tắt mở cùng Windows: {e}");
+                    dat_loi(Some(e));
                 }
             }
-            Err(e) => eprintln!("[startup] không biết đường dẫn exe: {e}"),
+            Err(e) => {
+                eprintln!("[startup] không biết đường dẫn exe: {e}");
+                dat_loi(Some(format!("không biết đường dẫn exe: {e}")));
+            }
         }
     } else if lnk.exists() {
         if let Err(e) = std::fs::remove_file(&lnk) {
@@ -87,6 +109,14 @@ pub fn dong_bo(bat: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loi_tao_loi_tat_giu_cho_bot_bao_va_xoa_khi_on() {
+        dat_loi(Some("access denied".into()));
+        assert_eq!(loi_gan_nhat().as_deref(), Some("access denied"));
+        dat_loi(None);
+        assert_eq!(loi_gan_nhat(), None);
+    }
 
     #[test]
     fn script_tao_loi_tat_co_minimized_va_thoat_nhay_don() {

@@ -784,3 +784,46 @@ function detectExtractor(url: string): string {
   if (u.includes("threads.net")) return "threads";
   return "unknown";
 }
+
+// ───────────────────────── Dây chuyền: Lịch tải (Đợt 1b) ─────────────────────────
+
+/** Tình trạng Lịch tải (giống `/api/daychuyen` bot đọc). */
+export type DayChuyenStatus = {
+  lichTaiEnabled: boolean;
+  gio: string;
+  hanChotGio: number;
+  nhom: string[];
+  dangChay: string | null;
+  dangDung: boolean;
+  lanToi: string | null;
+  lyDoHoan: string | null;
+  boQuaHomNay: boolean;
+  dotMo: number;
+  tre: number;
+  dots: { dotId: string; nhom: string; trangThai: string; video: number; xong: number }[];
+  vanDe: { loai: string; text: string }[];
+};
+
+export async function daychuyenStatus(): Promise<DayChuyenStatus | null> {
+  if (IS_WEB) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<DayChuyenStatus>("daychuyen_status");
+}
+
+/** ▶ Chạy ngay — bấm nhiều lần app chỉ chạy 1 lượt (lượt 2 báo lỗi rõ). */
+export async function daychuyenRunNow(): Promise<string> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("daychuyen_run_now");
+}
+
+/** ⏹ Dừng: ngừng xếp nhóm tiếp, phiếu ghi `huy`; `huyJob` = huỷ job chưa bắt đầu. */
+export async function daychuyenStop(huyJob: boolean): Promise<string> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("daychuyen_stop", { huyJob });
+}
+
+/** ⏭ Bỏ qua hôm nay (mai chạy lại đúng giờ). */
+export async function daychuyenSkipToday(): Promise<string> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("daychuyen_skip_today");
+}

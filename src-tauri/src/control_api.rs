@@ -352,6 +352,7 @@ async fn route(app: &AppHandle, req: &Request) -> ApiResult {
         ("POST", ["api", "cookies", site]) => cookies_set(app, site, req.json().map_err(bad)?).await,
         ("POST", ["api", "settings"]) => settings_patch(app, req.json().map_err(bad)?).await,
         ("GET", ["api", "daychuyen"]) => Ok(daychuyen_status(app)),
+        ("POST", ["api", "daychuyen", action]) => daychuyen_action(app, action, req.json().map_err(bad)?),
         ("POST", ["api", "engine", "fix"]) => {
             let msg = crate::commands::fix_download_engine(app.clone(), app.state()).await?;
             Ok(json!({ "ok": true, "message": msg }))
@@ -676,6 +677,10 @@ async fn watch_action(app: &AppHandle, id: &str, action: &str, body: Value) -> A
         // chặn ai). Trước đây trả "started" ngay → kênh hết video / không có
         // video mới thì bot im lặng, người dùng tưởng nút không chạy.
         "check" | "more" => {
+            // Lịch tải đang chạy: từ chối có báo (bot hiện lời này), không chen phiếu.
+            if let Some(dot) = crate::daychuyen::dot_dang_chay() {
+                return Err(ApiError(409, crate::daychuyen::bao_dang_chay(&dot)));
+            }
             let count = if action == "more" {
                 crate::commands::download_more_today(id.to_string(), app.clone(), app.state(), app.state(), app.state(), app.state()).await?
             } else {
@@ -926,8 +931,23 @@ async fn settings_patch(app: &AppHandle, body: Value) -> ApiResult {
     if let Some(v) = body.get("lichTaiEnabled").and_then(|v| v.as_bool()) {
         patch.lich_tai_enabled = Some(v);
     }
+    // Giờ sai định dạng KHÔNG bị lọc ở đây — settings_store từ chối và báo rõ.
+    if let Some(v) = body.get("lichTaiGio") {
+        patch.lich_tai_gio = Some(v.as_str().ok_or_else(|| bad("lichTaiGio phải là chuỗi HH:MM"))?.to_string());
+    }
+    if let Some(v) = body.get("lichTaiNhom") {
+        let list = v.as_array().ok_or_else(|| bad("lichTaiNhom phải là danh sách tên nhóm"))?;
+        patch.lich_tai_nhom = Some(
+            list.iter()
+                .map(|g| g.as_str().map(str::to_string).ok_or_else(|| bad("tên nhóm phải là chuỗi")))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
+    if let Some(v) = body.get("lichTaiHanChotGio") {
+        patch.lich_tai_han_chot_gio = Some(v.as_u64().ok_or_else(|| bad("lichTaiHanChotGio phải là số giờ 1–24"))?.min(24) as u32);
+    }
     if patch == SettingsPatch::default() {
-        return Err(bad("Không có cài đặt nào được phép đổi (watchAutoEnabled, maxConcurrency, watchIntervalMin, notifications, lichTaiEnabled)"));
+        return Err(bad("Không có cài đặt nào được phép đổi (watchAutoEnabled, maxConcurrency, watchIntervalMin, notifications, lichTaiEnabled, lichTaiGio, lichTaiNhom, lichTaiHanChotGio)"));
     }
     let s = crate::commands::update_settings(patch, app.state(), app.state(), app.clone()).await?;
     Ok(json!({
@@ -938,44 +958,35 @@ async fn settings_patch(app: &AppHandle, body: Value) -> ApiResult {
             "watchIntervalMin": s.watch_interval_min,
             "notifications": s.notifications,
             "lichTaiEnabled": s.lich_tai_enabled,
+            "lichTaiGio": s.lich_tai_gio,
+            "lichTaiNhom": s.lich_tai_nhom,
+            "lichTaiHanChotGio": s.lich_tai_han_chot_gio,
         }
     }))
 }
 
-/// Dây chuyền (Lịch tải) cho bot: bật chưa, đợt đang quét, tóm tắt các đợt
-/// trong sổ và CẢNH BÁO (ổ đầy…) — bot gửi mỗi `id` 1 lần. Bot tải không gửi
-/// báo cáo nhóm (bot cắt gửi, #28); chỉ dùng để tắt tin "đợt" cũ + báo lỗi.
+/// Nút Lịch tải trên bot — gọi ĐÚNG lệnh của nút trong app.
+fn daychuyen_action(app: &AppHandle, action: &str, body: Value) -> ApiResult {
+    let msg = match action {
+        "chay" => crate::commands::daychuyen_run_now(app.clone(), app.state(), app.state(), app.state(), app.state(), app.state())?,
+        "dung" => {
+            let huy = body.get("huyJob").and_then(|v| v.as_bool()).unwrap_or(false);
+            crate::commands::daychuyen_stop(huy, app.state(), app.state(), app.state(), app.state())?
+        }
+        "boqua" => crate::commands::daychuyen_skip_today(app.state())?,
+        _ => return Err(bad(format!("Không có thao tác Lịch tải '{action}'"))),
+    };
+    Ok(json!({ "ok": true, "message": msg, "daychuyen": daychuyen_status(app) }))
+}
+
+/// Dây chuyền (Lịch tải) cho bot: tình trạng đầy đủ (tin trạng thái tự sửa),
+/// lỗi đang có theo loại (`vanDe`) và sự kiện 1 lần (`canhBao`). Bot tải không
+/// gửi báo cáo nhóm (bot cắt gửi, #28).
 fn daychuyen_status(app: &AppHandle) -> Value {
-    let s = app.state::<Arc<SettingsStore>>().get();
-    let st = app
-        .try_state::<Arc<crate::daychuyen::DayChuyen>>()
-        .map(|d| d.snapshot())
-        .unwrap_or_default();
-    let dots: Vec<Value> = st
-        .dot
-        .iter()
-        .map(|d| {
-            let vids: Vec<&crate::daychuyen::VideoPhieu> = d.phieu.kenh.iter().flat_map(|k| &k.video).collect();
-            let dem = |tt: &str| vids.iter().filter(|v| v.trang_thai == tt).count();
-            json!({
-                "dotId": d.phieu.dot_id, "nhom": d.phieu.nhom, "trangThai": d.phieu.trang_thai,
-                "lyDoDong": d.phieu.ly_do_dong, "video": vids.len(), "xong": dem("xong"),
-                "loi": dem("loi"), "boQua": dem("bo_qua"), "tre": dem("tre"),
-            })
-        })
-        .collect();
-    json!({
-        "ok": true,
-        "lichTaiEnabled": s.lich_tai_enabled,
-        "gio": s.lich_tai_gio,
-        "nhom": s.lich_tai_nhom,
-        "dangChay": crate::daychuyen::dot_dang_chay(),
-        "ngay": st.ngay,
-        "xongNgay": st.xong_ngay,
-        "lyDoChan": st.ly_do_chan,
-        "dots": dots,
-        "canhBao": st.canh_bao,
-    })
+    match crate::commands::daychuyen_status(app.state(), app.state(), app.state()) {
+        Ok(v) => v,
+        Err(e) => json!({ "ok": false, "error": e.to_string() }),
+    }
 }
 
 #[cfg(test)]
