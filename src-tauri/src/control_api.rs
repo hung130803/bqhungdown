@@ -351,6 +351,7 @@ async fn route(app: &AppHandle, req: &Request) -> ApiResult {
         ("GET", ["api", "cookies"]) => Ok(cookies_status(app)),
         ("POST", ["api", "cookies", site]) => cookies_set(app, site, req.json().map_err(bad)?).await,
         ("POST", ["api", "settings"]) => settings_patch(app, req.json().map_err(bad)?).await,
+        ("GET", ["api", "daychuyen"]) => Ok(daychuyen_status(app)),
         ("POST", ["api", "engine", "fix"]) => {
             let msg = crate::commands::fix_download_engine(app.clone(), app.state()).await?;
             Ok(json!({ "ok": true, "message": msg }))
@@ -452,6 +453,7 @@ fn status(app: &AppHandle) -> Value {
             "watchIntervalMin": s.watch_interval_min,
             "defaultFolder": s.default_folder,
             "watchRoot": s.watch_root,
+            "lichTaiEnabled": s.lich_tai_enabled,
             "proxies": s.proxies.len(),
             // ffmpeg app đang dùng — bot mượn để nén video gửi về điện thoại.
             "ffmpegPath": crate::sidecar_detect::ffmpeg_path(),
@@ -611,6 +613,10 @@ fn watch_list(app: &AppHandle, req: &Request) -> Value {
 /// Quét kênh chạy NỀN (có thể vài phút với hàng trăm kênh) — trả lời ngay để
 /// bot không phải giữ kết nối; tiến độ xem qua /api/watch + hàng đợi.
 fn watch_check_all(app: &AppHandle, body: Value) -> ApiResult {
+    // Lịch tải đang quét → nói rõ đợt nào thay vì nhận lệnh rồi lặng lẽ bỏ (#29).
+    if let Some(dot) = crate::daychuyen::dot_dang_chay() {
+        return Err(ApiError(409, crate::daychuyen::bao_dang_chay(&dot)));
+    }
     let group = body.get("group").and_then(|g| g.as_str()).map(|s| s.to_string());
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -917,8 +923,11 @@ async fn settings_patch(app: &AppHandle, body: Value) -> ApiResult {
     if let Some(v) = body.get("notifications").and_then(|v| v.as_bool()) {
         patch.notifications = Some(v);
     }
+    if let Some(v) = body.get("lichTaiEnabled").and_then(|v| v.as_bool()) {
+        patch.lich_tai_enabled = Some(v);
+    }
     if patch == SettingsPatch::default() {
-        return Err(bad("Không có cài đặt nào được phép đổi (watchAutoEnabled, maxConcurrency, watchIntervalMin, notifications)"));
+        return Err(bad("Không có cài đặt nào được phép đổi (watchAutoEnabled, maxConcurrency, watchIntervalMin, notifications, lichTaiEnabled)"));
     }
     let s = crate::commands::update_settings(patch, app.state(), app.state(), app.clone()).await?;
     Ok(json!({
@@ -928,8 +937,45 @@ async fn settings_patch(app: &AppHandle, body: Value) -> ApiResult {
             "watchAutoEnabled": s.watch_auto_enabled,
             "watchIntervalMin": s.watch_interval_min,
             "notifications": s.notifications,
+            "lichTaiEnabled": s.lich_tai_enabled,
         }
     }))
+}
+
+/// Dây chuyền (Lịch tải) cho bot: bật chưa, đợt đang quét, tóm tắt các đợt
+/// trong sổ và CẢNH BÁO (ổ đầy…) — bot gửi mỗi `id` 1 lần. Bot tải không gửi
+/// báo cáo nhóm (bot cắt gửi, #28); chỉ dùng để tắt tin "đợt" cũ + báo lỗi.
+fn daychuyen_status(app: &AppHandle) -> Value {
+    let s = app.state::<Arc<SettingsStore>>().get();
+    let st = app
+        .try_state::<Arc<crate::daychuyen::DayChuyen>>()
+        .map(|d| d.snapshot())
+        .unwrap_or_default();
+    let dots: Vec<Value> = st
+        .dot
+        .iter()
+        .map(|d| {
+            let vids: Vec<&crate::daychuyen::VideoPhieu> = d.phieu.kenh.iter().flat_map(|k| &k.video).collect();
+            let dem = |tt: &str| vids.iter().filter(|v| v.trang_thai == tt).count();
+            json!({
+                "dotId": d.phieu.dot_id, "nhom": d.phieu.nhom, "trangThai": d.phieu.trang_thai,
+                "lyDoDong": d.phieu.ly_do_dong, "video": vids.len(), "xong": dem("xong"),
+                "loi": dem("loi"), "boQua": dem("bo_qua"), "tre": dem("tre"),
+            })
+        })
+        .collect();
+    json!({
+        "ok": true,
+        "lichTaiEnabled": s.lich_tai_enabled,
+        "gio": s.lich_tai_gio,
+        "nhom": s.lich_tai_nhom,
+        "dangChay": crate::daychuyen::dot_dang_chay(),
+        "ngay": st.ngay,
+        "xongNgay": st.xong_ngay,
+        "lyDoChan": st.ly_do_chan,
+        "dots": dots,
+        "canhBao": st.canh_bao,
+    })
 }
 
 #[cfg(test)]

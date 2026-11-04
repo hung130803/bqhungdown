@@ -392,6 +392,20 @@ export interface Settings {
    * Mặc định 1080 vì 4K to gấp ~5.5 lần 1080p → tải hàng loạt lâu hơn nhiều.
    */
   maxHeight?: number;
+  /** Nhịp quét nền cũ (bot bật/tắt). Lịch tải bật thì nhịp này tạm nghỉ. */
+  watchAutoEnabled?: boolean;
+  /** DÂY CHUYỀN: bật Lịch tải (mặc định TẮT). INTEGRATION.md mục 11-12. */
+  lichTaiEnabled?: boolean;
+  /** Giờ bắt đầu "HH:MM" (giờ máy). */
+  lichTaiGio?: string;
+  /** Nhóm chạy theo ĐÚNG thứ tự này ("" = Chưa phân nhóm). */
+  lichTaiNhom?: string[];
+  /** Hạn chót mỗi đợt, giờ (1-24, mặc định 3). */
+  lichTaiHanChotGio?: number;
+  /** Gốc phiếu đợt; null = `C:\ProgramData\BQDayChuyen`. */
+  daychuyenDir?: string | null;
+  /** Mở cùng Windows, thu nhỏ xuống khay. */
+  moCungWindows?: boolean;
 }
 
 export type SettingsPatch = Partial<Settings>;

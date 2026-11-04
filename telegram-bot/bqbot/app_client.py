@@ -173,6 +173,10 @@ class AppClient:
     def settings(self, **patch: Any) -> dict:
         return self.post("/api/settings", patch)
 
+    def daychuyen(self) -> dict:
+        """Lịch tải (dây chuyền): bật chưa, đợt đang quét, cảnh báo (ổ đầy…)."""
+        return self.get("/api/daychuyen")
+
     def quit_app(self) -> dict:
         return self.post("/api/app/quit", timeout=15)
 

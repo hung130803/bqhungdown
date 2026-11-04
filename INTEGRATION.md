@@ -50,13 +50,17 @@ Theo dõi kênh nguồn          Quét thư mục trung chuyển        Quét th
   `<TRUNG_CHUYỂN>\_Loi\<Kênh>\` + ghi lý do vào báo cáo. Không xóa oan.
 - File hỏng/không đọc được (ffprobe fail) → cũng chuyển `_Loi` + báo.
 
-## 5. Nhịp chạy & hạn mức (tool cắt)
+## 5. Nhịp chạy (tool cắt) — SỬA 04/11/2026
 
-- Mặc định chạy KHI USER BẤM "▶ Chạy dây chuyền" (không tự chạy nền);
-  có tùy chọn bật "tự canh thư mục" cho ai muốn full auto.
-- Mỗi kênh tối đa `daily_limit` video/ngày (mặc định 1). File dư nằm chờ
-  các ngày sau (backlog là nguyên liệu ngày mai — không xóa).
-- Thứ tự trong kênh: file có mtime CŨ NHẤT trước (đến trước làm trước).
+- Có 2 cách chạy: bấm "▶ Chạy dây chuyền" (như cũ) và **Tự chạy** (mới).
+  Tự chạy có công tắc, **mặc định TẮT**. Tắt = hành vi y như trước 04/11/2026.
+- Tự chạy: trong khung giờ (mặc định 06:00–22:00), cứ N phút (mặc định 10)
+  gọi ĐÚNG hàm mà nút ▶ / bot đang gọi (`_bot_chay_day_chuyen(nhóm đã lưu)`),
+  không viết lại nghiệp vụ. Thêm 1 lượt 45 giây sau khi phiếu đợt tải (mục 11)
+  ghi một video `xong`. Lượt trước còn đang quét/nhận file thì bỏ nhịp.
+- Lượt tự chạy KHÔNG được nhảy màn hình (không gọi `_pipe_focus` /
+  `_select_project`), KHÔNG mở hộp thoại, KHÔNG gọi mạng trên luồng giao diện.
+- Thứ tự trong kênh: file có mtime CŨ NHẤT trước (giữ nguyên).
 
 ## 6. Cấu hình theo kênh (tool cắt)
 
@@ -126,3 +130,87 @@ Hết trách nhiệm. (Việc file "biến mất" sau đó là bình thường �
   kênh tải song song không thể lẫn thư mục của nhau.
 - Tên thư mục sinh từ `target_name` phải TRÙNG tên kênh trong tool cắt
   (mục 1). Sanitize: thay `<>:"/\|?*` bằng khoảng trắng, bỏ chấm/trắng cuối.
+
+## 11. Phiếu đợt (thêm 04/11/2026)
+
+Phiếu chỉ để BÁO CÁO và KÍCH HOẠT SỚM, **không bao giờ là điều kiện bắt
+buộc**. Nguồn sự thật vẫn là file trong thư mục kênh theo mục 2. Phiếu mất,
+hỏng hay đến trễ thì video vẫn được cắt nhờ quét định kỳ.
+
+**Vị trí:** cài đặt chọn được ở cả 2 app, mặc định
+`C:\ProgramData\BQDayChuyen\`. Phiếu tải ở `dot\<dot_id>.json` (chỉ
+bqhungdown ghi). Phiếu cắt ở `cat\<dot_id>.json` (chỉ BQ Hung Video ghi).
+KHÔNG BAO GIỜ đặt phiếu trong thư mục kênh (tool cắt `collect_wipe` xoá
+mọi file cấp 1 ở đó; bộ dọn rác tool tải quét thư mục kênh).
+
+**Phiếu đợt tải** — mỗi nhóm mỗi lần chạy Lịch tải 1 phiếu, `dot_id` = `YYYYMMDD-NN`:
+
+```json
+{"schema":1, "dot_id":"20261104-01", "nhom":"Mỹ mới", "seq":17,
+ "mo_luc":"2026-11-04T06:00:12+07:00", "han_chot":"2026-11-04T09:00:12+07:00",
+ "trang_thai":"dang_tai", "dong_luc":null, "ly_do_dong":null,
+ "kenh":[{"thu_muc":"D:\\video ssmatool\\video mỹ\\kênh 3", "ten_dich":"...",
+          "video":[{"id":"youtube:abc123", "trang_thai":"xong", "file":"Tên video.mp4",
+                    "size":123456789, "xong_luc":"2026-11-04T06:07:40+07:00", "loi":null}]}],
+ "kenh_khong_co_video":["D:\\...\\kênh 9"]}
+```
+
+- `trang_thai` phiếu: `dang_tai` → `da_dong`. `ly_do_dong`: `xong` | `het_han`
+  (qua `han_chot`, mặc định 3 giờ) | `huy`. Phiếu đã đóng không bao giờ mở lại.
+- `trang_thai` video: `cho` | `dang_tai` | `xong` | `loi` | `bo_qua` (live,
+  18+, không phải video — kèm lý do) | `tre` (chưa xong khi đóng phiếu; vẫn
+  tải tiếp, xong thì vẫn được cắt).
+- Chỉ ghi `xong` khi file đã có TÊN CUỐI CÙNG trong thư mục kênh (sau cả bước
+  đổi tên Douyin), lấy từ mục queue đã Completed.
+- Id job của đợt lấy trực tiếp từ đường enqueue của chính đợt đó, KHÔNG đoán
+  bằng cách so danh sách hàng trước/sau. Phiếu tự lưu danh sách id của mình.
+
+**Phiếu đợt cắt** — cùng `dot_id`, cùng danh sách video. Trạng thái mỗi video:
+`chua_thay` | `dang_lam` | `xong` (kèm số Part) | `loi` (kèm lý do) | `trung` |
+`mat_file` | `kenh_tat` (kênh có `pipe_on=0`) | `khong_co_kenh` (thư mục
+không thuộc kênh cắt nào). `mat_file` CHỈ khi phiếu tải ghi `xong` mà sau 10
+phút file không có trong thư mục VÀ không có trong sổ `pipeline_files`.
+Video `tre` xong sau khi phiếu đóng vẫn cắt và ghi vào phiếu cắt đợt cũ.
+
+**Báo cáo nhóm:** khi cả 2 phiếu của một nhóm đã đóng, bot của BQ Hung Video
+gửi ĐÚNG 1 tin (khởi động lại app không gửi lại).
+
+## 12. Trạng thái bận (thêm 04/11/2026 — áp dụng cả PCBot)
+
+- Mỗi app ghi 1 file của mình: `C:\ProgramData\PCBot\exchange\ban_bqhungdown.json`,
+  `C:\ProgramData\PCBot\exchange\ban_bqhungvideo.json`.
+  Nội dung: `{"app":"bqhungvideo","ban":true,"cho":12,"dang_lam":3,
+  "cap_nhat":"2026-11-04T10:00:00+07:00","pid":1234,"phien_ban":"2.x","ly_do":null}`.
+- Ghi mỗi 60 giây. BQ Hung Video ghi từ luồng giao diện (app treo thì file cũ đi).
+  Thoát êm thì ghi lần cuối `ban=false`. Thư mục không tồn tại hoặc lỗi quyền
+  ghi thì bỏ qua im lặng (ghi log 1 lần), không ảnh hưởng việc chính.
+- bqhungdown bận khi: còn mục queued/downloading/paused, hoặc còn đợt đang mở.
+- BQ Hung Video bận khi: còn job pending/running, hoặc còn file trong hàng nhận,
+  hoặc đang quét nền.
+- PCBot: agent đọc 2 file CHỈ qua `safe_exchange_path` (+ giới hạn kích thước,
+  try/except), gửi cờ lên ESP32 trong stats. **Firmware quyết định** việc hoãn
+  lịch ngủ đông/sleep/tắt máy theo lịch (lệnh bấm tay KHÔNG bị chặn). File cũ
+  hơn 3 phút = app không chạy/treo → không coi là bận, báo Telegram. App bận
+  → hoãn 15 phút, mỗi lần hoãn phải cảnh báo lại + nút bỏ qua, tối đa 2 giờ,
+  rồi hỏi qua Telegram, KHÔNG tự hành động.
+- Dây chuyền chỉ dùng NGỦ ĐÔNG. Không dùng lệnh tắt máy cho dây chuyền
+  (`shutdown /t 10` ép đóng app).
+
+## Luật đọc/ghi chung cho mọi file ở mục 11–12
+
+1. Ghi nguyên tử: ghi `<tên>.json.tmp` cùng thư mục → flush → đổi tên đè.
+   Đổi tên vướng khoá (bên kia đang đọc) thì thử lại 5 lần × 200 ms. File tạm
+   KHÔNG mang đuôi video hay `.part`/`.ytdl`.
+2. Bên đọc: đọc hết rồi đóng file ngay. JSON hỏng → giữ bản đọc được lần
+   trước, KHÔNG coi là rỗng; hỏng 3 lần liên tiếp thì báo.
+3. `schema` lớn hơn số mình hiểu → bỏ qua phiếu + báo 1 lần, vẫn cắt theo quét.
+4. Khớp kênh THEO THƯ MỤC, không theo tên nhóm (tên nhóm 2 bên khác chữ:
+   MỸ/Mỹ, Mỹ mới/Mỹ mới 1, HÀN/Hàn). Chuẩn hoá trước khi so: Unicode NFC,
+   `/` → `\`, chữ thường, bỏ `\` cuối. (DB tool cắt lưu `D:/video ssmatool/...`,
+   tool tải lưu `D:\video ssmatool\...` — so nguyên chuỗi thì lệch 154/154.)
+   Ca mẫu dùng chung cho test D18 (tool tải) và V18 (tool cắt):
+   `D:/video ssmatool/video mỹ/kênh 3`, `D:\video ssmatool\video mỹ\kênh 3\`,
+   `d:\VIDEO SSMATOOL\video mỹ\kênh 3` (dạng NFD của "mỹ") → cùng một khoá.
+5. Thời gian ISO 8601 có múi giờ (`+07:00`). Ngày của đợt theo giờ máy.
+6. Mỗi bên tự xoá phiếu của mình cũ hơn 14 ngày, chỉ xoá file đúng mẫu tên.
+7. Không bao giờ ghi key, token, mật khẩu vào bất kỳ file nào ở mục 11–12.

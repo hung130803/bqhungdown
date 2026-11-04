@@ -392,6 +392,20 @@ pub async fn check_channel(
     history: &Arc<HistoryStore>,
     id: &str,
 ) -> u32 {
+    check_channel_with(app, store, queue, settings_store, history, id, None).await
+}
+
+/// Như `check_channel`, thêm `sink` (tuỳ chọn): Lịch tải gom id job của ĐÚNG
+/// đợt mình ngay tại chỗ enqueue (dây chuyền, INTEGRATION.md mục 11).
+pub async fn check_channel_with(
+    app: &AppHandle,
+    store: &Arc<WatchlistStore>,
+    queue: &Arc<QueueManager>,
+    settings_store: &Arc<SettingsStore>,
+    history: &Arc<HistoryStore>,
+    id: &str,
+    sink: Option<&crate::daychuyen::JobSink>,
+) -> u32 {
     // Kênh này đang có lượt quét khác chạy → CHỜ lượt kia xong rồi mới quét
     // (bấm ▶ đúng lúc quét nền không bị báo nhầm "0 video mới"). Tối đa 10 phút.
     let mut waited = 0u32;
@@ -438,7 +452,7 @@ pub async fn check_channel(
         if let Some(cid) = channel.channel_id.clone() {
             if let Ok(fetched) = fetch_rss_videos(&cid).await {
                 if !fetched.is_empty() {
-                    return apply(app, store, queue, settings_store, history, &channel, fetched, None, None, id).await;
+                    return apply(app, store, queue, settings_store, history, &channel, fetched, None, None, id, sink).await;
                 }
             }
         }
@@ -458,7 +472,7 @@ pub async fn check_channel(
                 })
                 .collect();
             let title = if info.title.is_empty() { None } else { Some(info.title) };
-            apply(app, store, queue, settings_store, history, &channel, fetched, info.channel_id, title, id).await
+            apply(app, store, queue, settings_store, history, &channel, fetched, info.channel_id, title, id, sink).await
         }
         Err(e) => {
             // Dịch sang tiếng Việt + CHỈ ĐÍCH DANH TRANG khi lỗi liên quan
@@ -505,8 +519,10 @@ async fn apply(
     channel_id: Option<String>,
     title: Option<String>,
     id: &str,
+    sink: Option<&crate::daychuyen::JobSink>,
 ) -> u32 {
     let is_baseline = channel.seen_ids.is_empty();
+    let job_ctx = sink.map(|s| JobCtx { sink: s, ten_dich: crate::daychuyen::ten_dich_cua(channel) });
     let seen: std::collections::HashSet<&String> = channel.seen_ids.iter().collect();
     let settings = settings_store.get();
     // BỘ LOẠI-TRÙNG "ĐÃ TẢI" dùng chung (archive ∪ lịch sử Completed).
@@ -624,7 +640,7 @@ async fn apply(
         if !picks.is_empty() {
             let vids: Vec<ChannelVideo> = picks.iter().map(picked_to_channel_video).collect();
             let got = enqueue_new(app, queue, settings_store, history, &channel.title,
-                                  folder.clone(), channel.max_height, &vids, &settings).await;
+                                  folder.clone(), channel.max_height, &vids, &settings, job_ctx.as_ref()).await;
             picks.truncate(got as usize);
             drip_count += got;
             dripped.extend(picks);
@@ -641,7 +657,7 @@ async fn apply(
             new_fetched.iter().take(take_n).map(|f| f.video.clone()).collect();
         if !vids.is_empty() {
             let got = enqueue_new(app, queue, settings_store, history, &channel.title,
-                                  folder.clone(), channel.max_height, &vids, &settings).await;
+                                  folder.clone(), channel.max_height, &vids, &settings, job_ctx.as_ref()).await;
             drip_count += got;
             if got > 0 {
                 crate::notification::notify_new_videos(
@@ -683,7 +699,7 @@ async fn apply(
             if !cand.is_empty() {
                 let vids: Vec<ChannelVideo> = cand.iter().map(picked_to_channel_video).collect();
                 let got = enqueue_new(app, queue, settings_store, history, &channel.title,
-                                      folder.clone(), channel.max_height, &vids, &settings).await;
+                                      folder.clone(), channel.max_height, &vids, &settings, job_ctx.as_ref()).await;
                 cand.truncate(got as usize);
                 drip_count += got;
                 dripped.extend(cand);
@@ -1276,9 +1292,16 @@ fn unescape_xml(s: &str) -> String {
         .replace("&apos;", "'")
 }
 
+/// Nơi Lịch tải gom id job của đợt (None = nút bấm / bot / nhịp cũ như xưa).
+struct JobCtx<'a> {
+    sink: &'a crate::daychuyen::JobSink,
+    ten_dich: String,
+}
+
 /// Build queue items for the new videos and enqueue them. Background downloads
 /// use polite mode (sleep between requests) + auto-rename so they never block
 /// on a conflict prompt. Returns how many were enqueued.
+#[allow(clippy::too_many_arguments)]
 async fn enqueue_new(
     app: &AppHandle,
     queue: &Arc<QueueManager>,
@@ -1289,6 +1312,7 @@ async fn enqueue_new(
     max_height: Option<u32>,
     videos: &[ChannelVideo],
     settings: &crate::models::Settings,
+    job_ctx: Option<&JobCtx<'_>>,
 ) -> u32 {
     if videos.is_empty() {
         return 0;
@@ -1327,8 +1351,31 @@ async fn enqueue_new(
             &taken,
         );
         taken.insert(item.short_id.clone());
+        let (sid, url, extractor) = (item.short_id.clone(), item.request.url.clone(), item.extractor.clone());
         if queue.enqueue(item).is_ok() {
             count += 1;
+            if let Some(ctx) = job_ctx {
+                // `enqueue` bỏ qua êm khi đã có lượt CÙNG link + thư mục đang
+                // sống → id thật của đợt là id của lượt đó.
+                let job_id = if queue.get(&sid).is_some() {
+                    Some(sid)
+                } else {
+                    queue.list().into_iter()
+                        .find(|it| it.request.url == url && it.request.save_folder == folder
+                            && matches!(it.state, crate::models::DownloadState::Queued
+                                | crate::models::DownloadState::Downloading
+                                | crate::models::DownloadState::Paused))
+                        .map(|it| it.short_id)
+                };
+                if let Some(job_id) = job_id {
+                    ctx.sink.lock().unwrap_or_else(|e| e.into_inner()).push(crate::daychuyen::EnqueuedJob {
+                        job_id,
+                        video_id: format!("{}:{}", extractor.to_lowercase(), video_id_of(&url)),
+                        folder: folder.clone(),
+                        ten_dich: ctx.ten_dich.clone(),
+                    });
+                }
+            }
         }
     }
     count
@@ -1936,7 +1983,7 @@ pub async fn force_one_more(
     );
     let got = enqueue_new(
         app, queue, settings_store, history, &channel.title,
-        folder, channel.max_height, &[picked_to_channel_video(&p)], &settings,
+        folder, channel.max_height, &[picked_to_channel_video(&p)], &settings, None,
     ).await;
     if got > 0 {
         let _ = store.update(id, |c| {
@@ -1992,6 +2039,19 @@ pub async fn check_all(
     // nhóm khác; vòng theo dõi nền truyền None (canh mọi nhóm).
     group: Option<String>,
 ) -> Vec<crate::models::WatchedChannel> {
+    check_all_with(app, store, queue, settings_store, history, group, None).await
+}
+
+/// Như `check_all`, thêm `sink` tuỳ chọn để Lịch tải nhận id job của đợt.
+pub async fn check_all_with(
+    app: &AppHandle,
+    store: &Arc<WatchlistStore>,
+    queue: &Arc<QueueManager>,
+    settings_store: &Arc<SettingsStore>,
+    history: &Arc<HistoryStore>,
+    group: Option<String>,
+    sink: Option<crate::daychuyen::JobSink>,
+) -> Vec<crate::models::WatchedChannel> {
     use tokio::sync::Semaphore;
     use tokio::task::JoinSet;
 
@@ -2013,10 +2073,11 @@ pub async fn check_all(
         let settings_store = settings_store.clone();
         let history = history.clone();
         let sem = sem.clone();
+        let sink = sink.clone();
         set.spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
             for id in ids {
-                check_channel(&app, &store, &queue, &settings_store, &history, &id).await;
+                check_channel_with(&app, &store, &queue, &settings_store, &history, &id, sink.as_ref()).await;
             }
         });
     }
@@ -2038,11 +2099,14 @@ pub fn spawn_monitor(
         loop {
             // Mặc định TẮT: kênh chỉ tải khi user CHÍNH TAY bấm ▶ Chạy tất
             // cả / ▶ từng kênh. Bật watch_auto_enabled mới tự quét nền.
-            if settings_store.get().watch_auto_enabled {
+            // Lịch tải (dây chuyền) bật thì nhịp này NGHỈ — không chạy cả hai;
+            // giá trị watch_auto_enabled của anh giữ nguyên.
+            if crate::daychuyen::nhip_cu_duoc_chay(&settings_store.get()) {
                 // Nền canh MỌI nhóm.
                 let _ = check_all(&app, &store, &queue, &settings_store, &history, None).await;
             }
-            let interval_min = settings_store.get().watch_interval_min.clamp(1, 1440);
+            // Tối thiểu 30 phút (#25): quét 155 kênh mỗi phút dễ bị chặn bot.
+            let interval_min = crate::daychuyen::nhip_cu_phut(&settings_store.get());
             tokio::time::sleep(Duration::from_secs(interval_min as u64 * 60)).await;
         }
     });

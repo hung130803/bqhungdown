@@ -268,6 +268,8 @@ export function SettingsPage() {
         onChange={v => set("minimizeToTray", v)}
       />
 
+      <DayChuyenSection settings={settings} onPatch={p => void update(p)} />
+
       <Field label="Bị giới hạn tốc độ → tự tải lại sau (phút)">
         <input
           type="number"
@@ -663,6 +665,103 @@ function SiteCookieRow({
       {error && <p role="alert" className="w-full text-xs text-danger">{error}</p>}
       {busy && <p role="status" className="w-full text-xs text-muted">Đang chờ hộp chọn file hoặc lưu cài đặt. Nếu không thấy hộp chọn, thử Alt+Tab để tìm.</p>}
     </div>
+  );
+}
+
+/** DÂY CHUYỀN TỰ ĐỘNG (04/11/2026): Lịch tải + mở cùng Windows. Mọi công tắc
+ *  mặc định TẮT. Thứ tự nhóm ở đây = thứ tự tải (nhóm trước về trước). */
+export function DayChuyenSection({ settings, onPatch }: { settings: Settings; onPatch: (p: Partial<Settings>) => void }) {
+  const chon = settings.lichTaiNhom ?? [];
+  const tatCa = ["", ...(settings.watchGroups ?? [])];
+  const conLai = tatCa.filter(g => !chon.includes(g));
+  const ten = (g: string) => (g === "" ? "Chưa phân nhóm" : g);
+  const doiCho = (i: number, j: number) => {
+    if (j < 0 || j >= chon.length) return;
+    const next = [...chon];
+    [next[i], next[j]] = [next[j], next[i]];
+    onPatch({ lichTaiNhom: next });
+  };
+  const [gio, setGio] = useState(settings.lichTaiGio ?? "06:00");
+  useEffect(() => setGio(settings.lichTaiGio ?? "06:00"), [settings.lichTaiGio]);
+  return (
+    <section aria-label="Dây chuyền tự động" className="space-y-2 rounded-md border border-border p-3">
+      <h3 className="text-sm font-semibold text-fg">Dây chuyền tự động (Lịch tải)</h3>
+      <Toggle
+        label="Mở cùng Windows (thu nhỏ xuống khay)"
+        checked={settings.moCungWindows ?? false}
+        onChange={v => onPatch({ moCungWindows: v })}
+      />
+      <Toggle
+        label="Bật Lịch tải — mỗi ngày tự tải lần lượt từng nhóm"
+        checked={settings.lichTaiEnabled ?? false}
+        onChange={v => onPatch({ lichTaiEnabled: v })}
+      />
+      {settings.lichTaiEnabled && settings.watchAutoEnabled && (
+        <p role="note" className="text-xs text-warning">
+          Nhịp quét nền cũ đang TẠM NGHỈ vì Lịch tải đang bật (không chạy cả hai).
+        </p>
+      )}
+      <Field label="Giờ bắt đầu (giờ máy)">
+        <input
+          type="time"
+          aria-label="Giờ bắt đầu Lịch tải"
+          value={gio}
+          onChange={e => setGio(e.target.value)}
+          onBlur={() => { if (/^\d{2}:\d{2}$/.test(gio) && gio !== settings.lichTaiGio) onPatch({ lichTaiGio: gio }); }}
+          className="px-3 py-2 rounded-md bg-surface border border-border text-fg"
+        />
+      </Field>
+      <Field label="Hạn chót mỗi đợt (giờ)">
+        <input
+          type="number"
+          min={1}
+          max={24}
+          value={settings.lichTaiHanChotGio ?? 3}
+          onChange={e => {
+            const n = parseInt(e.target.value, 10);
+            if (Number.isFinite(n) && n >= 1 && n <= 24) onPatch({ lichTaiHanChotGio: n });
+          }}
+          className="w-24 px-3 py-2 rounded-md bg-surface border border-border text-fg"
+        />
+      </Field>
+      <div className="space-y-1">
+        <span className="text-sm font-medium text-fg">Nhóm tải theo thứ tự</span>
+        <ol className="space-y-1">
+          {chon.map((g, i) => (
+            <li key={`c-${g}`} className="flex items-center gap-2 text-sm text-fg">
+              <span className="w-6 text-muted">{i + 1}.</span>
+              <span className="flex-1">{ten(g)}</span>
+              <button type="button" aria-label={`Đưa ${ten(g)} lên`} onClick={() => doiCho(i, i - 1)} className="px-2 rounded bg-surface-2 border border-border">↑</button>
+              <button type="button" aria-label={`Đưa ${ten(g)} xuống`} onClick={() => doiCho(i, i + 1)} className="px-2 rounded bg-surface-2 border border-border">↓</button>
+              <button type="button" aria-label={`Bỏ ${ten(g)}`} onClick={() => onPatch({ lichTaiNhom: chon.filter(x => x !== g) })} className="px-2 rounded bg-surface-2 border border-border">Bỏ</button>
+            </li>
+          ))}
+        </ol>
+        {conLai.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {conLai.map(g => (
+              <button type="button" key={`a-${g}`} onClick={() => onPatch({ lichTaiNhom: [...chon, g] })} className="px-2 py-1 rounded bg-surface-2 border border-border text-xs text-fg">
+                + {ten(g)}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <Field label="Thư mục phiếu đợt (để trống = C:\ProgramData\BQDayChuyen)">
+        <input
+          defaultValue={settings.daychuyenDir ?? ""}
+          onBlur={e => {
+            const v = e.target.value.trim();
+            if (v !== (settings.daychuyenDir ?? "")) onPatch({ daychuyenDir: v === "" ? null : v });
+          }}
+          className="w-full px-3 py-2 rounded-md bg-surface border border-border text-fg"
+        />
+      </Field>
+      <p className="text-xs text-muted">
+        Phiếu đợt chỉ để báo cáo cho tool cắt — tool cắt vẫn cắt theo thư mục kể cả khi phiếu mất.
+        Ổ chứa video dưới 30 GB (hoặc ổ C dưới 10 GB) thì không mở đợt mới và báo qua bot.
+      </p>
+    </section>
   );
 }
 

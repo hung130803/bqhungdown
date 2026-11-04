@@ -678,6 +678,34 @@ pub struct Settings {
     /// 2160 (hoặc 0) hoặc chọn tay chất lượng cao trong ô Chất lượng.
     #[serde(default = "default_max_height")]
     pub max_height: u32,
+    /// DÂY CHUYỀN TỰ ĐỘNG (04/11/2026): bật Lịch tải — đến `lich_tai_gio` mỗi
+    /// ngày tự quét LẦN LƯỢT các nhóm `lich_tai_nhom`, ghi phiếu đợt + file
+    /// trạng thái bận (INTEGRATION.md mục 11-12). Mặc định TẮT = như cũ.
+    #[serde(default)]
+    pub lich_tai_enabled: bool,
+    /// Giờ bắt đầu "HH:MM" theo giờ máy. Mở app sau giờ này thì chạy ngay.
+    #[serde(default = "default_lich_tai_gio")]
+    pub lich_tai_gio: String,
+    /// Nhóm chạy theo ĐÚNG thứ tự này ("" = Chưa phân nhóm).
+    #[serde(default)]
+    pub lich_tai_nhom: Vec<String>,
+    /// Hạn chót mỗi đợt (giờ, 1-24). Quá hạn thì đóng phiếu, video chưa xong ghi `tre`.
+    #[serde(default = "default_lich_tai_han_chot")]
+    pub lich_tai_han_chot_gio: u32,
+    /// Gốc phiếu đợt (mặc định `C:\ProgramData\BQDayChuyen`).
+    #[serde(default)]
+    pub daychuyen_dir: Option<String>,
+    /// Mở cùng Windows (lối tắt trong Startup, chạy thu nhỏ xuống khay).
+    #[serde(default)]
+    pub mo_cung_windows: bool,
+}
+
+fn default_lich_tai_gio() -> String {
+    "06:00".into()
+}
+
+fn default_lich_tai_han_chot() -> u32 {
+    3
 }
 
 fn default_cooldown() -> u32 {
@@ -735,6 +763,12 @@ impl Default for Settings {
             watch_auto_enabled: false,
             watch_root: None,
             max_height: 1080,
+            lich_tai_enabled: false,
+            lich_tai_gio: default_lich_tai_gio(),
+            lich_tai_nhom: Vec::new(),
+            lich_tai_han_chot_gio: default_lich_tai_han_chot(),
+            daychuyen_dir: None,
+            mo_cung_windows: false,
         }
     }
 }
@@ -777,6 +811,15 @@ pub struct SettingsPatch {
     #[serde(default, deserialize_with = "deserialize_optional_optional_string")]
     pub watch_root: Option<Option<String>>,
     pub max_height: Option<u32>,
+    pub lich_tai_enabled: Option<bool>,
+    /// "HH:MM" — sai định dạng thì bỏ qua (giữ giờ cũ).
+    pub lich_tai_gio: Option<String>,
+    pub lich_tai_nhom: Option<Vec<String>>,
+    pub lich_tai_han_chot_gio: Option<u32>,
+    /// `Some(None)` = về thư mục mặc định.
+    #[serde(default, deserialize_with = "deserialize_optional_optional_string")]
+    pub daychuyen_dir: Option<Option<String>>,
+    pub mo_cung_windows: Option<bool>,
 }
 
 /// Custom serde deserializer that distinguishes:

@@ -47,6 +47,8 @@ FIREFOX_CHECK_EVERY = 6 * 3600
 FIREFOX_REMIND_EVERY = 24 * 3600
 # Đợt tải lưu lại từ lần chạy trước chỉ nhận lại nếu chưa quá ngần này giây.
 RESTORE_MAX_AGE = 6 * 3600
+# Đọc trạng thái Lịch tải (dây chuyền) của app mỗi ngần này giây.
+DAYCHUYEN_EVERY = 60
 
 
 def _kb(rows):
@@ -93,6 +95,11 @@ class Monitor:
         self._batch_t0: float | None = None      # giờ máy (epoch) lúc mở đợt
         self._batch_done_since: float | None = None
         self._quiet_online_until = float("-inf")
+        # Dây chuyền (#28): Lịch tải bật thì bot tải KHÔNG mở "đợt tải" đoán
+        # trộn nhóm nữa — báo cáo theo nhóm do bot cắt gửi (đọc phiếu đợt).
+        self._lich_tai = False
+        self._last_daychuyen = float("-inf")
+        self._canh_bao_da_gui: set[str] | None = None
         # Nơi lưu id các tin đang tự cập nhật — bot khởi động lại thì chốt chúng
         # (không để tin "đang tải" đứng hình vĩnh viễn). None = không lưu (test).
         self.state_path: Path | None = None
@@ -302,6 +309,9 @@ class Monitor:
         if self._online is False and self.clock() >= self._quiet_online_until:
             self._notify("✅ App BQHungDown đã chạy lại.")
         self._online = True
+        if now - self._last_daychuyen >= DAYCHUYEN_EVERY:
+            self._last_daychuyen = now
+            self._check_daychuyen()
         items = data.get("items", [])
         self._diff(items)
         self._update_tracked(items)
@@ -426,7 +436,36 @@ class Monitor:
                 self._open_batch([sid])
         self._prev = cur
 
+    def _check_daychuyen(self) -> None:
+        """Lịch tải bật/tắt + cảnh báo của app (ổ đầy → không mở đợt). App bản cũ
+        chưa có route này → coi như Lịch tải tắt, bot chạy y như trước."""
+        try:
+            d = self.app.daychuyen()
+        except (AppOffline, AppError):
+            self._lich_tai = False
+            return
+        self._lich_tai = bool(d.get("lichTaiEnabled"))
+        path = self.state_path.parent / "daychuyen_alerts.json" if self.state_path else None
+        if self._canh_bao_da_gui is None:
+            self._canh_bao_da_gui = set()
+            if path and path.exists():
+                try:
+                    self._canh_bao_da_gui = set(json.loads(path.read_text(encoding="utf-8")).get("sent", []))
+                except (OSError, ValueError):
+                    pass
+        moi = [c for c in d.get("canhBao") or [] if c.get("id") and c["id"] not in self._canh_bao_da_gui]
+        for c in moi:
+            self._canh_bao_da_gui.add(c["id"])
+            self._notify("⚠️ <b>Dây chuyền tải</b>: " + fmt.esc(c.get("text", "")))
+        if moi and path:
+            try:
+                path.write_text(json.dumps({"sent": sorted(self._canh_bao_da_gui)[-50:]}), encoding="utf-8")
+            except OSError:
+                pass
+
     def _open_batch(self, ids: list[str]) -> None:
+        if self._lich_tai:
+            return  # Lịch tải bật: không gửi tin "đợt" cũ (bot cắt báo theo nhóm)
         for sid in ids:
             if sid not in self._batch_set:
                 self._batch_ids.append(sid)

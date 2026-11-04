@@ -36,6 +36,8 @@ pub mod queue;
 pub mod commands;
 pub mod control_api;
 pub mod bot_launcher;
+pub mod daychuyen;
+pub mod startup_shortcut;
 
 use std::sync::Arc;
 
@@ -50,6 +52,7 @@ use crate::ytdlp_runner::YtDlpRunner;
 /// THOÁT HẲN êm (dùng chung cho "Thoát hẳn" ở khay và lệnh đóng app từ bot):
 /// lưu hàng đợi + dừng lượt tải, tắt server PO token rồi mới thoát.
 pub fn quit_gracefully(app: &tauri::AppHandle) {
+    ghi_ban_khi_thoat(app);
     if let Some(q) = app.try_state::<Arc<QueueManager>>() {
         q.shutdown();
     }
@@ -59,6 +62,16 @@ pub fn quit_gracefully(app: &tauri::AppHandle) {
         crate::po_token::shutdown(&po);
     }
     app.exit(0);
+}
+
+/// Dây chuyền: thoát êm thì ghi file trạng thái bận lần cuối `ban=false`.
+fn ghi_ban_khi_thoat(app: &tauri::AppHandle) {
+    if let (Some(dc), Some(s)) = (
+        app.try_state::<Arc<crate::daychuyen::DayChuyen>>(),
+        app.try_state::<Arc<SettingsStore>>(),
+    ) {
+        dc.ghi_ban_khi_thoat(&s.get(), &app.package_info().version.to_string());
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -200,6 +213,21 @@ pub fn run() {
                 settings.clone(),
                 history.clone(),
             );
+            // DÂY CHUYỀN: Lịch tải chạy CẠNH vòng theo dõi cũ (công tắc
+            // `lich_tai_enabled` mặc định TẮT — tắt thì vòng không làm gì).
+            let daychuyen = crate::daychuyen::DayChuyen::load(&config_dir);
+            crate::daychuyen::spawn_scheduler(
+                handle.clone(),
+                watchlist.clone(),
+                queue.clone(),
+                settings.clone(),
+                history.clone(),
+                daychuyen.clone(),
+            );
+            // Mở cùng Windows: bật thì làm mới lối tắt (exe có thể đã đổi chỗ).
+            if settings.get().mo_cung_windows {
+                std::thread::spawn(|| crate::startup_shortcut::dong_bo(true));
+            }
 
             // DỌN MẢNH TẢI DỞ trên MỌI thư mục kênh, LẶP LẠI mỗi 2 phút.
             //
@@ -290,6 +318,7 @@ pub fn run() {
             app.manage(watchlist);
             app.manage(bookmarks);
             app.manage(po_proc);
+            app.manage(daychuyen);
             app.manage(PendingConflicts::default());
 
             // Cổng điều khiển cục bộ cho bot Telegram — mở SAU khi mọi state
@@ -347,6 +376,13 @@ pub fn run() {
                     .build(app)?;
             }
 
+            // Mở từ lối tắt Startup (`--minimized`): ẩn cửa sổ, chỉ còn ở khay.
+            if crate::startup_shortcut::mo_thu_nho() {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -362,6 +398,7 @@ pub fn run() {
                 }
             }
             tauri::WindowEvent::Destroyed => {
+                ghi_ban_khi_thoat(window.app_handle());
                 if let Some(queue) = window.try_state::<Arc<QueueManager>>() {
                     queue.shutdown();
                 }

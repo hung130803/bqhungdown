@@ -42,5 +42,11 @@
   "watchGroups": [],
   "watchAutoEnabled": false,
   "watchRoot": null,
-  "maxHeight": 1080
+  "maxHeight": 1080,
+  "lichTaiEnabled": false,
+  "lichTaiGio": "06:00",
+  "lichTaiNhom": [],
+  "lichTaiHanChotGio": 3,
+  "daychuyenDir": null,
+  "moCungWindows": false
 }

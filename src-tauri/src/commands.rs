@@ -697,6 +697,7 @@ pub async fn update_settings(
 ) -> AppResult<Settings> {
     let new_concurrency = patch.max_concurrency;
     let po_change = patch.po_token_enabled;
+    let startup_change = patch.mo_cung_windows;
     let next = settings.apply_patch(patch)?;
     if let Some(n) = new_concurrency {
         queue.set_concurrency(n).await;
@@ -720,6 +721,11 @@ pub async fn update_settings(
                 crate::po_token::uninstall_plugin(dir);
             }
         }
+    }
+    // Mở cùng Windows: tạo/xoá lối tắt Startup ngay khi gạt công tắc (chạy
+    // nền — PowerShell mất ~1 giây, không giữ giao diện).
+    if let Some(bat) = startup_change {
+        std::thread::spawn(move || crate::startup_shortcut::dong_bo(bat));
     }
     let _ = app.emit(EV_SETTINGS_CHANGED, next.clone());
     Ok(next)
@@ -1695,6 +1701,10 @@ pub async fn check_watched_now(
     // Chỉ chạy kênh của đúng nhóm này -> không kích các nhóm khác.
     group: Option<String>,
 ) -> AppResult<Vec<WatchedChannel>> {
+    // Lịch tải (dây chuyền) đang quét → báo thay vì chờ khoá chồng lượt (#29).
+    if let Some(dot) = crate::daychuyen::dot_dang_chay() {
+        return Err(AppError::Other(crate::daychuyen::bao_dang_chay(&dot)));
+    }
     Ok(crate::watcher::check_all(&app, store.inner(), queue.inner(), settings.inner(), history.inner(), group).await)
 }
 

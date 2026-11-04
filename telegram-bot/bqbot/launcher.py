@@ -13,6 +13,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 ALREADY_RUNNING = 4
 REG_NAME = "telegram_bot.json"
@@ -77,9 +78,34 @@ def find_app(configured: str | None = None) -> str | None:
     return str(max(found, key=lambda p: p.stat().st_mtime))
 
 
-def open_app(exe: str) -> None:
-    """Mở app TÁCH RỜI khỏi bot (bot tắt/khởi động lại không kéo app theo)."""
+class AppDangChay(OSError):
+    """Đã có tiến trình bqhungdown.exe (vd vừa tự mở cùng Windows, cổng điều
+    khiển chưa lên) — mở thêm bản nữa chỉ bật hộp thoại khoá 1-phiên của app."""
+
+
+def app_dang_chay() -> bool:
+    """Có tiến trình bqhungdown.exe đang chạy không (CHỈ ĐỌC, qua tasklist).
+
+    Không dò bằng cách mở file `instance.lock`: app khoá file đó KHÔNG chia sẻ
+    lúc khởi động — bot cầm file đúng lúc đó là chính app mở hỏng."""
     import subprocess
+    if os.name != "nt":
+        return False
+    try:
+        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq bqhungdown.exe", "/NH", "/FO", "CSV"],
+                           capture_output=True, text=True, timeout=15, creationflags=0x08000000)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return '"bqhungdown.exe"' in (r.stdout or "").lower()
+
+
+def open_app(exe: str, dang_chay: Callable[[], bool] | None = None) -> None:
+    """Mở app TÁCH RỜI khỏi bot (bot tắt/khởi động lại không kéo app theo).
+
+    App đã có tiến trình (đang khởi động, cổng chưa trả lời) → `AppDangChay`."""
+    import subprocess
+    if (dang_chay or app_dang_chay)():
+        raise AppDangChay("App đã chạy sẵn trên máy (đang khởi động) — không mở thêm bản thứ 2.")
     flags = 0
     if os.name == "nt":
         flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP

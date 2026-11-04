@@ -999,14 +999,19 @@ class Router:
             self._show(chat_id, mid, "❌ Không tìm thấy app BQHungDown trên máy tính. "
                                      "Điền <code>app_exe</code> trong config.json của bot.", kb([[HOME]]))
             return
+        dang_khoi_dong = False
         try:
             launcher.open_app(exe)
+        except launcher.AppDangChay:
+            # Vừa tự mở cùng Windows, cổng điều khiển chưa lên → CHỜ, không mở thêm.
+            dang_khoi_dong = True
         except OSError as e:
             self._show(chat_id, mid, f"❌ Không mở được app: {fmt.esc(e)}", kb([[HOME]]))
             return
         if self.monitor:
             self.monitor.quiet_back_online(wait_s + 30)  # khỏi báo trùng "app đã chạy lại"
-        self._show(chat_id, mid, "⏳ Đang mở app trên máy tính…")
+        self._show(chat_id, mid, "⏳ App đang khởi động sẵn trên máy tính — chờ app trả lời…"
+                   if dang_khoi_dong else "⏳ Đang mở app trên máy tính…")
 
         def wait_up() -> bool:
             waited = 0.0

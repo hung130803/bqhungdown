@@ -268,6 +268,35 @@ impl SettingsStore {
                     _ => 2160,
                 };
             }
+            // Dây chuyền tự động (Lịch tải).
+            if let Some(v) = patch.lich_tai_enabled {
+                s.lich_tai_enabled = v;
+            }
+            if let Some(g) = patch.lich_tai_gio {
+                if crate::daychuyen::gio_hop_le(&g) {
+                    s.lich_tai_gio = g.trim().to_string();
+                }
+            }
+            // Thứ tự nhóm GIỮ NGUYÊN như anh xếp; "" (Chưa phân nhóm) hợp lệ.
+            if let Some(list) = patch.lich_tai_nhom {
+                let mut out: Vec<String> = Vec::new();
+                for g in list {
+                    let g = g.trim().to_string();
+                    if !out.contains(&g) {
+                        out.push(g);
+                    }
+                }
+                s.lich_tai_nhom = out;
+            }
+            if let Some(v) = patch.lich_tai_han_chot_gio {
+                s.lich_tai_han_chot_gio = v.clamp(1, 24);
+            }
+            if let Some(opt) = patch.daychuyen_dir {
+                s.daychuyen_dir = opt.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+            }
+            if let Some(v) = patch.mo_cung_windows {
+                s.mo_cung_windows = v;
+            }
             Ok(())
         })
     }

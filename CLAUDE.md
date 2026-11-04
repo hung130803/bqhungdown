@@ -77,3 +77,15 @@
   cookie như cũ. Bot tự kiểm tra YouTube 18+ mỗi 6 giờ (`cookie_check.py`).
   Đợt tải xong → bot gửi TIN MỚI báo cáo tổng theo nhóm (`fmt.batch_report`);
   đợt được lưu ở `logs/live_msgs.json` để bot khởi động lại vẫn báo đúng.
+- **DÂY CHUYỀN TỰ ĐỘNG — ĐỢT 1 (04/11/2026, nhánh `daychuyen-tu-dong`):**
+  `src-tauri/src/daychuyen.rs` (Lịch tải `spawn_scheduler` cạnh `spawn_monitor`,
+  phiếu đợt `<daychuyen_dir>\dot\<dot_id>.json`, file bận
+  `C:\ProgramData\PCBot\exchange\ban_bqhungdown.json`, kiểm tra ổ) +
+  `startup_shortcut.rs` (mở cùng Windows `--minimized`). Giao kèo: INTEGRATION.md
+  mục 11-12. Công tắc `lich_tai_enabled`/`mo_cung_windows` mặc định TẮT. Lịch
+  gọi `watcher::check_all_with` (id job lấy THẲNG tại `enqueue_new` qua sink,
+  không đoán theo hàng); `check_all`/`check_channel` giữ chữ ký cũ. Lịch bật thì
+  nhịp cũ nghỉ (`nhip_cu_duoc_chay`, KHÔNG sửa `watch_auto_enabled`), nhịp cũ
+  tối thiểu 30 phút; ▶ Chạy tất cả lúc Lịch đang quét báo "đang chạy đợt X".
+  Khớp kênh 2 tool THEO THƯ MỤC qua `chuan_hoa_duong_dan` (ca mẫu D18 = V18).
+  Đợt 2 chưa làm: #14 Douyin, #15 18+, #24 nửa đêm, #26 bài ảnh.
