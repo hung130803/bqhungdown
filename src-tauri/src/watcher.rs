@@ -99,11 +99,16 @@ pub fn reconcile_all(
     // Đọc history 1 lần: vừa lấy video ĐÃ XONG, vừa lấy video LỖI VĨNH VIỄN
     // (private/xoá/…) để đánh dấu bỏ qua thay vì nạp lại vô tận.
     let hist = history.list(None, 2000, 0).unwrap_or_default();
-    let done_hist: std::collections::HashSet<String> = hist
-        .iter()
-        .filter(|e| e.status == HistoryStatus::Completed)
-        .map(|e| video_id_of(&e.url))
-        .collect();
+    // id -> NGÀY (local) tải xong. Cần ngày để tự-chữa bộ đếm chỉ tính video
+    // xong HÔM NAY (xem "TỰ CHỮA bộ đếm" bên dưới).
+    let mut done_hist: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for e in hist.iter().filter(|e| e.status == HistoryStatus::Completed) {
+        let day = e.finished_at.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string();
+        let slot = done_hist.entry(video_id_of(&e.url)).or_default();
+        if day > *slot {
+            *slot = day;
+        }
+    }
     // id -> LỖI VĨNH VIỄN (video sẽ không bao giờ tải được). LỖI THẬT
     // 02/08/2026: video bị đặt private → reconcile gỡ khỏi seen_ids để "quét
     // lại" → lượt sau nạp lại → lại lỗi → LẶP VÔ TẬN. Nay id nào lỗi vĩnh viễn
@@ -159,15 +164,17 @@ pub fn reconcile_all(
                     c.seen_ids.retain(|s| s != &vid);
                 }
             }
-            let mut vua_xong = 0u32;   // số video của kênh này VỪA tải xong
+            let mut vua_xong = 0u32;   // số video của kênh này tải xong HÔM NAY
             let pending = std::mem::take(&mut c.dl_pending);
             for vid in pending {
-                if done_hist.contains(&vid) {
+                if let Some(day) = done_hist.get(&vid) {
+                    if day == &today {
+                        vua_xong += 1;
+                    }
                     if !c.done_ids.contains(&vid) {
                         c.live_hold_n.remove(&vid);
                         c.done_ids.push(vid); // chốt đã làm
                     }
-                    vua_xong += 1;
                 } else if live.contains(&vid) {
                     c.dl_pending.push(vid); // vẫn đang tải/chờ/retry
                 } else if live_now.contains(&vid) {
@@ -217,6 +224,11 @@ pub fn reconcile_all(
             // giữa 2 lần thử) là lệch VĨNH VIỄN: không có đường nào cộng lại.
             //
             // Nay chốt theo SỰ THẬT: đã có video vào lịch sử thì PHẢI đếm.
+            //
+            // LỖI THẬT 10/11/2026 (16 kênh Mỹ BKT): video tải xong HÔM QUA
+            // 14h nhưng tới sáng nay mới có lượt đối soát → bị đếm là "đã tải
+            // 1 hôm nay" → cả nhóm hết suất, bấm tải báo "đã tải". Nên chỉ
+            // đếm video có ngày XONG (trong lịch sử) = hôm nay.
             if vua_xong > 0 {
                 if c.drip_date.as_deref() == Some(today.as_str()) {
                     c.drip_count = c.drip_count.max(vua_xong);
@@ -2190,12 +2202,19 @@ mod tests_tu_chua_bo_dem {
     /// Phần logic tự-chữa, tách ra để test không cần AppHandle/history thật.
     fn ap_dung(c: &mut WatchedChannel, today: &str,
                done_hist: &[&str], live: &[&str]) {
+        ap_dung_ngay(c, today, done_hist, &[], live)
+    }
+
+    /// Như `ap_dung` nhưng có video tải xong HÔM QUA (`xong_hom_qua`).
+    fn ap_dung_ngay(c: &mut WatchedChannel, today: &str,
+                    done_hist: &[&str], xong_hom_qua: &[&str], live: &[&str]) {
         let mut vua_xong = 0u32;
         let pending = std::mem::take(&mut c.dl_pending);
         for vid in pending {
-            if done_hist.contains(&vid.as_str()) {
+            let xong_nay = done_hist.contains(&vid.as_str());
+            if xong_nay || xong_hom_qua.contains(&vid.as_str()) {
                 if !c.done_ids.contains(&vid) { c.done_ids.push(vid); }
-                vua_xong += 1;
+                if xong_nay { vua_xong += 1; }
             } else if live.contains(&vid.as_str()) {
                 c.dl_pending.push(vid);
             } else {
@@ -2252,6 +2271,18 @@ mod tests_tu_chua_bo_dem {
         ap_dung(&mut c, NAY, &["a"], &[]);
         assert_eq!(c.drip_date.as_deref(), Some(NAY));
         assert_eq!(c.drip_count, 1, "ngày mới chỉ tính video của ngày mới");
+    }
+
+    /// ★ LỖI THẬT 10/11/2026: video xong HÔM QUA, sáng nay mới đối soát →
+    /// KHÔNG được tính là đã tải hôm nay (16 kênh Mỹ BKT bị khoá suất oan).
+    #[test]
+    fn xong_hom_qua_khong_chiem_suat_hom_nay() {
+        let mut c = ch_dem(Some("2026-07-24"), 1, vec!["a"]);
+        ap_dung_ngay(&mut c, NAY, &[], &["a"], &[]);
+        assert!(c.done_ids.contains(&"a".to_string()), "vẫn chốt đã làm");
+        assert!(c.dl_pending.is_empty());
+        let dem_hom_nay = if c.drip_date.as_deref() == Some(NAY) { c.drip_count } else { 0 };
+        assert_eq!(dem_hom_nay, 0, "hôm nay còn nguyên suất");
     }
 
     /// Lỗi cứng/huỷ vẫn TRẢ SUẤT như cũ (không được vì thêm tự-chữa mà mất).
