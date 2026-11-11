@@ -36,6 +36,15 @@ const LIVE_HOLD_SECS: i64 = 6 * 3600;
 /// BỎ HẲN: lúc đó chắc chắn là live/bản phát lại live, không phải premiere.
 const LIVE_HOLD_MAX: u32 = 4;
 
+/// Video từng bị cổng live chặn (đang giữ tạm hoặc đã đếm lần chặn). TỰ VÉT
+/// phải né: kho vét chỉ gồm video ĐÃ đăng (chờ live/đang live đã lọc lúc
+/// quét) nên bị chặn = bản phát lại live, chặn mãi. LỖI THẬT 11/11/2026
+/// (Rights Watching Media): vét chọn bản phát lại live nhiều view nhất → bị
+/// chặn → trả suất → lượt sau vét chọn LẠI đúng nó, lặp tới LIVE_HOLD_MAX.
+fn live_blocked_ids(c: &WatchedChannel) -> Vec<String> {
+    c.live_hold.keys().chain(c.live_hold_n.keys()).cloned().collect()
+}
+
 /// Video vừa bị cổng live chặn: giữ tạm (lần 1..MAX-1) hoặc bỏ hẳn (lần MAX).
 /// Trả `true` khi đã bỏ hẳn. Hàm thuần để unit-test.
 fn hold_or_skip_live(c: &mut crate::models::WatchedChannel, vid: String, now_ts: i64) -> bool {
@@ -731,6 +740,7 @@ async fn apply(
         let mut done_plus: Vec<String> = channel.done_ids.clone();
         done_plus.extend(channel.skipped_ids.clone());
         done_plus.extend(channel.dl_pending.clone());
+        done_plus.extend(live_blocked_ids(&channel));   // từng bị cổng live chặn
         done_plus.extend(dripped.iter().map(|p| p.id.clone()));
         done_plus.extend(downloaded.iter().cloned());
         done_plus.extend(new_fetched.iter().map(|f| f.id.clone()));
@@ -1467,6 +1477,16 @@ mod tests {
     }
 
     #[test]
+    fn vet_ne_video_tung_bi_chan_vi_live() {
+        let mut c = tests::chan(vec![], 1, vec![]);
+        c.live_hold.insert("dang_giu".into(), 1);
+        c.live_hold_n.insert("da_dem".into(), 1);
+        let mut ids = live_blocked_ids(&c);
+        ids.sort();
+        assert_eq!(ids, vec!["da_dem".to_string(), "dang_giu".into()]);
+    }
+
+    #[test]
     fn video_moi_khong_tai_qua_han_muc_ngay() {
         // limit 1, chưa tải hôm nay: 4 video mới -> chỉ lấy 1, dư 3 để dành.
         assert_eq!(new_take_count(4, 1, 0), 1);
@@ -2028,6 +2048,7 @@ pub async fn force_one_more(
         let mut done_plus = channel.done_ids.clone();
         done_plus.extend(channel.skipped_ids.clone());    // ⛔ user bỏ qua
         done_plus.extend(channel.dl_pending.clone());
+        done_plus.extend(live_blocked_ids(&channel));   // từng bị cổng live chặn
         done_plus.extend(downloaded.iter().cloned());
         // KHO CẢ KÊNH (đã lưu → lấy thẳng; cạn → quét lại 1 phát).
         let mut videos =

@@ -96,6 +96,30 @@ function Bootstrap({ children }: { children: React.ReactNode }) {
     };
   }, [hydrate, setQueueAll, applyProgress, applyState, setClipboard, isDismissed]);
 
+  // TỰ ĐỐI CHIẾU hàng đợi với app. Store chỉ sống nhờ event — lỡ 1 event (cửa
+  // sổ ẩn xuống khay, máy ngủ dậy) là mục kẹt "đang tải" mãi: anh Hùng 11/11/2026
+  // thấy "Đang tải 2" cả tiếng trong khi app không tải gì. Còn mục chưa xong thì
+  // 10 s hỏi lại 1 lần (list_queue đọc bộ nhớ, rất nhẹ) + hỏi ngay khi mở lại cửa sổ.
+  const hasActive = useQueueStore((s) =>
+    s.items.some((i) => i.state === "downloading" || i.state === "queued" || i.state === "paused"),
+  );
+  const refreshQueue = useQueueStore((s) => s.refresh);
+  useEffect(() => {
+    if (!ready) return;
+    const sync = () => void refreshQueue().catch(() => {});
+    const onVisible = () => {
+      if (document.visibilityState === "visible") sync();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", sync);
+    const timer = hasActive ? window.setInterval(sync, 10_000) : undefined;
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", sync);
+      if (timer !== undefined) window.clearInterval(timer);
+    };
+  }, [ready, hasActive, refreshQueue]);
+
   if (!ready) {
     return (
       <div className="h-full grid place-items-center text-muted">
