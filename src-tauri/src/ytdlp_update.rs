@@ -47,11 +47,22 @@ fn now_secs() -> u64 {
 /// cũ trong `binaries/`) tưởng đã cập nhật, bỏ qua 12 giờ → YouTube chặn lượt
 /// tải đầu tiên ("YouTube đang giới hạn"). Nay mốc ghi kèm bản app; khác bản
 /// là phải tự cập nhật ngay.
+///
+/// LỖI THẬT 16/11/2026: CÀI LẠI app (cùng thư mục) thay yt-dlp bằng bản cũ đi
+/// kèm bộ cài (2026.07.06) nhưng mốc vẫn "mới kiểm 10 phút trước" → 12 giờ
+/// chạy yt-dlp cũ. Nay mốc kèm DẤU VÂN TAY file yt-dlp (cỡ + giờ sửa): file bị
+/// thay là kiểm tra cập nhật ngay.
 fn install_id() -> String {
-    std::env::current_exe()
+    let dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let Some(dir) = dir else { return String::new() };
+    let fp = std::fs::metadata(dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" }))
         .ok()
-        .and_then(|p| p.parent().map(|d| d.to_string_lossy().to_lowercase()))
-        .unwrap_or_default()
+        .map(|m| {
+            let t = m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+            format!("|{}|{}", m.len(), t)
+        })
+        .unwrap_or_default();
+    format!("{}{}", dir.to_string_lossy().to_lowercase(), fp)
 }
 
 fn stamp_text() -> String {
@@ -92,7 +103,11 @@ pub async fn run_update_now(app: &AppHandle, data_dir: Option<PathBuf>) -> Resul
         let _ = std::fs::create_dir_all(dd);
         let _ = std::fs::write(stamp_path(dd), stamp_text());
     }
-    match tokio::time::timeout(UPDATE_TIMEOUT, run_update(app)).await {
+    let r = tokio::time::timeout(UPDATE_TIMEOUT, run_update(app)).await;
+    if let Some(dd) = &data_dir {
+        let _ = std::fs::write(stamp_path(dd), stamp_text());
+    }
+    match r {
         Ok(r) => r,
         Err(_) => Err(format!("hết thời gian chờ ({}s)", UPDATE_TIMEOUT.as_secs())),
     }
@@ -108,7 +123,11 @@ fn spawn_update_check_inner(app: AppHandle, data_dir: PathBuf, min_interval: u64
         let _ = std::fs::create_dir_all(&data_dir);
         let _ = std::fs::write(&stamp, stamp_text());
 
-        match tokio::time::timeout(UPDATE_TIMEOUT, run_update(&app)).await {
+        let r = tokio::time::timeout(UPDATE_TIMEOUT, run_update(&app)).await;
+        // Cập nhật xong file yt-dlp đổi → ghi lại mốc với dấu vân tay MỚI, kẻo
+        // lần mở sau tưởng "file bị thay" mà kiểm tra thừa.
+        let _ = std::fs::write(&stamp, stamp_text());
+        match r {
             Ok(Ok(msg)) => eprintln!("[ytdlp-update] {msg}"),
             Ok(Err(e)) => eprintln!("[ytdlp-update] failed: {e}"),
             Err(_) => eprintln!("[ytdlp-update] timed out after {}s", UPDATE_TIMEOUT.as_secs()),
@@ -166,5 +185,7 @@ mod stamp_tests {
         // Quá hạn → kiểm tra.
         assert!(should_check_text(Some("1000\nc:/app"), "c:/app", 1000 + h, h));
         assert!(should_check_text(None, "c:/app", 5, h));
+        // CÀI LẠI cùng thư mục: yt-dlp bị thay (cỡ/giờ khác) → kiểm tra ngay.
+        assert!(should_check_text(Some("1000\nc:/app|23588648|1794807400"), "c:/app|17423530|1794808900", 1100, h));
     }
 }
