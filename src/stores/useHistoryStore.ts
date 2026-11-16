@@ -31,6 +31,10 @@ const HISTORY_PAGE = 20000;
 // Mỗi lần refresh mang 1 số thứ tự; kết quả của lần CŨ về muộn (gõ tìm kiếm
 // nhanh) thì bỏ, không ghi đè kết quả mới.
 let refreshSeq = 0;
+// Gõ tìm kiếm: chờ ngừng gõ 250 ms mới hỏi backend — trước đây MỖI PHÍM đọc
+// lại cả ~15 000 mục lịch sử.
+const SEARCH_DEBOUNCE_MS = 250;
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 export const useHistoryStore = create<HistoryState>()((set, get) => ({
   entries: [],
@@ -38,7 +42,11 @@ export const useHistoryStore = create<HistoryState>()((set, get) => ({
   loading: false,
   setQuery: (q) => {
     set({ query: q });
-    void get().refresh();
+    if (searchTimer !== undefined) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      searchTimer = undefined;
+      void get().refresh();
+    }, SEARCH_DEBOUNCE_MS);
   },
   refresh: async () => {
     const seq = ++refreshSeq;

@@ -887,7 +887,7 @@ pub fn check_folder_writable(path: String) -> AppResult<bool> {
     Ok(ok)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_in_folder(path: String) -> AppResult<()> {
     // Normalize forward slashes to backslashes on Windows so explorer.exe accepts them.
     #[cfg(target_os = "windows")]
@@ -920,7 +920,7 @@ pub fn open_in_folder(path: String) -> AppResult<()> {
 }
 
 /// Open a file with the OS default app (e.g. play a video in the system player).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_file(path: String) -> AppResult<()> {
     #[cfg(target_os = "windows")]
     let path = path.replace('/', "\\");
@@ -958,7 +958,7 @@ pub fn open_file(path: String) -> AppResult<()> {
 /// intentionally do not fall back to the parent or `dirs::download_dir()`
 /// because that produced false matches against unrelated files in sibling
 /// folders (e.g., random files in `Documents` or other Downloads subfolders).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn find_output_file(save_folder: String, title: String) -> AppResult<Option<String>> {
     let folder = PathBuf::from(&save_folder);
     if !folder.is_dir() { return Ok(None); }
@@ -1117,7 +1117,7 @@ fn open_path_with_os(path: &std::path::Path) -> AppResult<()> {
 
 // ---------- History ----------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_history(
     query: Option<String>,
     limit: Option<u32>,
@@ -1128,7 +1128,7 @@ pub fn list_history(
 }
 
 /// Mark several history entries as edited (or unedited). Returns rows changed.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_history_edited(
     short_ids: Vec<String>,
     edited: bool,
@@ -1137,7 +1137,7 @@ pub fn set_history_edited(
     history.set_edited(&short_ids, edited)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_history_entry(
     short_id: String,
     delete_file: Option<bool>,
@@ -1159,7 +1159,7 @@ pub fn delete_history_entry(
 /// number of rows actually removed (entries already missing are silently
 /// ignored). When `delete_files` is true, each row's `output_path` is also
 /// unlinked best-effort.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_history_entries(
     short_ids: Vec<String>,
     delete_files: Option<bool>,
@@ -1185,7 +1185,7 @@ pub fn delete_history_entries(
     Ok(removed)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn clear_history(
     delete_files: Option<bool>,
     history: State<Arc<HistoryStore>>,
@@ -1275,7 +1275,7 @@ pub fn set_clipboard_watcher(
 
 // ---------- Auto-watch channels ----------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_watched_channels(
     store: State<Arc<WatchlistStore>>,
 ) -> AppResult<Vec<WatchedChannel>> {
@@ -1563,7 +1563,7 @@ pub fn daychuyen_skip_today(dc: State<'_, Arc<crate::daychuyen::DayChuyen>>) -> 
 /// Đối soát tức thì video đang tải dở của MỌI kênh (tải xong → chốt đã
 /// làm; hủy/lỗi → trả suất + cho quét lại). UI gọi mỗi lần refresh danh
 /// sách để bộ đếm "đã tải hôm nay" luôn đúng ngay sau khi hủy.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn reconcile_watched(
     store: State<Arc<WatchlistStore>>,
     queue: State<Arc<QueueManager>>,
@@ -1576,7 +1576,7 @@ pub fn reconcile_watched(
 /// Danh sách ID video ĐÃ TẢI (download-archive ∪ LỊCH SỬ Completed) — để UI
 /// đánh dấu "đã tải" trong Kho video. Dùng đúng bộ loại-trùng của watcher
 /// nên badge LUÔN khớp hành vi bỏ-qua thật.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn archived_video_ids(
     app: tauri::AppHandle,
     settings: State<Arc<SettingsStore>>,
@@ -1615,7 +1615,7 @@ pub fn set_videos_skipped(
 /// KHOÁ TÊN (chữ+số thường hoá) của FILE VIDEO đang nằm trong các thư mục
 /// lưu — để Kho video đánh dấu "đã tải" cả những video chỉ còn dấu vết là
 /// FILE trên đĩa (lịch sử bị xoá / tải bằng bản cũ).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn downloaded_title_keys(
     store: State<Arc<WatchlistStore>>,
     settings: State<Arc<SettingsStore>>,
@@ -1948,7 +1948,7 @@ pub(crate) fn clean_junk_in(
 
 /// Recursively delete leftover/broken download files under `folder` (and its
 /// per-channel subfolders), protecting files of currently-downloading videos.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn clean_junk_files(folder: String, queue: State<Arc<QueueManager>>) -> AppResult<u64> {
     Ok(clean_junk_in(
         std::path::Path::new(&folder),

@@ -17,6 +17,11 @@ type EditFilter = "all" | "edited" | "not_edited";
 const VIEW_KEY = "bqhungdown.history.view";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+// VẼ DẦN: lịch sử thật của anh Hùng 16/11/2026 có ~15 000 mục — vẽ hết 1 lần là
+// 15 000 dòng + ảnh, webview phình 2,4 GB, bấm vào tab đơ cả chục giây. Nay chỉ
+// vẽ PAGE mục đầu, cuộn gần cuối thì vẽ thêm. Lọc/tìm/chọn tất cả/xoá vẫn tính
+// trên ĐỦ danh sách — chỉ phần vẽ ra màn hình là cắt.
+const RENDER_PAGE = 100;
 const RUBBER_BAND_THRESHOLD = 5; // px to drag before showing selection box
 
 function bucketLabel(ts: number, now: number): string {
@@ -144,6 +149,14 @@ export function HistoryPage() {
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Dòng có thể chưa được vẽ (vẽ dần) → nới phần vẽ rồi mới cuộn tới. */
+  const scrollToRow = (id: string, idx: number) => {
+    setShown((n) => (idx >= n - 1 ? idx + RENDER_PAGE : n));
+    requestAnimationFrame(() =>
+      document.querySelector(`[data-history-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" }),
+    );
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Only handle when the list has items and no input is focused.
@@ -166,7 +179,7 @@ export function HistoryPage() {
             return ns;
           });
         }
-        document.querySelector(`[data-history-id="${CSS.escape(items[next].shortId)}"]`)?.scrollIntoView({ block: "nearest" });
+        scrollToRow(items[next].shortId, next);
         return;
       }
 
@@ -181,7 +194,7 @@ export function HistoryPage() {
             return ns;
           });
         }
-        document.querySelector(`[data-history-id="${CSS.escape(items[next].shortId)}"]`)?.scrollIntoView({ block: "nearest" });
+        scrollToRow(items[next].shortId, next);
         return;
       }
 
@@ -269,9 +282,6 @@ export function HistoryPage() {
     });
   }, [filtered]);
 
-  // Keep the keyboard nav ref in sync with the latest filtered list.
-  filteredItemsRef.current = filtered;
-
   const groups = useMemo(() => {
     if (sortKey === "time") {
       if (!groupByDate) return null;
@@ -300,6 +310,40 @@ export function HistoryPage() {
     }
     return null;
   }, [filtered, groupByDate, sortKey]);
+
+  /** Thứ tự ĐÚNG như đang hiện trên màn hình (gom nhóm có thể khác `filtered`)
+   *  — dùng cho phím mũi tên và cắt phần vẽ. */
+  const displayList = useMemo(
+    () => (groups ? groups.flatMap((g) => g.items) : filtered),
+    [groups, filtered],
+  );
+  filteredItemsRef.current = displayList;
+
+  const [shown, setShown] = useState(RENDER_PAGE);
+  // Đổi lọc/tìm/sắp xếp → về lại trang đầu. KHÔNG reset khi chỉ `entries` đổi
+  // (xoá 1 mục, đánh dấu edit) để khỏi nhảy mất chỗ đang cuộn.
+  useEffect(() => {
+    setShown(RENDER_PAGE);
+  }, [query, platform, status, editFilter, sortKey, sortDir, groupByDate]);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const hasMore = shown < displayList.length;
+  useEffect(() => {
+    if (!hasMore) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    // Không có API này thì vẫn còn nút "Xem thêm" — tuyệt đối không vẽ hết.
+    if (typeof IntersectionObserver === "undefined") return;
+    // Tạo lại observer mỗi lần `shown` đổi: nó báo ngay trạng thái hiện tại,
+    // nên mốc vẫn trong tầm nhìn (màn hình cao) thì vẽ tiếp tới khi đầy.
+    const io = new IntersectionObserver(
+      (es) => {
+        if (es.some((e) => e.isIntersecting)) setShown((n) => n + RENDER_PAGE);
+      },
+      { rootMargin: "1200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [shown, hasMore]);
 
   // Rubber-band helpers ──────────────────────────────────────────────────────
 
@@ -599,16 +643,34 @@ export function HistoryPage() {
     />
   );
 
-  const renderItems = (items: HistoryEntry[]) =>
-    view === "grid" ? (
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-        {items.map(renderRow)}
-      </div>
+  // `base` = vị trí của items[0] trong displayList → ô đang chọn bằng phím
+  // khớp đúng dòng (trước đây so chỉ số TRONG NHÓM, nhóm thứ 2 lệch).
+  const renderItems = (items: HistoryEntry[], base: number) => {
+    const rows = items.map((e, i) => renderRow(e, base + i));
+    return view === "grid" ? (
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">{rows}</div>
     ) : view === "compact" ? (
-      <div className="space-y-1">{items.map(renderRow)}</div>
+      <div className="space-y-1">{rows}</div>
     ) : (
-      <div className="space-y-2">{items.map(renderRow)}</div>
+      <div className="space-y-2">{rows}</div>
     );
+  };
+
+  /** Các nhóm đã cắt theo `shown` (đầu nhóm vẫn ghi ĐỦ số mục). */
+  const shownGroups = (() => {
+    if (!groups) return null;
+    const out: { bucket: string; total: number; items: HistoryEntry[]; base: number }[] = [];
+    let left = shown;
+    let base = 0;
+    for (const g of groups) {
+      if (left <= 0) break;
+      const items = g.items.slice(0, left);
+      out.push({ bucket: g.bucket, total: g.items.length, items, base });
+      left -= items.length;
+      base += g.items.length;
+    }
+    return out;
+  })();
 
   // Compute the band overlay box (viewport coords) — silenced by `bandTick`.
   void bandTick;
@@ -798,19 +860,30 @@ export function HistoryPage() {
       {/* List */}
       {filtered.length === 0 ? (
         <EmptyState icon="🕘" title="Chưa có lịch sử tải" hint="Các video đã tải xong sẽ hiện ở đây để bạn mở lại hoặc tải lại." />
-      ) : groups ? (
+      ) : shownGroups ? (
         <div className="space-y-5">
-          {groups.map((g) => (
+          {shownGroups.map((g) => (
             <section key={g.bucket} className="space-y-2">
               <h3 className="text-xs uppercase tracking-wide text-muted px-1">
-                {g.bucket} <span className="text-fg/60">({g.items.length})</span>
+                {g.bucket} <span className="text-fg/60">({g.total})</span>
               </h3>
-              {renderItems(g.items)}
+              {renderItems(g.items, g.base)}
             </section>
           ))}
         </div>
       ) : (
-        renderItems(filtered)
+        renderItems(filtered.slice(0, shown), 0)
+      )}
+      {hasMore && (
+        <div ref={sentinelRef} className="py-4 text-center text-xs text-muted">
+          Đang hiện {Math.min(shown, displayList.length)} / {displayList.length} — cuộn xuống để xem thêm{" "}
+          <button
+            onClick={() => setShown((n) => n + RENDER_PAGE)}
+            className="ml-2 px-2 py-1 rounded-md border border-border hover:bg-surface-2"
+          >
+            Xem thêm
+          </button>
+        </div>
       )}
 
       {/* Rubber-band overlay — fixed to viewport so it follows scrolling. */}
