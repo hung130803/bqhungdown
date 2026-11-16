@@ -48,6 +48,15 @@ interface QueueState {
   forceDownload: (id: string) => Promise<void>;
 }
 
+// GOM TIẾN ĐỘ: backend gửi mỗi mục 4 lần/giây; 5 mục tải song song = 20 lần
+// dựng lại MỌI trang đang nghe hàng đợi (Theo dõi kênh 155 thẻ) mỗi giây —
+// anh Hùng 16/11/2026: chạy dây chuyền là máy đơ. Nay gom lại, mỗi
+// PROGRESS_FLUSH_MS mới vẽ 1 lần (chỉ con số trên thanh tiến trình chậm hơn,
+// tải không đổi). Trạng thái (xong/lỗi/huỷ) vẫn vẽ NGAY.
+const PROGRESS_FLUSH_MS = 1000;
+const pendingProgress = new Map<string, ProgressSnapshot>();
+let progressTimer: ReturnType<typeof setTimeout> | undefined;
+
 export const useQueueStore = create<QueueState>()((set, get) => ({
   items: [],
   byId: (id) => get().items.find((i) => i.shortId === id),
@@ -60,20 +69,35 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
       next[idx] = item;
       return { items: next };
     }),
-  applyProgress: (shortId, progress) =>
-    set((state) => ({
-      items: state.items.map((i) =>
-        i.shortId === shortId
-          ? {
-              ...i,
-              bytesDownloaded: progress.bytesDownloaded,
-              bytesTotal: progress.bytesTotal,
-              speedBps: progress.speedBps,
-              etaSec: progress.etaSec,
-            }
-          : i,
-      ),
-    })),
+  applyProgress: (shortId, progress) => {
+    pendingProgress.set(shortId, progress);
+    // Vẽ ngay rồi khoá PROGRESS_FLUSH_MS; trong lúc khoá chỉ gom. Hết khoá mà
+    // còn gom được thì vẽ tiếp + khoá tiếp, không còn thì nhả khoá.
+    const flush = () => {
+      if (pendingProgress.size === 0) {
+        progressTimer = undefined;
+        return;
+      }
+      progressTimer = setTimeout(flush, PROGRESS_FLUSH_MS);
+      const batch = new Map(pendingProgress);
+      pendingProgress.clear();
+      set((state) => ({
+        items: state.items.map((i) => {
+          const p = batch.get(i.shortId);
+          return p
+            ? {
+                ...i,
+                bytesDownloaded: p.bytesDownloaded,
+                bytesTotal: p.bytesTotal,
+                speedBps: p.speedBps,
+                etaSec: p.etaSec,
+              }
+            : i;
+        }),
+      }));
+    };
+    if (progressTimer === undefined) flush();
+  },
   applyState: (shortId, state, errorMessage, outputPath) =>
     set((s) => ({
       items: s.items.map((i) =>

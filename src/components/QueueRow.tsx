@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { DownloadItem } from "@/types/models";
 import { useQueueStore } from "@/stores/useQueueStore";
@@ -45,7 +45,9 @@ function shortUrl(raw: string): string {
   }
 }
 
-export function QueueRow({ item }: { item: DownloadItem }) {
+// memo: tiến độ 1 mục đổi thì CHỈ dòng đó vẽ lại (các mục khác giữ nguyên
+// object trong store), không dựng lại cả hàng đợi dài của dây chuyền.
+export const QueueRow = memo(function QueueRow({ item }: { item: DownloadItem }) {
   const { t } = useTranslation();
   const pause = useQueueStore((s) => s.pause);
   const resume = useQueueStore((s) => s.resume);
@@ -330,4 +332,4 @@ export function QueueRow({ item }: { item: DownloadItem }) {
       )}
     </div>
   );
-}
+});
