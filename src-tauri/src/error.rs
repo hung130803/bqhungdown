@@ -175,6 +175,18 @@ pub fn is_cookie_decrypt_error(msg: &str) -> bool {
         || (l.contains("cookies database") && l.contains("could not find"))
 }
 
+/// Lỗi mà lượt CÓ cookie nên THỬ LẠI KHÔNG cookie: cookie không đọc được,
+/// HOẶC trang trả dữ liệu nén hỏng ("Error -3 while decompressing data:
+/// incorrect header check"). LỖI THẬT 16/11/2026 (TikTok, ô cookie Firefox):
+/// yt-dlp không cookie lấy được video, kèm cookie Firefox thì vấp lỗi giải nén
+/// → app báo lỗi luôn. Video công khai không cần cookie nên thử lại là qua.
+pub fn should_retry_without_cookies(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    is_cookie_decrypt_error(msg)
+        || l.contains("while decompressing data")
+        || l.contains("incorrect header check")
+}
+
 /// Trích "lý do" tốt nhất từ stderr của yt-dlp để đưa cho `friendly_reason`.
 /// yt-dlp thường in dòng `ERROR: ...` rồi một dòng gợi ý riêng (vd
 /// "You might want to use a VPN or a proxy..."). Nếu chỉ lấy DÒNG CUỐI ta hay
@@ -826,6 +838,13 @@ mod warning_tests {
         // Không có dòng ERROR: không được lấy dòng WARNING làm lý do.
         let only_warn = "WARNING: retrying fragment, error 503\nkilled";
         assert!(!best_error_line(only_warn).contains("WARNING"));
+    }
+
+    #[test]
+    fn loi_giai_nen_thi_thu_lai_khong_cookie() {
+        assert!(should_retry_without_cookies("ERROR: Error -3 while decompressing data: incorrect header check"));
+        assert!(should_retry_without_cookies("ERROR: Failed to decrypt with DPAPI"));
+        assert!(!should_retry_without_cookies("ERROR: [youtube] x: Video unavailable"));
     }
 
     #[test]

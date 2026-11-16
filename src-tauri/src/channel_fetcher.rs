@@ -732,7 +732,7 @@ async fn run_flat_fetch(
     if let Err(AppError::YtDlpFailed(ref msg)) = res {
         // `_for`: tính cả ô cookie RIÊNG của trang này, không chỉ ô chung.
         if crate::args_builder::settings_have_cookies_for(settings, resolved)
-            && crate::error::is_cookie_decrypt_error(msg)
+            && crate::error::should_retry_without_cookies(msg)
         {
             let no_cookies = crate::args_builder::settings_without_cookies(settings);
             return run_flat_fetch_attempt(app, resolved, limit, &no_cookies, my_gen).await;
@@ -1019,7 +1019,7 @@ async fn probe_batch(
         if crate::args_builder::settings_have_cookies_for(
             settings,
             urls.first().map(String::as_str).unwrap_or(""),
-        ) && crate::error::is_cookie_decrypt_error(msg)
+        ) && crate::error::should_retry_without_cookies(msg)
         {
             let no_cookies = crate::args_builder::settings_without_cookies(settings);
             return probe_batch_attempt(app, urls, &no_cookies, my_gen, want_view).await;

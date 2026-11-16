@@ -187,7 +187,7 @@ impl YtDlpRunner {
             // `_for`: tính cả ô cookie RIÊNG của trang này, không chỉ ô chung.
             Err(AppError::YtDlpFailed(ref msg))
                 if args_builder::settings_have_cookies_for(settings, url_for_dlp)
-                    && crate::error::is_cookie_decrypt_error(msg) =>
+                    && crate::error::should_retry_without_cookies(msg) =>
             {
                 let no_cookies = args_builder::settings_without_cookies(settings);
                 self.fetch_metadata_inner(url_for_dlp, force_generic_first, false, &no_cookies).await
@@ -357,7 +357,7 @@ impl YtDlpRunner {
             // Browser cookies couldn't be decrypted (DPAPI) — retry without them.
             // Public videos don't need cookies, so this recovers transparently.
             if args_builder::settings_have_cookies_for(settings, &item.request.url)
-                && crate::error::is_cookie_decrypt_error(reason)
+                && crate::error::should_retry_without_cookies(reason)
                 && !cancel.is_cancelled()
             {
                 let no_cookies = args_builder::settings_without_cookies(settings);
