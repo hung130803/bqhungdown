@@ -789,8 +789,7 @@ mod tests_settings_cu_van_doc_duoc {
             "tiktok".into(),
             crate::models::SiteCookie { file: None, browser: Some("firefox".into()) },
         );
-        let json = serde_json::to_string_pretty(&s).unwrap() + "
-";
+        let json = serde_json::to_string_pretty(&s).unwrap() + "\n";
 
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -817,9 +816,7 @@ mod tests_settings_cu_van_doc_duoc {
         // lại fixture thì đỏ ở đây, trước khi cổng TS đỏ.
         let tren_dia = std::fs::read_to_string(path).unwrap_or_default();
         assert_eq!(
-            tren_dia.replace("
-", "
-"),
+            tren_dia.replace("\r\n", "\n"),
             json,
             "fixture cũ. Sinh lại: BQD_UPDATE_FIXTURE=1 cargo test khoa_goi_settings"
         );
@@ -844,8 +841,7 @@ mod tests_settings_cu_van_doc_duoc {
             .collect();
         ten.sort_unstable();
         ten.dedup();
-        let json = serde_json::to_string_pretty(&ten).unwrap() + "
-";
+        let json = serde_json::to_string_pretty(&ten).unwrap() + "\n";
 
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -860,9 +856,7 @@ mod tests_settings_cu_van_doc_duoc {
         }
         let tren_dia = std::fs::read_to_string(path).unwrap_or_default();
         assert_eq!(
-            tren_dia.replace("
-", "
-"),
+            tren_dia.replace("\r\n", "\n"),
             json,
             "fixture cũ. Sinh lại: BQD_UPDATE_FIXTURE=1 cargo test khoa_ten_trang"
         );
